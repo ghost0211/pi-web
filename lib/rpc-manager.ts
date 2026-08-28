@@ -640,7 +640,7 @@ export class AgentSessionWrapper {
       case "get_state": {
         const model = this.inner.model;
         let contextUsage = this.inner.getContextUsage();
-        if (!contextUsage || contextUsage.tokens === null || contextUsage.tokens === undefined) {
+        if (!contextUsage || !contextUsage.tokens || contextUsage.tokens === 0) {
           const sm = this.inner.sessionManager as { getEntries?: () => SessionEntry[] } | undefined;
           if (typeof sm?.getEntries === "function") {
             const entries = sm.getEntries();

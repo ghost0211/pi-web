@@ -1229,7 +1229,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             return [...prev, delivered];
           });
         } else if (completed) {
-          setMessages((prev) => [...prev, normalizeToolCalls(completed)]);
+          const normalized = normalizeToolCalls(completed);
+          setMessages((prev) => [...prev, normalized]);
+          if (completed.role === "assistant" && completed.usage?.input) {
+            const tokens = completed.usage.input;
+            const windowSize = contextUsage?.contextWindow && contextUsage.contextWindow > 0
+              ? contextUsage.contextWindow
+              : inferModelContextWindow(displayModel?.modelId);
+            setContextUsage({
+              tokens,
+              contextWindow: windowSize,
+              percent: Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100))),
+            });
+          }
         }
         dispatch({ type: "end" });
         setAgentPhase({ kind: "waiting_model" });

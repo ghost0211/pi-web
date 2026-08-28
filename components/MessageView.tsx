@@ -740,7 +740,10 @@ function AssistantMessageView({
         }}
       >
         {message.provider && (
-          <span>{modelNames?.[`${message.provider}:${message.model}`] ?? modelNames?.[message.model] ?? message.model}</span>
+          <span>
+            <span style={{ color: "var(--text-dim)" }}>{message.provider} › </span>
+            {modelNames?.[`${message.provider}:${message.model}`] ?? modelNames?.[message.model] ?? message.model}
+          </span>
         )}
         {isStreaming && (() => {
           const est = Math.round(estimatedTokens);

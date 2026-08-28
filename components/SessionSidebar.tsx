@@ -803,6 +803,48 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [onSelectSession]);
 
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
+  const [openProjectMenuKey, setOpenProjectMenuKey] = useState<string | null>(null);
+  const projectMenuRef = useRef<HTMLDivElement>(null);
+  const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const stored = localStorage.getItem("pi-web:hidden-projects");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return new Set(parsed);
+      }
+    } catch {}
+    return new Set();
+  });
+
+  useEffect(() => {
+    if (!openProjectMenuKey) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (projectMenuRef.current && !projectMenuRef.current.contains(e.target as Node)) {
+        setOpenProjectMenuKey(null);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [openProjectMenuKey]);
+
+  const handleRemoveProject = useCallback((projectKey: string) => {
+    setHiddenProjects((prev) => {
+      const next = new Set(prev).add(projectKey);
+      try {
+        localStorage.setItem("pi-web:hidden-projects", JSON.stringify(Array.from(next)));
+      } catch {}
+      return next;
+    });
+    setOpenProjectMenuKey(null);
+  }, []);
+
+  const handleCopyProjectPath = useCallback(async (root: string) => {
+    setOpenProjectMenuKey(null);
+    try {
+      await navigator.clipboard.writeText(root);
+    } catch {}
+  }, []);
 
   const toggleProjectCollapse = useCallback((key: string) => {
     setCollapsedProjects((prev) => {
@@ -840,8 +882,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (selectedProject && !list.some((p) => p.key === selectedProject.key)) {
       list.unshift({ key: selectedProject.key, root: selectedProject.root });
     }
-    return list;
-  }, [recentProjects, selectedProject]);
+    return list.filter((p) => !hiddenProjects.has(p.key));
+  }, [recentProjects, selectedProject, hiddenProjects]);
 
   // Per-project activity counts (running / unread) for the workspace selector.
   // Uses the same stable server key as the project list and filtering.
@@ -1328,132 +1370,286 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               }}
             >
               {/* Project Header Row */}
-              <div
-                onClick={() => {
-                  toggleProjectCollapse(project.key);
-                  if (selectedCwd !== project.root) {
-                    setSelectedCwd(project.root);
-                  }
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "6px 8px",
-                  margin: "1px 8px",
-                  borderRadius: 7,
-                  background: "transparent",
-                  cursor: "pointer",
-                  userSelect: "none",
-                  transition: "background 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
-                  <svg
-                    width="10"
-                    height="10"
-                    viewBox="0 0 10 10"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{
-                      color: "var(--text-dim)",
-                      transform: isCollapsed ? "rotate(-90deg)" : "none",
-                      transition: "transform 0.15s ease",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <polyline points="2 3.5 5 6.5 8 3.5" />
-                  </svg>
-                  {isCollapsed ? (
+              <div style={{ position: "relative" }}>
+                <div
+                  onClick={() => {
+                    toggleProjectCollapse(project.key);
+                    if (selectedCwd !== project.root) {
+                      setSelectedCwd(project.root);
+                    }
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "6px 8px",
+                    margin: "1px 8px",
+                    borderRadius: 7,
+                    background: "transparent",
+                    cursor: "pointer",
+                    userSelect: "none",
+                    transition: "background 0.12s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
                     <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
+                      width="10"
+                      height="10"
+                      viewBox="0 0 10 10"
                       fill="none"
                       stroke="currentColor"
-                      strokeWidth="2"
+                      strokeWidth="1.8"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      style={{ flexShrink: 0, color: "var(--text-muted)" }}
+                      style={{
+                        color: "var(--text-dim)",
+                        transform: isCollapsed ? "rotate(-90deg)" : "none",
+                        transition: "transform 0.15s ease",
+                        flexShrink: 0,
+                      }}
                     >
-                      <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+                      <polyline points="2 3.5 5 6.5 8 3.5" />
                     </svg>
-                  ) : (
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{ flexShrink: 0, color: "var(--text-muted)" }}
+                    {isCollapsed ? (
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ flexShrink: 0, color: "var(--text-muted)" }}
+                      >
+                        <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ flexShrink: 0, color: "var(--text-muted)" }}
+                      >
+                        <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
+                      </svg>
+                    )}
+                    <span
+                      title={project.root}
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 500,
+                        color: "var(--text-muted)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
                     >
-                      <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  )}
-                  <span
-                    title={project.root}
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: "var(--text-muted)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {getFileName(project.root) || displayCwd(project.root, homeDir)}
-                  </span>
+                      {getFileName(project.root) || displayCwd(project.root, homeDir)}
+                    </span>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                    {showProjectActivity(projectActivity.get(project.key), t)}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startNewSessionForCwd(project.root);
+                      }}
+                      title={t("sidebar.newInProject") || t("sidebar.new")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 22,
+                        height: 22,
+                        padding: 0,
+                        background: "none",
+                        border: "none",
+                        borderRadius: 4,
+                        color: "var(--text-dim)",
+                        cursor: "pointer",
+                        transition: "color 0.12s, background 0.12s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "var(--accent)";
+                        e.currentTarget.style.background = "var(--bg-selected)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = "var(--text-dim)";
+                        e.currentTarget.style.background = "none";
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                        <line x1="6" y1="1" x2="6" y2="11" />
+                        <line x1="1" y1="6" x2="11" y2="6" />
+                      </svg>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenProjectMenuKey(openProjectMenuKey === project.key ? null : project.key);
+                      }}
+                      title={t("sidebar.projectOptions")}
+                      aria-label={t("sidebar.projectOptions")}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 22,
+                        height: 22,
+                        padding: 0,
+                        background: openProjectMenuKey === project.key ? "var(--bg-hover)" : "none",
+                        border: "none",
+                        borderRadius: 4,
+                        color: openProjectMenuKey === project.key ? "var(--text)" : "var(--text-dim)",
+                        cursor: "pointer",
+                        transition: "color 0.12s, background 0.12s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = "var(--text)";
+                        e.currentTarget.style.background = "var(--bg-hover)";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (openProjectMenuKey !== project.key) {
+                          e.currentTarget.style.color = "var(--text-dim)";
+                          e.currentTarget.style.background = "none";
+                        }
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                        <circle cx="3" cy="8" r="1.5" />
+                        <circle cx="8" cy="8" r="1.5" />
+                        <circle cx="13" cy="8" r="1.5" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-                  {showProjectActivity(projectActivity.get(project.key), t)}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startNewSessionForCwd(project.root);
-                    }}
-                    title={t("sidebar.newInProject") || t("sidebar.new")}
+                {/* Project Options Dropdown Menu */}
+                {openProjectMenuKey === project.key && (
+                  <div
+                    ref={projectMenuRef}
+                    onClick={(e) => e.stopPropagation()}
                     style={{
+                      position: "absolute",
+                      top: "calc(100% + 2px)",
+                      right: 12,
+                      zIndex: 80,
+                      minWidth: 152,
+                      padding: 4,
+                      background: "var(--bg-panel)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      boxShadow: "0 8px 24px rgba(0, 0, 0, 0.24)",
                       display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      width: 22,
-                      height: 22,
-                      padding: 0,
-                      background: "none",
-                      border: "none",
-                      borderRadius: 4,
-                      color: "var(--text-dim)",
-                      cursor: "pointer",
-                      transition: "color 0.12s, background 0.12s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "var(--accent)";
-                      e.currentTarget.style.background = "var(--bg-selected)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = "var(--text-dim)";
-                      e.currentTarget.style.background = "none";
+                      flexDirection: "column",
+                      gap: 2,
                     }}
                   >
-                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                      <line x1="6" y1="1" x2="6" y2="11" />
-                      <line x1="1" y1="6" x2="11" y2="6" />
-                    </svg>
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenProjectMenuKey(null);
+                        startNewSessionForCwd(project.root);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "100%",
+                        padding: "6px 10px",
+                        background: "none",
+                        border: "none",
+                        borderRadius: 6,
+                        color: "var(--text)",
+                        fontSize: 12,
+                        textAlign: "left",
+                        cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="12" y1="5" x2="12" y2="19" />
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                      </svg>
+                      <span>{t("sidebar.newSessionHere")}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleCopyProjectPath(project.root);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "100%",
+                        padding: "6px 10px",
+                        background: "none",
+                        border: "none",
+                        borderRadius: 6,
+                        color: "var(--text)",
+                        fontSize: 12,
+                        textAlign: "left",
+                        cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                      <span>{t("sidebar.copyPath")}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleRemoveProject(project.key);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "100%",
+                        padding: "6px 10px",
+                        background: "none",
+                        border: "none",
+                        borderRadius: 6,
+                        color: "#ef4444",
+                        fontSize: 12,
+                        textAlign: "left",
+                        cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                      <span>{t("sidebar.removeFromList")}</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Sessions List under this Project */}

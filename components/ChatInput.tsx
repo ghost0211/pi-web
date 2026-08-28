@@ -522,16 +522,11 @@ export function ContextUsageRing({
   if (compactResult?.estimatedTokensAfter) {
     totalTokens = compactResult.estimatedTokensAfter;
     percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
-  } else if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
+  } else if (contextUsage?.percent !== null && contextUsage?.percent !== undefined && contextUsage.percent > 0) {
     percent = Math.min(100, Math.max(0, Math.round(contextUsage.percent)));
     totalTokens = contextUsage.tokens ?? Math.round((percent / 100) * contextWindow);
   } else if (contextUsage?.tokens !== null && contextUsage?.tokens !== undefined && contextUsage.tokens > 0) {
     totalTokens = contextUsage.tokens;
-    percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
-  } else if (sessionStats?.tokens) {
-    // 静态或未建立 RPC 连接时
-    const activeInput = sessionStats.tokens.input > 0 ? sessionStats.tokens.input : sessionStats.tokens.total;
-    totalTokens = Math.min(activeInput, contextWindow);
     percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
   }
 

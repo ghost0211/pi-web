@@ -639,7 +639,26 @@ export class AgentSessionWrapper {
 
       case "get_state": {
         const model = this.inner.model;
-        const contextUsage = this.inner.getContextUsage();
+        let contextUsage = this.inner.getContextUsage();
+        if (!contextUsage || contextUsage.tokens === null || contextUsage.tokens === undefined) {
+          const sm = this.inner.sessionManager as { getEntries?: () => SessionEntry[] } | undefined;
+          if (typeof sm?.getEntries === "function") {
+            const entries = sm.getEntries();
+            for (let i = entries.length - 1; i >= 0; i--) {
+              const entry = entries[i];
+              if (entry.type === "message" && entry.message.role === "assistant" && entry.message.usage?.input) {
+                const tokens = entry.message.usage.input;
+                const contextWindow = (this.inner.model as { contextWindow?: number } | undefined)?.contextWindow ?? 128_000;
+                contextUsage = {
+                  tokens,
+                  contextWindow,
+                  percent: Math.min(100, Math.max(0, Math.round((tokens / contextWindow) * 100))),
+                };
+                break;
+              }
+            }
+          }
+        }
         return {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",

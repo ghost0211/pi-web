@@ -161,13 +161,14 @@ function collectResource(
   resourcesByPackage: Map<string, PluginResourceInfo[]>,
   totals: PluginResourceCounts,
 ): void {
-  if (!resource.enabled || resource.metadata.origin !== "package") return;
+  if (!resource.enabled) return;
+  addCount(totals, kind);
+  if (resource.metadata.origin !== "package") return;
   const source = resource.metadata.source;
   const scope = toPluginScope(resource.metadata.scope);
   const key = keyFor(source, scope);
   const counts = countsByPackage.get(key) ?? emptyCounts();
   addCount(counts, kind);
-  addCount(totals, kind);
   countsByPackage.set(key, counts);
   const resources = resourcesByPackage.get(key) ?? [];
   const resourceKind = kind === "extensions"
@@ -219,6 +220,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
   let totals = emptyCounts();
   const disabledByPackage = getDisabledPackages(settingsManager);
 
+  let resolvedPaths: ResolvedPaths | null = null;
   try {
     const resolved = await packageManager.resolve(async (source) => {
       diagnostics.push({
@@ -228,6 +230,7 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
       });
       return "skip";
     });
+    resolvedPaths = resolved;
     ({ countsByPackage, resourcesByPackage, totals } = collectResources(resolved));
   } catch (error) {
     diagnostics.push({
@@ -236,9 +239,11 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
     });
   }
 
+  const configuredKeys = new Set<string>();
   const packages = packageManager.listConfiguredPackages().map((pkg) => {
     const scope = toPluginScope(pkg.scope);
     const key = keyFor(pkg.source, scope);
+    configuredKeys.add(key);
     const disabled = disabledByPackage.get(key) ?? false;
     const counts = countsByPackage.get(key) ?? emptyCounts();
     const resources = resourcesByPackage.get(key) ?? [];
@@ -265,6 +270,43 @@ async function readPlugins(cwd: string): Promise<PluginsResponse> {
       status: disabled ? "disabled" : resourceCount > 0 ? "loaded" : pkg.installedPath ? "installed" : "missing",
     } satisfies PluginPackageInfo;
   });
+
+  if (resolvedPaths) {
+    for (const ext of resolvedPaths.extensions) {
+      if (ext.metadata.origin === "package") continue;
+      const scope = toPluginScope(ext.metadata.scope);
+      const name = getResourceName(ext.path, "extension");
+      const displaySource = ext.path.startsWith(agentDir)
+        ? ext.path.replace(agentDir, "~/.pi/agent")
+        : ext.path.startsWith(cwd)
+          ? `./${relative(cwd, ext.path)}`
+          : ext.path;
+      const key = keyFor(displaySource, scope);
+      if (configuredKeys.has(key)) continue;
+      configuredKeys.add(key);
+
+      const packageMetadata = readPackageMetadata(ext.path);
+      const resInfo: PluginResourceInfo = {
+        kind: "extension",
+        name,
+        path: ext.path,
+        relativePath: getRelativePath(ext),
+      };
+      packages.push({
+        source: displaySource,
+        scope,
+        filtered: false,
+        disabled: !ext.enabled,
+        installedPath: ext.path,
+        packageName: packageMetadata.packageName ?? name,
+        version: packageMetadata.version,
+        configuredVersion: undefined,
+        counts: { extensions: 1, skills: 0, prompts: 0, themes: 0 },
+        resources: [resInfo],
+        status: ext.enabled ? "loaded" : "disabled",
+      });
+    }
+  }
 
   return {
     packages,

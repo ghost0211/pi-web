@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
@@ -127,17 +128,18 @@ export function ModelSelector({
         gap: 6,
         width: isMobile ? "100%" : undefined,
         maxWidth: isMobile ? "100%" : 220,
-        height: 32,
-        padding: isMobile ? "8px 10px" : "8px 12px",
+        height: 28,
+        padding: isMobile ? "0 8px" : "0 10px",
         overflow: "hidden",
-        border: "none",
-        borderRadius: 9,
-        background: open ? "var(--bg-hover)" : "none",
-        color: "var(--text-muted)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        background: open ? "var(--bg-selected)" : "var(--bg-hover)",
+        color: "var(--text)",
         cursor: locked ? "not-allowed" : "pointer",
         fontSize: 12,
+        fontWeight: 500,
         opacity: locked ? 0.5 : 1,
-        transition: "background 0.12s, color 0.12s",
+        transition: "all 0.12s ease",
       };
 
   const choose = (option: ModelSelectorOption) => {
@@ -214,99 +216,102 @@ export function ModelSelector({
         )}
       </button>
 
-      {open && anchorRect && (() => {
-        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-        const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-        const spaceAbove = anchorRect.top - 8;
-        const spaceBelow = viewportHeight - anchorRect.bottom - 8;
-        const openAbove = placement === "up" || spaceAbove > spaceBelow;
-        const maxHeight = Math.max(120, Math.min(openAbove ? spaceAbove : spaceBelow, viewportHeight * 0.6));
-        const verticalPosition = openAbove
-          ? { bottom: viewportHeight - anchorRect.top + 6 }
-          : { top: anchorRect.bottom + 6 };
-        const horizontalPosition: CSSProperties = isMobile
-          ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
-          : { left: anchorRect.left, width: "max-content", minWidth: anchorRect.width, maxWidth: Math.max(anchorRect.width, viewportWidth - anchorRect.left - 8) };
+      {open && anchorRect && typeof document !== "undefined" && createPortal(
+        (() => {
+          const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+          const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+          const spaceAbove = anchorRect.top - 8;
+          const spaceBelow = viewportHeight - anchorRect.bottom - 8;
+          const openAbove = placement === "up" || spaceAbove > spaceBelow;
+          const maxHeight = Math.max(120, Math.min(openAbove ? spaceAbove : spaceBelow, viewportHeight * 0.6));
+          const verticalPosition = openAbove
+            ? { bottom: viewportHeight - anchorRect.top + 6 }
+            : { top: anchorRect.bottom + 6 };
+          const horizontalPosition: CSSProperties = isMobile
+            ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
+            : { left: anchorRect.left, width: "max-content", minWidth: anchorRect.width, maxWidth: Math.max(anchorRect.width, viewportWidth - anchorRect.left - 8) };
 
-        return (
-          <div
-            ref={panelRef}
-            role="listbox"
-            aria-label={ariaLabel}
-            style={{
-              position: "fixed",
-              ...verticalPosition,
-              ...horizontalPosition,
-              zIndex: 500,
-              display: "flex",
-              flexDirection: "column",
-              maxHeight,
-              overflow: "hidden",
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              background: "var(--bg)",
-              boxShadow: openAbove ? "0 -4px 16px rgba(0,0,0,0.10)" : "0 4px 16px rgba(0,0,0,0.10)",
-            }}
-          >
-            {showFilter && (
-              <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
-                <input
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
-                  placeholder={t("chat.filterModels")}
-                  aria-label={t("chat.filterModels")}
-                  autoFocus
-                  autoComplete="off"
-                  spellCheck={false}
-                  style={{
-                    boxSizing: "border-box",
-                    width: "100%",
-                    minWidth: isMobile ? 0 : 220,
-                    padding: "5px 8px",
-                    border: "1px solid var(--border)",
-                    borderRadius: 5,
-                    outline: "none",
-                    background: "var(--bg)",
-                    color: "var(--text)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                  }}
-                />
-              </div>
-            )}
-            <div style={{ minHeight: 0, overflowY: "auto" }}>
-              {onClear && !filter.trim() && (
-                <ModelOptionButton active={!value} label={emptyLabel ?? "Default"} onClick={() => {
-                  setOpen(false);
-                  setFilter("");
-                  onClear();
-                }} />
+          return (
+            <div
+              ref={panelRef}
+              role="listbox"
+              aria-label={ariaLabel}
+              style={{
+                position: "fixed",
+                ...verticalPosition,
+                ...horizontalPosition,
+                zIndex: 9999,
+                display: "flex",
+                flexDirection: "column",
+                maxHeight,
+                overflow: "hidden",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                background: "var(--bg)",
+                boxShadow: openAbove ? "0 -4px 16px rgba(0,0,0,0.18)" : "0 4px 16px rgba(0,0,0,0.18)",
+              }}
+            >
+              {showFilter && (
+                <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
+                  <input
+                    value={filter}
+                    onChange={(event) => setFilter(event.target.value)}
+                    placeholder={t("chat.filterModels")}
+                    aria-label={t("chat.filterModels")}
+                    autoFocus
+                    autoComplete="off"
+                    spellCheck={false}
+                    style={{
+                      boxSizing: "border-box",
+                      width: "100%",
+                      minWidth: isMobile ? 0 : 220,
+                      padding: "5px 8px",
+                      border: "1px solid var(--border)",
+                      borderRadius: 5,
+                      outline: "none",
+                      background: "var(--bg)",
+                      color: "var(--text)",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11,
+                    }}
+                  />
+                </div>
               )}
-              {modelsByProvider.length === 0 ? (
-                <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
-                  {filter.trim() ? t("chat.noMatchingModels") : "No available models"}
-                </div>
-              ) : modelsByProvider.map((group, index) => (
-                <div key={group.provider}>
-                  {modelsByProvider.length > 1 && (
-                    <div style={{ padding: "6px 12px 4px", borderTop: index > 0 || onClear ? "1px solid var(--border)" : "none", color: "var(--text-dim)", fontSize: 10, fontWeight: 600, letterSpacing: 0, textTransform: "uppercase" }}>
-                      {group.provider}
-                    </div>
-                  )}
-                  {group.options.map((option) => (
-                    <ModelOptionButton
-                      key={`${option.provider}:${option.modelId}`}
-                      active={option.modelId === value?.modelId && option.provider === value?.provider}
-                      label={option.name}
-                      onClick={() => choose(option)}
-                    />
-                  ))}
-                </div>
-              ))}
+              <div style={{ minHeight: 0, overflowY: "auto" }}>
+                {onClear && !filter.trim() && (
+                  <ModelOptionButton active={!value} label={emptyLabel ?? "Default"} onClick={() => {
+                    setOpen(false);
+                    setFilter("");
+                    onClear();
+                  }} />
+                )}
+                {modelsByProvider.length === 0 ? (
+                  <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
+                    {filter.trim() ? t("chat.noMatchingModels") : "No available models"}
+                  </div>
+                ) : modelsByProvider.map((group, index) => (
+                  <div key={group.provider}>
+                    {modelsByProvider.length > 1 && (
+                      <div style={{ padding: "6px 12px 4px", borderTop: index > 0 || onClear ? "1px solid var(--border)" : "none", color: "var(--text-dim)", fontSize: 10, fontWeight: 600, letterSpacing: 0, textTransform: "uppercase" }}>
+                        {group.provider}
+                      </div>
+                    )}
+                    {group.options.map((option) => (
+                      <ModelOptionButton
+                        key={`${option.provider}:${option.modelId}`}
+                        active={option.modelId === value?.modelId && option.provider === value?.provider}
+                        label={option.name}
+                        onClick={() => choose(option)}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })(),
+        document.body,
+      )}
     </div>
   );
 }

@@ -35,6 +35,10 @@ import {
 type PluginScope = PluginPackageInfo["scope"];
 type PluginAction = "install" | "remove" | "update" | "disable" | "enable";
 
+function isManagedPackage(source: string): boolean {
+  return source.startsWith("npm:") || source.startsWith("git:") || /^[a-z]+:\/\//.test(source);
+}
+
 function shortenPath(path: string): string {
   return path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
 }
@@ -480,7 +484,7 @@ function PackageDetail({
           <ConfigButton
             size="small"
             onClick={() => onAction("update", pkg)}
-            disabled={busy || reloadBusy}
+            disabled={busy || reloadBusy || !isManagedPackage(pkg.source)}
           >
              {busyKey === `update:${key}` ? t("i18n.updating") : t("i18n.update")}
           </ConfigButton>
@@ -496,13 +500,14 @@ function PackageDetail({
             variant="danger"
             size="small"
             onClick={() => onAction("remove", pkg)}
-            disabled={busy || reloadBusy}
+            disabled={busy || reloadBusy || !isManagedPackage(pkg.source)}
           >
              {busyKey === `remove:${key}` ? t("i18n.removing") : t("i18n.remove")}
           </ConfigButton>
           <ConfigSwitch
             checked={enabled}
             loading={busy || reloadBusy}
+            disabled={!isManagedPackage(pkg.source)}
             onChange={() => onAction(pkg.disabled ? "enable" : "disable", pkg)}
             label={pkg.disabled ? t("i18n.enablePackage") : t("i18n.disablePackage")}
           />

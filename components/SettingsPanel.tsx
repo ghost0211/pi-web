@@ -3,6 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useTheme, type ThemePreference } from "@/hooks/useTheme";
+import { useFontSize, type FontSizePreference } from "@/hooks/useFontSize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import type { ShellToolSettingsResponse } from "@/lib/api-types";
 import {
@@ -53,35 +54,90 @@ function ThemeIcon({ preference }: { preference: ThemePreference }) {
   return <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>;
 }
 
+type GeneralSubTab = "appearance" | "automation" | "environment";
+
+interface GeneralSettingsData {
+  theme?: string;
+  defaultThinkingLevel?: string;
+  compactionEnabled?: boolean;
+  retryEnabled?: boolean;
+  quietStartup?: boolean;
+  hideThinkingBlock?: boolean;
+  defaultProjectTrust?: string;
+  enableSkillCommands?: boolean;
+}
+
 function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionId" | "onSessionReloaded">) {
   const { locale, setLocale, supportedLocales, t } = useI18n();
   const { preference, setThemePreference } = useTheme();
+  const { fontSize, setFontSize } = useFontSize();
+  const [subTab, setSubTab] = useState<GeneralSubTab>("appearance");
+  const [generalSettings, setGeneralSettings] = useState<GeneralSettingsData | null>(null);
   const [shellSettings, setShellSettings] = useState<ShellToolSettingsResponse | null>(null);
   const [shellSaving, setShellSaving] = useState(false);
-  const [shellError, setShellError] = useState<string | null>(null);
+  const [savingField, setSavingField] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const themeOptions: { id: ThemePreference; label: string }[] = [
     { id: "light", label: t("settings.themeLight") },
     { id: "dark", label: t("settings.themeDark") },
     { id: "auto", label: t("settings.themeSystem") },
   ];
 
+  const fontSizeOptions: { id: FontSizePreference; label: string; size: string }[] = [
+    { id: "small", label: t("settings.fontSizeSmall"), size: "13px" },
+    { id: "medium", label: t("settings.fontSizeMedium"), size: "14px" },
+    { id: "large", label: t("settings.fontSizeLarge"), size: "15px" },
+    { id: "xlarge", label: t("settings.fontSizeXLarge"), size: "16px" },
+  ];
+
+  const thinkingOptions = [
+    { id: "auto", label: "auto" },
+    { id: "off", label: "off" },
+    { id: "minimal", label: "minimal" },
+    { id: "low", label: "low" },
+    { id: "medium", label: "medium" },
+    { id: "high", label: "high" },
+    { id: "max", label: "max" },
+  ];
+
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/tools/settings")
-      .then(async (response) => {
-        const data = await response.json() as ShellToolSettingsResponse & { error?: string };
-        if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
-        if (!cancelled) setShellSettings(data);
-      })
-      .catch((cause) => {
-        if (!cancelled) setShellError(cause instanceof Error ? cause.message : String(cause));
-      });
+    void Promise.all([
+      fetch("/api/settings").then((r) => r.ok ? r.json() : null),
+      fetch("/api/tools/settings").then((r) => r.ok ? r.json() : null),
+    ]).then(([gen, shell]) => {
+      if (cancelled) return;
+      if (gen) setGeneralSettings(gen as GeneralSettingsData);
+      if (shell) setShellSettings(shell as ShellToolSettingsResponse);
+    }).catch((cause) => {
+      if (!cancelled) setErrorMsg(cause instanceof Error ? cause.message : String(cause));
+    });
     return () => { cancelled = true; };
   }, []);
 
+  const updateSetting = async (field: keyof GeneralSettingsData, value: unknown) => {
+    setSavingField(String(field));
+    setErrorMsg(null);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+      const data = await response.json() as { success?: boolean; settings?: GeneralSettingsData; error?: string };
+      if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (data.settings) setGeneralSettings(data.settings);
+    } catch (cause) {
+      setErrorMsg(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSavingField(null);
+    }
+  };
+
   const togglePowerShell = async (enabled: boolean) => {
     setShellSaving(true);
-    setShellError(null);
+    setErrorMsg(null);
     try {
       const response = await fetch("/api/tools/settings", {
         method: "PUT",
@@ -96,7 +152,7 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
         onSessionReloaded();
       }
     } catch (cause) {
-      setShellError(cause instanceof Error ? cause.message : String(cause));
+      setErrorMsg(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setShellSaving(false);
     }
@@ -104,73 +160,254 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
 
   return (
     <div className="settings-general">
-      <h2 className="settings-general-title">{t("settings.general")}</h2>
+      <div className="settings-subtab-bar">
+        <button
+          type="button"
+          className={`settings-subtab-pill ${subTab === "appearance" ? "is-active" : ""}`}
+          onClick={() => setSubTab("appearance")}
+        >
+          {t("settings.tabAppearance")}
+        </button>
+        <button
+          type="button"
+          className={`settings-subtab-pill ${subTab === "automation" ? "is-active" : ""}`}
+          onClick={() => setSubTab("automation")}
+        >
+          {t("settings.tabAutomation")}
+        </button>
+        <button
+          type="button"
+          className={`settings-subtab-pill ${subTab === "environment" ? "is-active" : ""}`}
+          onClick={() => setSubTab("environment")}
+        >
+          {t("settings.tabEnvironment")}
+        </button>
+      </div>
 
-      <section className="settings-general-section">
-        <h3 className="settings-general-heading">{t("settings.appearance")}</h3>
-        <p className="settings-general-description">{t("settings.appearanceDescription")}</p>
-        <div role="radiogroup" aria-label={t("settings.appearance")} className="settings-theme-options">
-          {themeOptions.map((option) => {
-            const selected = preference === option.id;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setThemePreference(option.id)}
-                className="settings-theme-option"
-              >
-                <ThemeIcon preference={option.id} />
-                <span className="settings-theme-option-label">{option.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      <div className="settings-general-content">
+        {subTab === "appearance" && (
+          <>
+            <section className="settings-general-section">
+              <h3 className="settings-general-heading">{t("settings.appearance")}</h3>
+              <p className="settings-general-description">{t("settings.appearanceDescription")}</p>
+              <div role="radiogroup" aria-label={t("settings.appearance")} className="settings-theme-options">
+                {themeOptions.map((option) => {
+                  const selected = preference === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setThemePreference(option.id)}
+                      className="settings-theme-option"
+                    >
+                      <ThemeIcon preference={option.id} />
+                      <span className="settings-theme-option-label">{option.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
 
-      {shellSettings?.isWindows && (
-        <section className="settings-general-section">
-          <h3 className="settings-general-heading">{t("settings.shellTool")}</h3>
-          <p className="settings-general-description">{t("settings.shellToolDescription")}</p>
-          <div className="settings-shell-option">
-            <span>{t("settings.usePowerShell")}</span>
-            <ConfigSwitch
-              checked={shellSettings.powerShellEnabled}
-              loading={shellSaving}
-              label={t("settings.usePowerShell")}
-              onChange={(enabled) => void togglePowerShell(enabled)}
-            />
-          </div>
-          {shellError && <p role="alert" className="settings-general-error">{shellError}</p>}
-        </section>
-      )}
+            <section className="settings-general-section">
+              <h3 className="settings-general-heading">{t("settings.fontSize")}</h3>
+              <p className="settings-general-description">{t("settings.fontSizeDescription")}</p>
+              <div role="radiogroup" aria-label={t("settings.fontSize")} className="settings-font-options">
+                {fontSizeOptions.map((option) => {
+                  const selected = fontSize === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setFontSize(option.id)}
+                      className="settings-theme-option"
+                    >
+                      <span className="settings-font-option-content">
+                        <span>{option.label}</span>
+                        <span className="settings-font-option-size">{option.size}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
 
-      <section className="settings-general-section">
-        <h3 className="settings-general-heading">{t("common.language")}</h3>
-        <p className="settings-general-description">{t("settings.languageDescription")}</p>
-        <div role="radiogroup" aria-label={t("common.language")} className="settings-language-options">
-          {supportedLocales.map((plugin) => {
-            const selected = locale === plugin.id;
-            return (
-              <button
-                key={plugin.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setLocale(plugin.id as typeof locale)}
-                className="settings-language-option"
-              >
-                <span className="settings-language-radio">
-                  {selected && <span className="settings-language-radio-dot" />}
-                </span>
-                <span className="settings-language-label">{plugin.label}</span>
-                <span className="settings-language-code">{plugin.id}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+            <section className="settings-general-section">
+              <h3 className="settings-general-heading">{t("common.language")}</h3>
+              <p className="settings-general-description">{t("settings.languageDescription")}</p>
+              <div role="radiogroup" aria-label={t("common.language")} className="settings-language-options">
+                {supportedLocales.map((plugin) => {
+                  const selected = locale === plugin.id;
+                  return (
+                    <button
+                      key={plugin.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setLocale(plugin.id as typeof locale)}
+                      className="settings-language-option"
+                    >
+                      <span className="settings-language-radio">
+                        {selected && <span className="settings-language-radio-dot" />}
+                      </span>
+                      <span className="settings-language-label">{plugin.label}</span>
+                      <span className="settings-language-code">{plugin.id}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="settings-general-section">
+              <div className="settings-card-row">
+                <div className="settings-card-row-info">
+                  <h4 className="settings-card-row-title">{t("settings.hideThinking")}</h4>
+                  <p className="settings-card-row-desc">{t("settings.hideThinkingDescription")}</p>
+                </div>
+                <ConfigSwitch
+                  checked={generalSettings?.hideThinkingBlock ?? false}
+                  loading={savingField === "hideThinkingBlock"}
+                  label={t("settings.hideThinking")}
+                  onChange={(val) => void updateSetting("hideThinkingBlock", val)}
+                />
+              </div>
+            </section>
+          </>
+        )}
+
+        {subTab === "automation" && (
+          <>
+            <section className="settings-general-section">
+              <div className="settings-card-row">
+                <div className="settings-card-row-info">
+                  <h4 className="settings-card-row-title">{t("settings.autoCompaction")}</h4>
+                  <p className="settings-card-row-desc">{t("settings.autoCompactionDescription")}</p>
+                </div>
+                <ConfigSwitch
+                  checked={generalSettings?.compactionEnabled ?? true}
+                  loading={savingField === "compactionEnabled"}
+                  label={t("settings.autoCompaction")}
+                  onChange={(val) => void updateSetting("compactionEnabled", val)}
+                />
+              </div>
+            </section>
+
+            <section className="settings-general-section">
+              <div className="settings-card-row">
+                <div className="settings-card-row-info">
+                  <h4 className="settings-card-row-title">{t("settings.autoRetry")}</h4>
+                  <p className="settings-card-row-desc">{t("settings.autoRetryDescription")}</p>
+                </div>
+                <ConfigSwitch
+                  checked={generalSettings?.retryEnabled ?? true}
+                  loading={savingField === "retryEnabled"}
+                  label={t("settings.autoRetry")}
+                  onChange={(val) => void updateSetting("retryEnabled", val)}
+                />
+              </div>
+            </section>
+
+            <section className="settings-general-section">
+              <h3 className="settings-general-heading">{t("settings.defaultReasoning")}</h3>
+              <p className="settings-general-description">{t("settings.defaultReasoningDescription")}</p>
+              <div className="settings-reasoning-options">
+                {thinkingOptions.map((opt) => {
+                  const selected = (generalSettings?.defaultThinkingLevel ?? "auto") === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={`settings-reasoning-pill ${selected ? "is-active" : ""}`}
+                      onClick={() => void updateSetting("defaultThinkingLevel", opt.id)}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="settings-general-section">
+              <div className="settings-card-row">
+                <div className="settings-card-row-info">
+                  <h4 className="settings-card-row-title">{t("settings.quietStartup")}</h4>
+                  <p className="settings-card-row-desc">{t("settings.quietStartupDescription")}</p>
+                </div>
+                <ConfigSwitch
+                  checked={generalSettings?.quietStartup ?? false}
+                  loading={savingField === "quietStartup"}
+                  label={t("settings.quietStartup")}
+                  onChange={(val) => void updateSetting("quietStartup", val)}
+                />
+              </div>
+            </section>
+          </>
+        )}
+
+        {subTab === "environment" && (
+          <>
+            {shellSettings?.isWindows && (
+              <section className="settings-general-section">
+                <h3 className="settings-general-heading">{t("settings.shellTool")}</h3>
+                <p className="settings-general-description">{t("settings.shellToolDescription")}</p>
+                <div className="settings-shell-option">
+                  <span>{t("settings.usePowerShell")}</span>
+                  <ConfigSwitch
+                    checked={shellSettings.powerShellEnabled}
+                    loading={shellSaving}
+                    label={t("settings.usePowerShell")}
+                    onChange={(enabled) => void togglePowerShell(enabled)}
+                  />
+                </div>
+              </section>
+            )}
+
+            <section className="settings-general-section">
+              <div className="settings-card-row">
+                <div className="settings-card-row-info">
+                  <h4 className="settings-card-row-title">{t("settings.enableSkillCommands")}</h4>
+                  <p className="settings-card-row-desc">{t("settings.enableSkillCommandsDescription")}</p>
+                </div>
+                <ConfigSwitch
+                  checked={generalSettings?.enableSkillCommands ?? true}
+                  loading={savingField === "enableSkillCommands"}
+                  label={t("settings.enableSkillCommands")}
+                  onChange={(val) => void updateSetting("enableSkillCommands", val)}
+                />
+              </div>
+            </section>
+
+            <section className="settings-general-section">
+              <h3 className="settings-general-heading">{t("settings.projectTrust")}</h3>
+              <p className="settings-general-description">{t("settings.projectTrustDescription")}</p>
+              <div className="settings-theme-options is-compact">
+                {[
+                  { id: "prompt", label: t("settings.trustPrompt") },
+                  { id: "auto", label: t("settings.trustAuto") },
+                ].map((opt) => {
+                  const selected = (generalSettings?.defaultProjectTrust ?? "prompt") === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className="settings-theme-option"
+                      aria-checked={selected}
+                      onClick={() => void updateSetting("defaultProjectTrust", opt.id)}
+                    >
+                      <span className="settings-theme-option-label">{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          </>
+        )}
+
+        {errorMsg && <p role="alert" className="settings-general-error">{errorMsg}</p>}
+      </div>
     </div>
   );
 }
@@ -232,20 +469,10 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
       className="settings-dialog-backdrop"
     >
       <div className="settings-dialog-surface">
-        <div className="settings-dialog-header">
-          <strong className="settings-dialog-title">{t("settings.title")}</strong>
-          <select
-            aria-label={t("settings.title")}
-            value={section}
-            onChange={(event) => activateSection(event.target.value as SettingsSection)}
-            className="settings-mobile-section-picker"
-          >
-            {sections.map((item) => (
-              <option key={item.id} value={item.id} disabled={item.requiresProject && !cwd}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+        <aside className="settings-dialog-sidebar">
+          <div className="settings-dialog-sidebar-head">
+            <strong className="settings-dialog-title">{t("settings.title")}</strong>
+          </div>
           <nav aria-label={t("settings.title")} className="settings-section-tabs">
             {sections.map((item) => {
               const selected = section === item.id;
@@ -266,15 +493,32 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
               );
             })}
           </nav>
-          <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
-        </div>
+        </aside>
 
-        <main className="settings-dialog-main">
-          {sectionHost("general", <GeneralSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} />)}
-          {sectionHost("models", <ModelsConfig embedded onClose={onClose} />)}
-          {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} onClose={onClose} />)}
-          {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}
-        </main>
+        <div className="settings-dialog-body">
+          <div className="settings-dialog-header">
+            <select
+              aria-label={t("settings.title")}
+              value={section}
+              onChange={(event) => activateSection(event.target.value as SettingsSection)}
+              className="settings-mobile-section-picker"
+            >
+              {sections.map((item) => (
+                <option key={item.id} value={item.id} disabled={item.requiresProject && !cwd}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
+          </div>
+
+          <main className="settings-dialog-main">
+            {sectionHost("general", <GeneralSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} />)}
+            {sectionHost("models", <ModelsConfig embedded onClose={onClose} />)}
+            {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} onClose={onClose} />)}
+            {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}
+          </main>
+        </div>
       </div>
     </div>
   );

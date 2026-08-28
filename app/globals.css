@@ -20,35 +20,68 @@
 
 :root {
   --bg: #ffffff;
-  --bg-panel: #f5f5f5;
-  --bg-hover: #eeeeee;
-  --bg-selected: #e8e8e8;
-  --border: #e0e0e0;
-  --text: #1a1a1a;
-  --text-muted: #6b7280;
+  --bg-panel: #f8f9fa;
+  --bg-hover: #f1f3f5;
+  --bg-selected: #e9ecef;
+  --border: #e5e7eb;
+  --text: #111827;
+  --text-muted: #4b5563;
   --text-dim: #9ca3af;
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
-  --user-bg: #eff6ff;
+  --user-bg: #f0f7ff;
   --assistant-bg: #ffffff;
-  --tool-bg: #f9fafb;
+  --tool-bg: #f8fafc;
   --bg-subtle: rgba(0,0,0,0.03);
+  --chat-font-size: 14px;
+}
+
+[data-font-size="small"] {
+  --chat-font-size: 13px;
+  font-size: 13px;
+}
+
+[data-font-size="medium"] {
+  --chat-font-size: 14px;
+  font-size: 14px;
+}
+
+[data-font-size="large"] {
+  --chat-font-size: 15px;
+  font-size: 15px;
+}
+
+[data-font-size="xlarge"] {
+  --chat-font-size: 16px;
+  font-size: 16px;
+}
+
+.markdown-body,
+.markdown-body p,
+.markdown-body li,
+.markdown-body td,
+.markdown-body th,
+.markdown-user-message,
+.markdown-user-message p,
+.kimi-composer-main textarea,
+.kimi-composer-shell textarea {
+  font-size: var(--chat-font-size, 14px) !important;
 }
 
 html.dark {
-  --bg: #1a1a1a;
-  --bg-panel: #242424;
-  --bg-hover: #2e2e2e;
-  --bg-selected: #383838;
-  --border: #3a3a3a;
-  --text: #e8e8e8;
+  --bg: #121215;
+  --bg-panel: #18181c;
+  --bg-hover: #222228;
+  --bg-selected: #282832;
+  --border: #2a2a34;
+  --text: #f4f4f6;
   --text-muted: #9ca3af;
   --text-dim: #6b7280;
-  --accent: #60a5fa;
-  --accent-hover: #93c5fd;
-  --user-bg: #1e293b;
-  --assistant-bg: #1a1a1a;
-  --tool-bg: #1f2937;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --user-bg: #1b2234;
+  --assistant-bg: #141418;
+  --tool-bg: #17171d;
   --bg-subtle: rgba(255,255,255,0.04);
 }
 
@@ -126,16 +159,647 @@ body {
   flex-direction: column;
 }
 
+.kimi-sidebar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.kimi-sidebar-brand-mark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.kimi-sidebar-brand-mark .pi-brand-symbol {
+  color: #fff;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  transform: translateY(-0.5px);
+}
+
+.kimi-sidebar-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 29px;
+  padding: 0 14px 0 16px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+
+.kimi-sidebar-section-actions {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  opacity: .72;
+}
+
+.kimi-sidebar-avatar {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: #292b2f;
+  color: #fff;
+  font-family: Georgia, serif;
+  font-size: 14px;
+}
+
+.kimi-show-more {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 28px);
+  height: 31px;
+  margin: 1px 14px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kimi-show-more:hover { background: var(--bg-hover); color: var(--text); }
+.kimi-show-more svg { transition: transform 140ms ease; }
+
+.kimi-new-workspace {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 45px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 0 0 20px 20px;
+  background: color-mix(in srgb, var(--bg-panel) 76%, var(--bg));
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.kimi-new-workspace:hover { background: var(--bg-hover); }
+.kimi-new-workspace span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kimi-new-workspace svg:last-child { margin-left: 0; transition: transform 140ms ease; }
+
+.kimi-manual-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kimi-manual-trigger:hover { background: var(--bg-hover); color: var(--text); }
+.kimi-manual-trigger svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+
+.kimi-new-session-stage { transform: translateY(-30px); }
+.kimi-new-session-stage h1 { transform: translateY(-24px); }
+.kimi-new-session-stage .kimi-empty-copy { transform: translateY(-16px); }
+.kimi-new-session .kimi-composer-main { min-height: 92px !important; }
+.kimi-new-session .kimi-composer-shell { transform: translateY(9px); }
+
+@media (max-width: 640px) {
+  .kimi-new-session-stage,
+  .kimi-new-session-stage h1,
+  .kimi-new-session-stage .kimi-empty-copy,
+  .kimi-new-session .kimi-composer-shell { transform: none; }
+  .kimi-new-session .kimi-composer-main { min-height: 62px !important; }
+}
+
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
+  background: color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+@keyframes pi-thinking-glow {
+  0%, 100% {
+    background-position: 0% 50%;
+    border-color: color-mix(in srgb, var(--border) 85%, transparent);
+  }
+  50% {
+    background-position: 100% 50%;
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  }
+}
+
+@keyframes pi-spin-pulse {
+  0% { transform: scale(1) rotate(0deg); opacity: 0.85; }
+  50% { transform: scale(1.12) rotate(180deg); opacity: 1; }
+  100% { transform: scale(1) rotate(360deg); opacity: 0.85; }
+}
+
+@keyframes pi-dot-jump {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+
+.pi-thinking-active {
+  background: linear-gradient(90deg, var(--bg-panel), color-mix(in srgb, var(--accent) 10%, var(--bg-panel)), var(--bg-panel));
+  background-size: 200% 100%;
+  animation: pi-thinking-glow 3s ease infinite;
+}
+
+.pi-thinking-icon-active {
+  color: var(--accent) !important;
+  animation: pi-spin-pulse 3s linear infinite;
+}
+
+@keyframes kimi-tooltip-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.98); }
+}
+
+@keyframes shimmer-sweep {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.12), transparent);
+  background-size: 200% 100%;
+  animation: shimmer-sweep 2s infinite ease-in-out;
+}
+
+.kimi-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.kimi-card:hover {
+  border-color: color-mix(in srgb, var(--border) 60%, var(--accent));
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.08);
+}
+
+.kimi-composer {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.12);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.kimi-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 8px 30px -4px rgba(0, 0, 0, 0.18);
+}
+
+.kimi-composer-shell {
+  position: relative;
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 25px;
+  background: var(--bg-panel);
+  box-shadow: 0 8px 28px -18px rgba(0, 0, 0, .42), 0 2px 8px rgba(0, 0, 0, .05);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.kimi-composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--text-dim) 54%, var(--border));
+  box-shadow: 0 10px 34px -20px rgba(0, 0, 0, .48), 0 2px 9px rgba(0, 0, 0, .06);
+}
+
+.kimi-composer-shell.is-bash {
+  border-color: color-mix(in srgb, var(--tool-bg) 65%, var(--border));
+}
+
+.kimi-composer-shell.is-streaming {
+  border-color: color-mix(in srgb, var(--accent) 80%, var(--border));
+  box-shadow: 0 0 20px -3px color-mix(in srgb, var(--accent) 30%, transparent), 0 2px 8px rgba(0, 0, 0, .05);
+  animation: pi-composer-streaming 2.2s ease-in-out infinite alternate;
+}
+
+@keyframes pi-composer-streaming {
+  0% {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    box-shadow: 0 0 12px -5px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  100% {
+    border-color: color-mix(in srgb, var(--accent) 95%, var(--border));
+    box-shadow: 0 0 24px -1px color-mix(in srgb, var(--accent) 48%, transparent);
+  }
+}
+
+/* Kimi-style background work dock. The panel deliberately floats over the
+   conversation so the composer never jumps when task details are inspected. */
+.kimi-task-dock {
+  position: relative;
+  z-index: 45;
+  width: min(728px, calc(100% - 32px));
+  margin: 0 auto 8px;
+}
+
+.kimi-task-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.kimi-task-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.kimi-task-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.kimi-task-pill:hover,
+.kimi-task-pill.is-active {
+  background: var(--bg-selected);
+}
+
+.kimi-task-pill:active {
+  transform: scale(0.98);
+}
+
+.kimi-task-pill svg,
+.kimi-task-panel-title svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kimi-task-live-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: 1px;
+  border-radius: 999px;
+  background: #2b8cff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #2b8cff 18%, transparent);
+  animation: kimi-live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes kimi-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.78); }
+}
+
+.kimi-task-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: flex;
+  flex-direction: column;
+  height: min(320px, 42vh);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--bg) 91%, transparent);
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, .32), 0 2px 8px rgba(0, 0, 0, .05);
+  backdrop-filter: blur(18px) saturate(1.08);
+  animation: kimi-task-panel-in 170ms cubic-bezier(.2,.78,.2,1) both;
+  transform-origin: bottom center;
+}
+
+@keyframes kimi-task-panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.kimi-task-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  padding: 7px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 66%, transparent);
+}
+
+.kimi-task-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.kimi-task-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(64px, 1fr));
+  min-width: 312px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+}
+
+.kimi-task-filters button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kimi-task-filters button.is-active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+}
+
+.kimi-task-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px 12px;
+}
+
+.kimi-task-empty {
+  display: grid;
+  min-height: 190px;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.kimi-task-row {
+  display: grid;
+  grid-template-columns: 16px 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  color: var(--text);
+}
+
+.kimi-task-row:hover {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+}
+
+.kimi-dock-status,
+.kimi-dock-status-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.kimi-dock-status {
+  border-radius: 50%;
+}
+
+.kimi-dock-status.is-running {
+  border: 2px solid color-mix(in srgb, #2388ff 28%, transparent);
+  border-top-color: #2388ff;
+  animation: kimi-dock-spin .9s linear infinite;
+}
+
+.kimi-dock-status.is-queued {
+  border: 1.5px solid var(--text-dim);
+}
+
+@keyframes kimi-dock-spin { to { transform: rotate(360deg); } }
+
+.kimi-dock-status-icon {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kimi-dock-status-icon.is-done { stroke: #37a36b; }
+.kimi-dock-status-icon.is-failed { stroke: #e25a5a; }
+
+.kimi-task-index {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kimi-task-copy { min-width: 0; }
+
+.kimi-task-title,
+.kimi-task-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kimi-task-title {
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.kimi-task-detail {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.kimi-task-state {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.kimi-task-state.is-running { color: #2388ff; }
+.kimi-task-state.is-done { color: #37a36b; }
+.kimi-task-state.is-failed { color: #e25a5a; }
+
+.kimi-task-panel.panel-progress .kimi-task-panel-body {
+  padding: 8px 14px 12px;
+}
+
+.kimi-task-panel.panel-progress .kimi-task-row {
+  grid-template-columns: 16px minmax(0, 1fr);
+  min-height: 31px;
+  padding: 4px 2px;
+}
+
+.kimi-task-panel.panel-progress .kimi-task-index,
+.kimi-task-panel.panel-progress .kimi-task-state {
+  display: none;
+}
+
+.kimi-task-panel.panel-agent .kimi-task-panel-body:not(:has(.kimi-task-empty)) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px;
+  padding: 8px 10px 12px;
+}
+
+.kimi-task-panel.panel-agent .kimi-task-row {
+  grid-template-columns: 16px 25px minmax(0, 1fr);
+  grid-template-rows: minmax(32px, auto) 22px;
+  min-height: 82px;
+  padding: 9px 10px 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 68%, transparent);
+}
+
+.kimi-task-panel.panel-agent .kimi-task-state {
+  grid-column: 1 / -1;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+}
+
+@media (max-width: 640px) {
+  .kimi-task-panel.panel-agent .kimi-task-panel-body:not(:has(.kimi-task-empty)) {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .kimi-task-dock { width: calc(100% - 24px); }
+  .kimi-task-pill { height: 34px; padding: 0 11px; font-size: 12px; }
+  .kimi-task-filters { min-width: 0; width: 100%; grid-template-columns: repeat(4, 1fr); }
+  .kimi-task-panel-head { align-items: stretch; flex-direction: column; padding: 10px 12px; }
+}
+
+.kimi-chat-head-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 14px 0 16px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.kimi-chat-head-project {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.kimi-chat-head-separator {
+  color: var(--text-dim);
+}
+
+.kimi-chat-head-title {
+  min-width: 0;
+  max-width: min(48vw, 680px);
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kimi-chat-head-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.kimi-chat-head-more:hover { background: var(--bg-hover); }
+.kimi-chat-head-more span { width: 2px; height: 2px; border-radius: 50%; background: var(--text-muted); }
+
+.kimi-chat-head-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.kimi-chat-head-branch svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.kimi-chat-head-branch span {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 

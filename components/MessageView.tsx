@@ -771,6 +771,17 @@ function AssistantMessageView({
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {blocks.length === 0 && isStreaming && !providerError && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 10, width: "fit-content" }}>
+            <span style={{ fontSize: 14, color: "var(--accent)", fontWeight: 700, fontFamily: "Georgia, serif", lineHeight: 1 }}>π</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{t("chat.waitingModel")}</span>
+            <span style={{ display: "inline-flex", gap: 3, alignItems: "center", marginLeft: 2 }}>
+              <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", animation: "pi-dot-jump 1.2s infinite ease-in-out" }} />
+              <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", animation: "pi-dot-jump 1.2s infinite ease-in-out 0.2s" }} />
+              <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--accent)", animation: "pi-dot-jump 1.2s infinite ease-in-out 0.4s" }} />
+            </span>
+          </div>
+        )}
         {blockItems.map(({ block, originalIndex }) => (
           <BlockView key={`${entryId ?? "stream"}-${originalIndex}`} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} />
         ))}
@@ -855,7 +866,7 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
     return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} />;
   }
   if (block.type === "thinking") {
-    return <ThinkingBlock block={block as ThinkingContent} duration={streamingDuration} sessionId={sessionId} entryId={entryId} blockIndex={blockIndex} />;
+    return <ThinkingBlock block={block as ThinkingContent} isStreaming={isStreaming} duration={streamingDuration} sessionId={sessionId} entryId={entryId} blockIndex={blockIndex} />;
   }
   if (block.type === "toolCall") {
     const tc = block as ToolCallContent;
@@ -867,11 +878,19 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
 }
 
 function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void }) {
-  return <SafeMarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</SafeMarkdownBody>;
+  return (
+    <div className="relative">
+      <SafeMarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</SafeMarkdownBody>
+      {isStreaming && (
+        <span className="inline-block h-3.5 w-1.5 ml-1 bg-accent align-middle rounded-[1px] animate-pulse" />
+      )}
+    </div>
+  );
 }
 
-function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
+function ThinkingBlock({ block, isStreaming, duration, sessionId, entryId, blockIndex }: {
   block: ThinkingContent;
+  isStreaming?: boolean;
   duration?: number;
   sessionId?: string;
   entryId?: string;
@@ -882,6 +901,8 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isActiveThinking = Boolean(isStreaming && duration !== undefined);
 
   const toggle = async () => {
     const nextExpanded = !expanded;
@@ -905,11 +926,13 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
 
   return (
     <div
+      className={isActiveThinking ? "pi-thinking-active" : ""}
       style={{
         border: "1px solid var(--border)",
-        borderRadius: 6,
+        borderRadius: 8,
         overflow: "hidden",
         fontSize: 13,
+        transition: "border-color 0.2s ease",
       }}
     >
       <button
@@ -917,9 +940,9 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 6,
+          gap: 7,
           width: "100%",
-          padding: "6px 10px",
+          padding: "7px 12px",
           background: "var(--bg-panel)",
           border: "none",
           color: "var(--text-muted)",
@@ -928,10 +951,29 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
           textAlign: "left",
         }}
       >
-         <span>{t("i18n.thinking")}</span>
+        <svg
+          className={isActiveThinking ? "pi-thinking-icon-active" : ""}
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ flexShrink: 0, color: "var(--accent)" }}
+        >
+          <path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" />
+          <line x1="7" y1="18" x2="12" y2="18" />
+          <line x1="8" y1="21" x2="11" y2="21" />
+        </svg>
+        <span style={{ fontWeight: 500 }}>{t("i18n.thinking")}</span>
         {duration !== undefined && (
           <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
         )}
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s", marginLeft: duration === undefined ? "auto" : 4 }}>
+          <polyline points="2 3.5 5 6.5 8 3.5" />
+        </svg>
       </button>
       {expanded && (
         <div

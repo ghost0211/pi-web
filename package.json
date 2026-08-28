@@ -1,14 +1,14 @@
 {
   "name": "@agegr/pi-web",
-  "version": "0.8.11",
+  "version": "0.9.0",
   "description": "Web UI for the pi coding agent",
-  "homepage": "https://github.com/agegr/pi-web#readme",
+  "homepage": "https://github.com/ghost0211/pi-web#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agegr/pi-web.git"
+    "url": "git+https://github.com/ghost0211/pi-web.git"
   },
   "bugs": {
-    "url": "https://github.com/agegr/pi-web/issues"
+    "url": "https://github.com/ghost0211/pi-web/issues"
   },
   "license": "MIT",
   "engines": {

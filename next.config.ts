@@ -26,6 +26,8 @@ const nextConfig: NextConfig = {
   // from other machines on the same LAN.
   allowedDevOrigins: [
     "127.0.0.1",
+    // Tailscale address used to reach this headless development server.
+    "100.123.204.99",
     "10.*.*.*",
     // 172.16.0.0/12
     "172.16.*.*",

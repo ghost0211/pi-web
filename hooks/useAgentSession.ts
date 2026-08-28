@@ -147,6 +147,7 @@ export interface UseAgentSessionOptions {
   onAttentionNeeded?: (request: BlockingExtensionUiRequest) => void;
   onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
   onSessionForked?: (newSessionId: string) => void;
+  onNewSession?: (sessionId: string, cwd: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
   onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
@@ -1641,6 +1642,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (!textToCopy) return complete({ handled: true, error: "No assistant message to copy" });
           await navigator.clipboard.writeText(textToCopy);
           return complete({ handled: true, message: "Copied last assistant message" });
+        }
+
+        case "new":
+        case "clear": {
+          const targetCwd = session?.cwd ?? newSessionCwd ?? "";
+          const tempId = typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+          if (opts.onNewSession && targetCwd) {
+            opts.onNewSession(tempId, targetCwd);
+          } else if (typeof window !== "undefined") {
+            window.location.href = "/";
+          }
+          return complete({ handled: true, message: "Started a fresh session" });
+        }
+
+        case "help": {
+          const list = [
+            "/new - Start a fresh session",
+            "/compact [instructions] - Compress context",
+            "/reload - Reload skills, extensions & tools",
+            "/name <name> - Rename session",
+            "/session - View session stats",
+            "/copy - Copy last message",
+            "/clone - Clone session branch",
+          ].join("\n");
+          return complete({ handled: true, message: list });
         }
 
         case "clone": {

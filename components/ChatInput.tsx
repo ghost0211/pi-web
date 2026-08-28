@@ -2247,15 +2247,66 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </svg>
             </button>
             {!isMobile && !isStreaming && onToolPresetChange && (
-              <button
-                type="button"
-                className="kimi-manual-trigger"
-                onClick={() => setToolDropdownOpen((open) => !open)}
-                title={t("chat.changeToolPreset") + `: ${toolPresetLabel}`}
-              >
-                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 9V5.8a1.2 1.2 0 0 1 2.4 0V8m0 0V4.8a1.2 1.2 0 0 1 2.4 0V8m0 0V5.8a1.2 1.2 0 0 1 2.4 0v5.7c0 3-1.9 5-4.8 5H8c-1.8 0-3.2-.8-4.2-2.3L2.4 12a1.25 1.25 0 0 1 2.1-1.35L6 12.4"/></svg>
-                <span>{toolPreset === "default" ? "Manual" : toolPresetLabel}</span>
-              </button>
+              <div ref={toolDropdownRef} style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  className="kimi-manual-trigger"
+                  onClick={() => setToolDropdownOpen((open) => !open)}
+                  title={t("chat.changeToolPreset") + `: ${toolPresetLabel}`}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 9V5.8a1.2 1.2 0 0 1 2.4 0V8m0 0V4.8a1.2 1.2 0 0 1 2.4 0V8m0 0V5.8a1.2 1.2 0 0 1 2.4 0v5.7c0 3-1.9 5-4.8 5H8c-1.8 0-3.2-.8-4.2-2.3L2.4 12a1.25 1.25 0 0 1 2.1-1.35L6 12.4"/></svg>
+                  <span>{toolPreset === "default" ? "Manual" : toolPresetLabel}</span>
+                </button>
+                {toolDropdownOpen && (
+                  <div style={{
+                    position: "absolute",
+                    bottom: "calc(100% + 6px)",
+                    left: 0,
+                    zIndex: 100,
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                    boxShadow: "0 -4px 16px rgba(0,0,0,0.12)",
+                    overflow: "hidden",
+                    minWidth: 150,
+                  }}>
+                    {TOOL_PRESETS.map((lvl) => {
+                      const preset = TOOL_PRESET_MAP[lvl];
+                      const isActive = (toolPreset ?? "default") === preset;
+                      let desc: string;
+                      if (lvl === "chat-only") desc = t("chat.chatOnly");
+                      else if (lvl === "read-only") desc = t("chat.readOnlyTools", { count: 4 });
+                      else if (lvl === "default") desc = t("chat.builtInTools", { count: 4 });
+                      else desc = t("chat.allBuiltInTools");
+                      return (
+                        <button
+                          key={lvl}
+                          type="button"
+                          onClick={() => { setToolDropdownOpen(false); if (!isActive) onToolPresetChange(preset); }}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8,
+                            width: "100%", padding: "7px 12px",
+                            background: isActive ? "var(--bg-selected)" : "none",
+                            border: "none",
+                            color: isActive ? "var(--text)" : "var(--text-muted)",
+                            cursor: "pointer", fontSize: 12, textAlign: "left",
+                            fontWeight: isActive ? 600 : 400,
+                            whiteSpace: "nowrap",
+                          }}
+                          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
+                        >
+                          {isActive
+                            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
+                            : <span style={{ width: 10, flexShrink: 0 }} />}
+                          <span style={{ flex: 1 }}>{lvl}</span>
+                          <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -2346,15 +2397,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 isAutoSelection={isAutoModelSelection}
               />
             )}
-            {!isStreaming && onThinkingLevelChange && (
+            {!isStreaming && onThinkingLevelChange && (!availableThinkingLevels || availableThinkingLevels.length > 0) && (
               <div ref={thinkingDropdownRef} style={{ position: "relative" }}>
                 <button
+                  type="button"
                   onClick={() => !isStreaming && setThinkingDropdownOpen((v) => !v)}
                   disabled={isStreaming}
-                   title={t("chat.changeReasoning", { level: thinkingDisplayLabel })}
-                   aria-label={t("chat.changeReasoningLabel")}
+                  title={t("chat.changeReasoning", { level: thinkingDisplayLabel })}
+                  aria-label={t("chat.changeReasoningLabel")}
                   style={{
-                    display: isMobile ? "flex" : "none", alignItems: "center", justifyContent: "center", gap: 5,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 5,
                     padding: isMobile ? "0 8px" : "0 10px",
                     width: isMobile ? "auto" : undefined,
                     height: 28,
@@ -2404,6 +2459,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       return (
                         <button
                           key={lvl}
+                          type="button"
                           onClick={() => { setThinkingDropdownOpen(false); if (!isActive) onThinkingLevelChange(lvl); }}
                           style={{
                             display: "flex", alignItems: "center", gap: 8,
@@ -2425,88 +2481,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                             {displayLabel}
                             {showOriginal && <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", marginLeft: 5 }}>({lvl})</span>}
                           </span>
-                          <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-            {!isStreaming && onToolPresetChange && (
-              <div ref={toolDropdownRef} style={{ position: "relative" }}>
-                <button
-                  onClick={() => !isStreaming && setToolDropdownOpen((v) => !v)}
-                  disabled={isStreaming}
-                  title={t("chat.changeToolPreset") + `: ${toolPresetLabel}`}
-                  aria-label={t("chat.changeToolPreset")}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-                    padding: isMobile ? "0 8px" : "0 10px",
-                    width: isMobile ? "auto" : undefined,
-                    height: 28,
-                    background: toolDropdownOpen ? "var(--bg-selected)" : "var(--bg-hover)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 8,
-                    color: "var(--text)",
-                    cursor: isStreaming ? "not-allowed" : "pointer",
-                    fontSize: 12,
-                    fontWeight: 500,
-                    opacity: isStreaming ? 0.5 : 1,
-                    transition: "all 0.12s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (isStreaming) return;
-                    e.currentTarget.style.background = "var(--bg-selected)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = toolDropdownOpen ? "var(--bg-selected)" : "var(--bg-hover)";
-                  }}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                  </svg>
-                  {(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{toolPresetLabel}</span>}
-                </button>
-                {toolDropdownOpen && (
-                  <div style={{
-                    position: "absolute",
-                    bottom: "calc(100% + 6px)",
-                    right: isMobile ? undefined : 0,
-                    left: isMobile ? 0 : undefined,
-                    zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)",
-                    borderRadius: 8, boxShadow: "0 -4px 16px rgba(0,0,0,0.10)",
-                    overflow: "hidden", minWidth: 120,
-                  }}>
-                    {TOOL_PRESETS.map((lvl) => {
-                      const preset = TOOL_PRESET_MAP[lvl];
-                      const isActive = (toolPreset ?? "default") === preset;
-                      let desc: string;
-                      if (lvl === "chat-only") desc = t("chat.chatOnly");
-                      else if (lvl === "read-only") desc = t("chat.readOnlyTools", { count: 4 });
-                      else if (lvl === "default") desc = t("chat.builtInTools", { count: 4 });
-                      else desc = t("chat.allBuiltInTools");
-                      return (
-                        <button
-                          key={lvl}
-                          onClick={() => { setToolDropdownOpen(false); if (!isActive) onToolPresetChange(preset); }}
-                          style={{
-                            display: "flex", alignItems: "center", gap: 8,
-                            width: "100%", padding: "7px 12px",
-                            background: isActive ? "var(--bg-selected)" : "none",
-                            border: "none",
-                            color: isActive ? "var(--text)" : "var(--text-muted)",
-                            cursor: "pointer", fontSize: 12, textAlign: "left",
-                            fontWeight: isActive ? 600 : 400,
-                            whiteSpace: "nowrap",
-                          }}
-                          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "none"; }}
-                        >
-                          {isActive
-                            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
-                            : <span style={{ width: 10, flexShrink: 0 }} />}
-                          <span style={{ flex: 1 }}>{lvl}</span>
                           <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
                         </button>
                       );

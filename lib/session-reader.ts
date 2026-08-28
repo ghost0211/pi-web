@@ -449,7 +449,7 @@ export function buildSessionContext(
   const { tail, excludeLeaf } = options;
   // Restrict SDK conversion and the response payload to the requested page.
   const sliced = tail && tail > 0 ? sliceActiveBranch(entries, leafId ?? null, tail, excludeLeaf) : entries;
-  const hasMore = Boolean(tail && tail > 0 && sliced[0]?.parentId);
+  const hasMore = Boolean(tail && tail > 0 && sliced[0]?.parentId && !sliced.some((e) => e.type === "compaction"));
   const byId = new Map<string, SessionEntry>();
   for (const e of sliced) byId.set(e.id, e);
 

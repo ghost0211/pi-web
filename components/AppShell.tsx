@@ -699,11 +699,33 @@ export function AppShell() {
       const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
       const data = await response.json() as { info?: SessionInfo; error?: string };
       if (!response.ok || !data.info) throw new Error(data.error ?? `HTTP ${response.status}`);
-      handleSelectSession(data.info);
+      const info = data.info;
+      if (info.relation?.kind === "subagent" || info.parentSessionId) {
+        const tabId = `subagent:${sessionId}`;
+        const subagentDesc = info.relation?.kind === "subagent" ? info.relation.description : null;
+        const label = info.name || subagentDesc || `Agent · ${sessionId.slice(0, 6)}`;
+        setFileTabs((prev) => {
+          if (prev.some((t) => t.id === tabId)) return prev;
+          return [
+            ...prev,
+            {
+              id: tabId,
+              label,
+              kind: "subagent" as const,
+              subagentSessionId: sessionId,
+            },
+          ];
+        });
+        setActiveFileTabId(tabId);
+        setRightPanelOpen(true);
+        if (isMobile) setSidebarOpen(false);
+        return;
+      }
+      handleSelectSession(info);
     } catch (error) {
       console.error("[pi-web] failed to open session:", error instanceof Error ? error.message : error);
     }
-  }, [handleSelectSession]);
+  }, [handleSelectSession, isMobile]);
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string) => {
@@ -2584,7 +2606,33 @@ export function AppShell() {
 
         {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
         <div style={{ flex: 1, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {activeFileTab?.filePath ? (
+          {activeFileTab?.subagentSessionId ? (
+            <div style={{ width: "100%", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+              <ChatWindow
+                key={activeFileTab.subagentSessionId}
+                session={{
+                  id: activeFileTab.subagentSessionId,
+                  path: "",
+                  cwd: activeCwd ?? "",
+                  created: "",
+                  modified: "",
+                  messageCount: 0,
+                  firstMessage: "",
+                }}
+                sessionRunning={Boolean(runningSessionIds.has(activeFileTab.subagentSessionId))}
+                newSessionCwd={null}
+                newSessionDraftKey={null}
+                onOpenFile={handleOpenLinkedFile}
+                onOpenSession={handleOpenSession}
+                soundEnabled={soundEnabled}
+                onSoundToggle={onSoundToggle}
+                playDoneSound={playDoneSound}
+                unlockAudio={unlockAudio}
+                recentProjects={getRecentProjects(sessionCatalog)}
+                onSelectCwd={(cwd) => handleCwdChange(cwd)}
+              />
+            </div>
+          ) : activeFileTab?.filePath ? (
             <FileViewer
               key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
               filePath={activeFileTab.filePath}

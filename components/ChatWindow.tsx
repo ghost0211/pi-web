@@ -968,6 +968,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
           messages={messages}
           pendingBash={pendingBash}
           agentRunning={agentRunning || streamState.isStreaming}
+          onOpenSession={onOpenSession}
         />
         {chatInputElement}
         <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />

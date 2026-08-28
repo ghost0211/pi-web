@@ -25,6 +25,30 @@ interface Props {
   messages: AgentMessage[];
   pendingBash?: PendingBashLike | null;
   agentRunning?: boolean;
+  onOpenSession?: (sessionId: string) => void;
+}
+
+function resolveSubagentSessionId(block: ToolCallContent, result?: ToolResultMessage): string | null {
+  if (result?.details) {
+    const details = result.details as Record<string, unknown>;
+    if (typeof details.sessionId === "string" && details.sessionId) return details.sessionId;
+    if (typeof details.agent_id === "string" && details.agent_id) return details.agent_id;
+    if (typeof details.id === "string" && details.id) return details.id;
+  }
+  const input = block.input as Record<string, unknown> | undefined;
+  if (input) {
+    if (typeof input.agent_id === "string" && input.agent_id) return input.agent_id;
+    if (typeof input.sessionId === "string" && input.sessionId) return input.sessionId;
+    if (typeof input.session_id === "string" && input.session_id) return input.session_id;
+  }
+  const text = result?.content
+    ?.filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .map((b) => b.text)
+    .join("\n") ?? "";
+  const match = text.match(/(?:Session ID|session_id|agent_id|sessionId)[:=\s]+([0-9a-zA-Z_-]+)/i);
+  if (match?.[1]) return match[1];
+
+  return null;
 }
 
 const BASH_TOOL_NAMES = new Set([
@@ -148,7 +172,7 @@ function filterItems(items: DockItem[], filter: DockFilter): DockItem[] {
   return [...items].reverse();
 }
 
-export function KimiTaskDock({ messages, pendingBash, agentRunning = false }: Props) {
+export function KimiTaskDock({ messages, pendingBash, agentRunning = false, onOpenSession }: Props) {
   const { t } = useI18n();
   const [active, setActive] = useState<DockKind | null>(null);
   const [filter, setFilter] = useState<DockFilter>("recent");
@@ -194,8 +218,9 @@ export function KimiTaskDock({ messages, pendingBash, agentRunning = false }: Pr
           });
         }
         if (AGENT_TOOL_NAMES.has(normalizedName)) {
+          const subagentSessionId = resolveSubagentSessionId(block, result);
           agent.push({
-            id: block.toolCallId,
+            id: subagentSessionId ?? block.toolCallId,
             title: toolTitle(block, "agent"),
             detail: textResult(result),
             status: statusFromResult(result, agentRunning && !result),
@@ -288,17 +313,30 @@ export function KimiTaskDock({ messages, pendingBash, agentRunning = false }: Pr
               <div className="kimi-task-empty">
                 {active === "bash" ? t("dock.noBash") : active === "agent" ? t("dock.noAgent") : t("dock.noProgress")}
               </div>
-            ) : visibleItems.map((item, index) => (
-              <article className="kimi-task-row" key={item.id}>
-                <StatusIcon status={item.status} />
-                <span className="kimi-task-index">{String(index + 1).padStart(2, "0")}</span>
-                <div className="kimi-task-copy">
-                  <div className="kimi-task-title">{item.title}</div>
-                  {item.detail && <div className="kimi-task-detail">{item.detail}</div>}
-                </div>
-                <span className={`kimi-task-state is-${item.status}`}>{statusLabel(item.status)}</span>
-              </article>
-            ))}
+            ) : visibleItems.map((item, index) => {
+              const isAgentRow = active === "agent" && item.id && onOpenSession;
+              return (
+                <article
+                  className={`kimi-task-row${isAgentRow ? " is-clickable" : ""}`}
+                  key={item.id}
+                  onClick={() => {
+                    if (isAgentRow) {
+                      onOpenSession?.(item.id);
+                      setActive(null);
+                    }
+                  }}
+                  style={{ cursor: isAgentRow ? "pointer" : undefined }}
+                >
+                  <StatusIcon status={item.status} />
+                  <span className="kimi-task-index">{String(index + 1).padStart(2, "0")}</span>
+                  <div className="kimi-task-copy">
+                    <div className="kimi-task-title">{item.title}</div>
+                    {item.detail && <div className="kimi-task-detail">{item.detail}</div>}
+                  </div>
+                  <span className={`kimi-task-state is-${item.status}`}>{statusLabel(item.status)}</span>
+                </article>
+              );
+            })}
           </div>
         </section>
       )}

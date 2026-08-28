@@ -8,7 +8,9 @@ import type { FileViewerDisplayMode, FileViewerState } from "@/lib/file-viewer-s
 export interface Tab {
   id: string;
   label: string;
-  filePath: string;
+  filePath?: string;
+  kind?: "file" | "subagent";
+  subagentSessionId?: string | null;
   sourceSessionId?: string | null;
   initialDisplayMode?: FileViewerDisplayMode;
   viewerState?: FileViewerState;
@@ -73,7 +75,13 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
             }}
           >
             <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7, display: "flex", alignItems: "center" }}>
-              {getFileIcon(tab.label, 13)}
+              {tab.kind === "subagent" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)" }} aria-hidden="true">
+                  <rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
+                </svg>
+              ) : (
+                getFileIcon(tab.label, 13)
+              )}
             </span>
             <span
               style={{

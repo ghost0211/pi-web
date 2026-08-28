@@ -62,6 +62,24 @@ interface CompactCommandResult {
   estimatedTokensAfter?: number;
 }
 
+function inferModelContextWindow(modelId?: string): number {
+  if (!modelId) return 128_000;
+  const lower = modelId.toLowerCase();
+  if (lower.includes("gemini") || lower.includes("luna") || lower.includes("1m") || lower.includes("glm-5") || lower.includes("deepseek-v4-flash")) {
+    return 1_048_576;
+  }
+  if (lower.includes("claude") || lower.includes("sonnet") || lower.includes("opus") || lower.includes("haiku") || lower.includes("200k")) {
+    return 200_000;
+  }
+  if (lower.includes("step") || lower.includes("256k") || lower.includes("mai-code")) {
+    return 256_000;
+  }
+  if (lower.includes("deepseek") || lower.includes("64k")) {
+    return 64_000;
+  }
+  return 128_000;
+}
+
 interface LastAssistantTextResponse {
   text?: string;
 }
@@ -487,6 +505,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
 
       messagesLoaded = true;
+      let activeTokens = 0;
+      for (let i = persistedMessages.length - 1; i >= 0; i--) {
+        const msg = persistedMessages[i];
+        if (msg.role === "assistant" && msg.usage?.input) {
+          activeTokens = msg.usage.input;
+          break;
+        }
+      }
+      if (activeTokens > 0) {
+        const modelId = d.context.model?.modelId;
+        const windowSize = inferModelContextWindow(modelId);
+        setContextUsage({
+          tokens: activeTokens,
+          contextWindow: windowSize,
+          percent: Math.min(100, Math.max(0, Math.round((activeTokens / windowSize) * 100))),
+        });
+      }
       if (showLoading) setLoading(false);
       if (!includeState) return null;
 

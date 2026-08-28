@@ -1374,9 +1374,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 <div
                   onClick={() => {
                     toggleProjectCollapse(project.key);
-                    if (selectedCwd !== project.root) {
-                      setSelectedCwd(project.root);
-                    }
                   }}
                   style={{
                     display: "flex",

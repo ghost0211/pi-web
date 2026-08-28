@@ -1000,6 +1000,29 @@ function isSubagentToolDetails(value: unknown): value is SubagentToolDetails {
   return details.kind === "pi-web-subagent" && typeof details.sessionId === "string";
 }
 
+function resolveSubagentSessionId(block: ToolCallContent, result?: ToolResultMessage): string | null {
+  if (result?.details) {
+    const details = result.details as Record<string, unknown>;
+    if (typeof details.sessionId === "string" && details.sessionId) return details.sessionId;
+    if (typeof details.agent_id === "string" && details.agent_id) return details.agent_id;
+    if (typeof details.id === "string" && details.id) return details.id;
+  }
+  const input = block.input as Record<string, unknown> | undefined;
+  if (input) {
+    if (typeof input.agent_id === "string" && input.agent_id) return input.agent_id;
+    if (typeof input.sessionId === "string" && input.sessionId) return input.sessionId;
+    if (typeof input.session_id === "string" && input.session_id) return input.session_id;
+  }
+  const text = result?.content
+    ?.filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .map((b) => b.text)
+    .join("\n") ?? "";
+  const match = text.match(/(?:Session ID|session_id|agent_id|sessionId)[:=\s]+([0-9a-zA-Z_-]+)/i);
+  if (match?.[1]) return match[1];
+
+  return null;
+}
+
 function ToolCallBlock({ block, result, duration, onOpenSession }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSession?: (sessionId: string) => void }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
@@ -1015,7 +1038,7 @@ function ToolCallBlock({ block, result, duration, onOpenSession }: { block: Tool
   const resultImages = getMessageImages(result?.content ?? []);
   const resultIsEmpty = resultText === null ? false : (resultText.trim() === "(no output)" || resultText.trim() === "");
   const isError = result?.isError ?? false;
-  const subagent = isSubagentToolDetails(result?.details) ? result.details : null;
+  const subagentSessionId = resolveSubagentSessionId(block, result);
 
   return (
     <div
@@ -1059,10 +1082,10 @@ function ToolCallBlock({ block, result, duration, onOpenSession }: { block: Tool
             <polyline points="2 3.5 5 6.5 8 3.5" />
           </svg>
         </button>
-        {subagent && onOpenSession && (
+        {subagentSessionId && onOpenSession && (
           <button
             type="button"
-            onClick={() => onOpenSession(subagent.sessionId)}
+            onClick={() => onOpenSession(subagentSessionId)}
             title={t("subagent.open")}
             aria-label={t("subagent.open")}
             style={{ width: 32, display: "grid", placeItems: "center", border: "none", borderLeft: "1px solid var(--border)", background: "none", color: "var(--text-muted)", cursor: "pointer", flexShrink: 0 }}

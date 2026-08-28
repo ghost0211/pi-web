@@ -27,9 +27,17 @@ interface Props {
   agentRunning?: boolean;
 }
 
-const BASH_TOOL_NAMES = new Set(["bash", "shell", "powershell", "execute", "exec", "exec_command"]);
-const AGENT_TOOL_NAMES = new Set(["agent", "get_subagent_result", "steer_subagent"]);
-const PLAN_TOOL_NAMES = new Set(["update_plan", "todo_write", "write_todos", "task_list"]);
+const BASH_TOOL_NAMES = new Set([
+  "bash", "shell", "powershell", "execute", "exec", "exec_command", "terminal", "run_command", "run_terminal_command",
+]);
+const AGENT_TOOL_NAMES = new Set([
+  "agent", "subagent", "sub_agent", "run_subagent", "get_subagent_result", "steer_subagent", "spawn_agent", "call_agent", "delegate", "agentswarm", "agent_swarm",
+]);
+const PLAN_TOOL_NAMES = new Set([
+  "todolist", "todo_list", "todo", "todos", "write_todos", "update_todos", "todo_write",
+  "plan", "update_plan", "write_plan", "task", "tasks", "tasklist", "task_list", "task_create", "task_update",
+  "creategoal", "create_goal", "updategoal", "update_goal", "goal", "set_goal",
+]);
 
 function textResult(message: ToolResultMessage | undefined): string {
   if (!message) return "";
@@ -47,7 +55,7 @@ function compactText(value: unknown, fallback: string): string {
 }
 
 function toolTitle(block: ToolCallContent, kind: DockKind): string {
-  const input = block.input ?? {};
+  const input = (block.input ?? {}) as Record<string, unknown>;
   if (kind === "bash") {
     return compactText(input.command ?? input.cmd ?? input.script, block.toolName);
   }
@@ -72,23 +80,35 @@ function normalizePlanStatus(value: unknown): DockStatus {
 }
 
 function planItemsFromInput(input: Record<string, unknown>): DockItem[] {
-  const candidates = [input.plan, input.todos, input.tasks, input.items];
+  if (!input || typeof input !== "object") return [];
+  const candidates = [input.todos, input.plan, input.tasks, input.items, input.steps, input.goals];
   const rows = candidates.find(Array.isArray);
-  if (!Array.isArray(rows)) return [];
-  return rows.flatMap((row, index) => {
-    if (typeof row === "string") {
-      return [{ id: `plan-${index}`, title: row, status: "queued" as DockStatus }];
-    }
-    if (!row || typeof row !== "object") return [];
-    const item = row as Record<string, unknown>;
-    const title = compactText(item.step ?? item.content ?? item.title ?? item.task, "Task");
+  if (Array.isArray(rows)) {
+    return rows.flatMap((row, index) => {
+      if (typeof row === "string") {
+        return [{ id: `plan-${index}`, title: row, status: "queued" as DockStatus }];
+      }
+      if (!row || typeof row !== "object") return [];
+      const item = row as Record<string, unknown>;
+      const title = compactText(item.title ?? item.task ?? item.step ?? item.content ?? item.name, `Task ${index + 1}`);
+      return [{
+        id: `plan-${index}-${title}`,
+        title,
+        detail: typeof item.description === "string" ? item.description : typeof item.detail === "string" ? item.detail : undefined,
+        status: normalizePlanStatus(item.status),
+      }];
+    });
+  }
+  if (typeof input.objective === "string" || typeof input.task === "string" || typeof input.content === "string") {
+    const title = compactText(input.objective ?? input.task ?? input.content, "Goal");
     return [{
-      id: `plan-${index}-${title}`,
+      id: `plan-goal-${title}`,
       title,
-      detail: typeof item.description === "string" ? item.description : undefined,
-      status: normalizePlanStatus(item.status),
+      detail: typeof input.completionCriterion === "string" ? input.completionCriterion : undefined,
+      status: normalizePlanStatus(input.status),
     }];
-  });
+  }
+  return [];
 }
 
 function StatusIcon({ status }: { status: DockStatus }) {

@@ -295,6 +295,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelScopeWarnings, setModelScopeWarnings] = useState<string[]>([]);
   const [modelThinkingLevels, setModelThinkingLevels] = useState<Record<string, string[]>>({});
   const [modelThinkingLevelMaps, setModelThinkingLevelMaps] = useState<Record<string, Record<string, string | null>>>({});
+  const [modelThinkingLevelPins, setModelThinkingLevelPins] = useState<Record<string, string>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
   const [toolPreset, setToolPreset] = useState<ToolPreset>("default");
@@ -1263,7 +1264,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setCompactError(event.errorMessage as string);
           setCompactResult(null);
         } else if (!event.aborted) {
-          setCompactResult(readCompactResult(event.result, (event.reason as string | undefined) ?? "auto"));
+          const res = readCompactResult(event.result, (event.reason as string | undefined) ?? "auto");
+          setCompactResult(res);
+          if (res?.estimatedTokensAfter) {
+            setContextUsage((prev) => {
+              const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : 128_000;
+              const tokens = res.estimatedTokensAfter;
+              const percent = Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100)));
+              return {
+                tokens,
+                contextWindow: windowSize,
+                percent,
+              };
+            });
+          }
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
         }
         break;
@@ -1481,6 +1495,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [loadContext]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
+    const modelKey = `${provider}:${modelId}`;
+    const targetLevels = modelThinkingLevels[modelKey];
+    const pinned = modelThinkingLevelPins[`${provider}/${modelId}`];
+    if (pinned) {
+      setThinkingLevel(pinned as ThinkingLevelOption);
+    } else if (targetLevels && thinkingLevel !== "auto" && !targetLevels.includes(thinkingLevel)) {
+      setThinkingLevel("auto");
+    }
+
     if (isNew) {
       const selectedModel = { provider, modelId };
       newSessionModelOverrideRef.current = selectedModel;
@@ -1490,6 +1513,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!sid) return;
       try {
         await sendAgentCommand(sid, { type: "set_model", provider, modelId });
+        if (pinned) {
+          await sendAgentCommand(sid, { type: "set_thinking_level", level: pinned });
+        } else if (targetLevels && thinkingLevel !== "auto" && !targetLevels.includes(thinkingLevel)) {
+          await sendAgentCommand(sid, { type: "set_thinking_level", level: "auto" });
+        }
       } catch (e) {
         console.error("Failed to set model:", e);
       }
@@ -1504,6 +1532,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setModelSwitching(true);
     try {
       await sendAgentCommand(sid, { type: "set_model", provider, modelId });
+      if (pinned) {
+        await sendAgentCommand(sid, { type: "set_thinking_level", level: pinned });
+      } else if (targetLevels && thinkingLevel !== "auto" && !targetLevels.includes(thinkingLevel)) {
+        await sendAgentCommand(sid, { type: "set_thinking_level", level: "auto" });
+      }
       // Pi persists model_change synchronously. Reload the canonical session so
       // the model, thinking level, and active leaf all advance together.
       modelSwitchPendingRef.current = false;
@@ -1523,7 +1556,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       modelSwitchPendingRef.current = false;
       setModelSwitching(false);
     }
-  }, [addNotice, currentModelOverride, isNew, loadSession, setNewSessionModel]);
+  }, [addNotice, currentModelOverride, isNew, loadSession, modelThinkingLevels, modelThinkingLevelPins, setNewSessionModel, thinkingLevel]);
 
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -1533,7 +1566,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setCompactResult(null);
     try {
       const result = await sendAgentCommand<CompactCommandResult>(sid, { type: "compact" });
-      setCompactResult(readCompactResult(result, "manual"));
+      const compactRes = readCompactResult(result, "manual");
+      setCompactResult(compactRes);
+      if (compactRes?.estimatedTokensAfter) {
+        setContextUsage((prev) => {
+          const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : 128_000;
+          const tokens = compactRes.estimatedTokensAfter;
+          const percent = Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100)));
+          return {
+            tokens,
+            contextWindow: windowSize,
+            percent,
+          };
+        });
+      }
       await loadSession(sid, true);
     } catch (e) {
       setCompactError(e instanceof Error ? e.message : String(e));
@@ -1554,6 +1600,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setModelScopeWarnings(d.modelScopeWarnings ?? []);
     setModelThinkingLevels(d.thinkingLevels ?? {});
     setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
+    setModelThinkingLevelPins(d.thinkingLevelPins ?? {});
     const nextModelList = d.modelList ?? [];
     setModelList(nextModelList);
     if (isNew && !sessionIdRef.current) {

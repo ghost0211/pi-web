@@ -476,11 +476,13 @@ export function ContextUsageRing({
   sessionStats,
   model,
   modelList,
+  compactResult,
 }: {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   sessionStats?: SessionStatsInfo | null;
   model?: { provider: string; modelId: string } | null;
   modelList?: { id: string; name: string; provider: string; contextWindow?: number; maxTokens?: number }[];
+  compactResult?: CompactResultInfo | null;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -517,7 +519,10 @@ export function ContextUsageRing({
   let totalTokens = 0;
   let percent = 0;
 
-  if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
+  if (compactResult?.estimatedTokensAfter) {
+    totalTokens = compactResult.estimatedTokensAfter;
+    percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
+  } else if (contextUsage?.percent !== null && contextUsage?.percent !== undefined) {
     percent = Math.min(100, Math.max(0, Math.round(contextUsage.percent)));
     totalTokens = contextUsage.tokens ?? Math.round((percent / 100) * contextWindow);
   } else if (contextUsage?.tokens !== null && contextUsage?.tokens !== undefined && contextUsage.tokens > 0) {
@@ -2386,7 +2391,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 backdropFilter: "blur(10px)",
               } : null),
             }}>
-            <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={model} modelList={modelList} />
+            <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={model} modelList={modelList} compactResult={compactResult} />
             {(modelOptions.length > 0 || model || modelError) && onModelChange && (
               <ModelSelector
                 options={modelOptions}

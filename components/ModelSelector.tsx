@@ -35,15 +35,28 @@ function compareModelOptions(a: ModelSelectorOption, b: ModelSelectorOption): nu
     || MODEL_OPTION_COLLATOR.compare(a.modelId, b.modelId);
 }
 
+/** Searchable text for one option: provider, name, and model id. */
+function optionSearchText(option: ModelSelectorOption): string {
+  return `${option.provider} ${option.name} ${option.modelId}`
+    .toLocaleLowerCase();
+}
+
+/**
+ * Options whose provider, name, or model id contains the query. Whitespace and
+ * `/` in the query split into terms that must all match, so searching
+ * "anthropic claude" or "anthropic/claude" narrows to that provider's models.
+ */
 export function filterModelOptions(options: ModelSelectorOption[], query: string): ModelSelectorOption[] {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   if (!normalizedQuery) return options;
 
-  return options.filter((option) => (
-    `${option.name} ${option.modelId}`
-      .toLocaleLowerCase()
-      .includes(normalizedQuery)
-  ));
+  const terms = normalizedQuery.split(/[\s/]+/).filter(Boolean);
+  if (terms.length === 0) return options;
+
+  return options.filter((option) => {
+    const text = optionSearchText(option);
+    return terms.every((term) => text.includes(term));
+  });
 }
 
 export function ModelSelector({
@@ -79,9 +92,13 @@ export function ModelSelector({
     else modelsByProvider.push({ provider: option.provider, options: [option] });
   }
 
+  const currentOption = value
+    ? sortedOptions.find((option) => option.modelId === value.modelId && option.provider === value.provider)
+    : undefined;
   const currentName = selectedLabel ?? (value
-    ? sortedOptions.find((option) => option.modelId === value.modelId && option.provider === value.provider)?.name ?? value.modelId
+    ? currentOption?.name ?? value.modelId
     : emptyLabel ?? (sortedOptions.length > 0 ? "Select model" : "No models"));
+  const currentProvider = selectedLabel || !value ? null : (currentOption?.provider ?? value.provider);
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
@@ -208,7 +225,12 @@ export function ModelSelector({
             <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
           </svg>
         )}
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{currentName}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {currentProvider?.trim() && (
+            <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>{currentProvider} › </span>
+          )}
+          {currentName}
+        </span>
         {variant === "field" && (
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}>
             <polyline points="6 9 12 15 18 9" />
@@ -300,6 +322,7 @@ export function ModelSelector({
                       <ModelOptionButton
                         key={`${option.provider}:${option.modelId}`}
                         active={option.modelId === value?.modelId && option.provider === value?.provider}
+                        provider={option.provider}
                         label={option.name}
                         onClick={() => choose(option)}
                       />
@@ -316,7 +339,8 @@ export function ModelSelector({
   );
 }
 
-function ModelOptionButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+function ModelOptionButton({ active, provider, label, onClick }: { active: boolean; provider?: string; label: string; onClick: () => void }) {
+  const trimmedProvider = provider?.trim() ?? "";
   return (
     <button
       type="button"
@@ -330,7 +354,12 @@ function ModelOptionButton({ active, label, onClick }: { active: boolean; label:
       {active
         ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
         : <span style={{ width: 10, flexShrink: 0 }} />}
-      <span title={label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      {trimmedProvider && (
+        <span style={{ flexShrink: 0, color: "var(--text-dim)", fontWeight: 400 }} title={trimmedProvider}>
+          {trimmedProvider} ›
+        </span>
+      )}
+      <span title={trimmedProvider ? `${trimmedProvider} › ${label}` : label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
     </button>
   );
 }

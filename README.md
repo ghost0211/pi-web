@@ -1,17 +1,15 @@
 # Pi Web
 
-[中文文档](./README.zh-CN.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
+[中文文档](./README.zh-CN.md)
 
 Modern, full-featured Web UI for the [Pi coding agent](https://github.com/earendil-works/pi), redesigned with a clean, ergonomic workspace experience inspired by Kimi Code Web.
 
 Pi Web shares configuration and session storage directly with the Pi CLI, allowing you to seamlessly manage project workspaces, browse and branch conversations, monitor background tasks, configure providers and models, and edit settings in an intuitive browser interface.
 
-![Pi Web](https://raw.githubusercontent.com/ghost0211/pi-web/main/docs/screenshot2.png)
-
 ## Highlights & Features
 
 - **Kimi Code-Style Workspace Layout**:
-  - **Collapsible Project & Session Tree**: Grouped by project roots and Git worktrees, featuring intuitive folder expand/collapse icons and search filtering.
+  - **Collapsible Project & Session Tree**: Grouped by project roots and Git worktrees, featuring intuitive folder expand/collapse icons, project action options (new session, copy path, remove from list), and search filtering.
   - **Dual Branching**: Fork independent sessions from any historical message or branch in-place within the active session.
   - **Comprehensive Settings Modal**: Left navigation tabs with right-side subtabs for General (Appearance, Automation, Environment), Models, Skills, and Plugins.
   - **Customizable Appearance**: Light / Dark / System themes, adjustable font sizing (Small, Medium, Large, Extra Large), and multilingual support (EN, zh-CN, zh-TW).

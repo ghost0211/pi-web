@@ -539,6 +539,7 @@ export function AppShell() {
         // the null-session welcome mount from the switch would never load
         // the restored session's messages.
         setSelectedSession(s);
+        setNewSessionCwd(null);
         setSessionKey((k) => k + 1);
         if (new URLSearchParams(window.location.search).get("session") !== s.id) {
           router.replace(`?session=${encodeURIComponent(s.id)}`, { scroll: false });
@@ -590,10 +591,7 @@ export function AppShell() {
     setNewSessionDraftId(draftId);
     activeNewSessionDraftKeyRef.current = `new:${draftId}:${cwd}`;
     setSelectedSession(null);
-    setNewSessionCwd((prev) => {
-      if (prev && prev !== cwd) return null;
-      return prev;
-    });
+    setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
     setBranchTree([]);
     setBranchActiveLeafId(null);

@@ -155,6 +155,7 @@ export interface AgentSessionLike {
   readonly extensionRunner: ExtensionRunnerLike;
   readonly promptTemplates: readonly PromptTemplateLike[];
   readonly resourceLoader: ResourceLoaderLike;
+  readonly messages?: readonly unknown[];
 
   readonly bindExtensions?: unknown;
   dispose(): void;

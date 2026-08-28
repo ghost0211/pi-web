@@ -449,7 +449,6 @@ export function buildSessionContext(
   const { tail, excludeLeaf } = options;
   // Restrict SDK conversion and the response payload to the requested page.
   const sliced = tail && tail > 0 ? sliceActiveBranch(entries, leafId ?? null, tail, excludeLeaf) : entries;
-  const hasMore = Boolean(tail && tail > 0 && sliced[0]?.parentId && !sliced.some((e) => e.type === "compaction"));
   const byId = new Map<string, SessionEntry>();
   for (const e of sliced) byId.set(e.id, e);
 
@@ -459,6 +458,10 @@ export function buildSessionContext(
     leafId,
     byId as unknown as Map<string, PiSessionEntry>,
   );
+
+  const hasCompaction = sliced.some((e) => e.type === "compaction") ||
+    contextEntries.some((e) => (e as unknown as SessionEntry).type === "compaction");
+  const hasMore = Boolean(!hasCompaction && tail && tail > 0 && sliced[0]?.parentId);
 
   // Convert the SDK-selected context entries and their IDs together. This keeps
   // fork/navigation targets aligned while preserving pi's compaction ordering.

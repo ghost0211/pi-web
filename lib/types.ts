@@ -60,6 +60,8 @@ export interface AgentUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  reasoning?: number;
+  totalTokens?: number;
   cost: {
     input: number;
     output: number;

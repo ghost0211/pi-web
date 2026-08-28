@@ -19,6 +19,7 @@ import { notifySessionComplete } from "./web-push";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type {
+  AgentMessage,
   ExtensionUiRequest,
   ExtensionUiResponse,
   ExtensionWidgetItem,
@@ -46,6 +47,7 @@ import {
   readSessionToolSelection,
   validateSessionToolSelection,
 } from "./session-tool-selection";
+import { calculateActiveContextTokens } from "./context-tokens";
 
 // ============================================================================
 // Types
@@ -639,25 +641,11 @@ export class AgentSessionWrapper {
 
       case "get_state": {
         const model = this.inner.model;
+        const contextWindow = (this.inner.model as { contextWindow?: number } | undefined)?.contextWindow ?? 128_000;
         let contextUsage = this.inner.getContextUsage();
-        if (!contextUsage || !contextUsage.tokens || contextUsage.tokens === 0) {
-          const sm = this.inner.sessionManager as { getEntries?: () => SessionEntry[] } | undefined;
-          if (typeof sm?.getEntries === "function") {
-            const entries = sm.getEntries();
-            for (let i = entries.length - 1; i >= 0; i--) {
-              const entry = entries[i];
-              if (entry.type === "message" && entry.message.role === "assistant" && entry.message.usage?.input) {
-                const tokens = entry.message.usage.input;
-                const contextWindow = (this.inner.model as { contextWindow?: number } | undefined)?.contextWindow ?? 128_000;
-                contextUsage = {
-                  tokens,
-                  contextWindow,
-                  percent: Math.min(100, Math.max(0, Math.round((tokens / contextWindow) * 100))),
-                };
-                break;
-              }
-            }
-          }
+        if (!contextUsage || contextUsage.tokens === null || contextUsage.tokens === undefined || contextUsage.tokens === 0) {
+          const rawMessages = (this.inner.messages ?? []) as AgentMessage[];
+          contextUsage = calculateActiveContextTokens(rawMessages, contextWindow);
         }
         return {
           sessionId: this.inner.sessionId,

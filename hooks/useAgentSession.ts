@@ -19,6 +19,7 @@ import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-prese
 import { getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
+import { calculateActiveContextTokens } from "@/lib/context-tokens";
 import { userMessageKey } from "@/lib/prompt-recovery";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
@@ -505,22 +506,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
 
       messagesLoaded = true;
-      let activeTokens = 0;
-      for (let i = persistedMessages.length - 1; i >= 0; i--) {
-        const msg = persistedMessages[i];
-        if (msg.role === "assistant" && msg.usage?.input) {
-          activeTokens = msg.usage.input;
-          break;
-        }
-      }
-      if (activeTokens > 0) {
-        const modelId = d.context.model?.modelId;
-        const windowSize = inferModelContextWindow(modelId);
-        setContextUsage({
-          tokens: activeTokens,
-          contextWindow: windowSize,
-          percent: Math.min(100, Math.max(0, Math.round((activeTokens / windowSize) * 100))),
-        });
+      const modelId = d.context.model?.modelId;
+      const windowSize = inferModelContextWindow(modelId);
+      const computedUsage = calculateActiveContextTokens(persistedMessages, windowSize);
+      if (computedUsage.tokens > 0) {
+        setContextUsage(computedUsage);
       }
       if (showLoading) setLoading(false);
       if (!includeState) return null;
@@ -1230,18 +1220,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           });
         } else if (completed) {
           const normalized = normalizeToolCalls(completed);
-          setMessages((prev) => [...prev, normalized]);
-          if (completed.role === "assistant" && completed.usage?.input) {
-            const tokens = completed.usage.input;
+          setMessages((prev) => {
+            const next = [...prev, normalized];
             const windowSize = contextUsage?.contextWindow && contextUsage.contextWindow > 0
               ? contextUsage.contextWindow
               : inferModelContextWindow(displayModel?.modelId);
-            setContextUsage({
-              tokens,
-              contextWindow: windowSize,
-              percent: Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100))),
-            });
-          }
+            const computed = calculateActiveContextTokens(next, windowSize);
+            if (computed.tokens > 0) {
+              setContextUsage(computed);
+            }
+            return next;
+          });
         }
         dispatch({ type: "end" });
         setAgentPhase({ kind: "waiting_model" });

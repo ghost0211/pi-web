@@ -522,12 +522,14 @@ export function ContextUsageRing({
   if (compactResult?.estimatedTokensAfter) {
     totalTokens = compactResult.estimatedTokensAfter;
     percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
-  } else if (contextUsage?.percent !== null && contextUsage?.percent !== undefined && contextUsage.percent > 0) {
-    percent = Math.min(100, Math.max(0, Math.round(contextUsage.percent)));
-    totalTokens = contextUsage.tokens ?? Math.round((percent / 100) * contextWindow);
   } else if (contextUsage?.tokens !== null && contextUsage?.tokens !== undefined && contextUsage.tokens > 0) {
     totalTokens = contextUsage.tokens;
-    percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
+    percent = (contextUsage?.percent !== null && contextUsage?.percent !== undefined)
+      ? Math.min(100, Math.max(0, Math.round(contextUsage.percent)))
+      : Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
+  } else if (contextUsage?.percent !== null && contextUsage?.percent !== undefined && contextUsage.percent > 0) {
+    percent = Math.min(100, Math.max(0, Math.round(contextUsage.percent)));
+    totalTokens = Math.round((percent / 100) * contextWindow);
   }
 
   const size = 19;

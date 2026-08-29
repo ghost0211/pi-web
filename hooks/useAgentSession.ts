@@ -1304,7 +1304,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setCompactResult(res);
           if (res?.estimatedTokensAfter) {
             setContextUsage((prev) => {
-              const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : 128_000;
+              const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : inferModelContextWindow(displayModel?.modelId);
               const tokens = res.estimatedTokensAfter;
               const percent = Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100)));
               return {
@@ -1606,7 +1606,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setCompactResult(compactRes);
       if (compactRes?.estimatedTokensAfter) {
         setContextUsage((prev) => {
-          const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : 128_000;
+          const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : inferModelContextWindow(displayModel?.modelId);
           const tokens = compactRes.estimatedTokensAfter;
           const percent = Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100)));
           return {

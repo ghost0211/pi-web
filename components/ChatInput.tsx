@@ -543,9 +543,6 @@ export function ContextUsageRing({
   else if (percent >= 75) ringColor = "#f59e0b";
   else ringColor = "#10b981";
 
-  const formattedUsed = formatTokensCount(totalTokens);
-  const formattedWindow = formatTokensCount(contextWindow);
-
   const rawContextLine = contextUsage?.contextWindow
     ? `${contextUsage.tokens !== null && contextUsage.tokens !== undefined ? formatTokensCount(contextUsage.tokens) : "?"} / ${formatTokensCount(contextUsage.contextWindow)} (${contextUsage.percent !== null && contextUsage.percent !== undefined ? `${contextUsage.percent.toFixed(1)}%` : "?"})`
     : null;
@@ -629,13 +626,13 @@ export function ContextUsageRing({
             </span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8 }}>
-            <span>{formattedUsed} / {formattedWindow}</span>
-          </div>
-
-          {rawContextLine && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-dim)", fontSize: 10, marginBottom: 8, fontFamily: "var(--font-mono)" }}>
-              <span>live: {rawContextLine}</span>
+          {rawContextLine ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8, fontFamily: "var(--font-mono)" }}>
+              <span>{rawContextLine}</span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8 }}>
+              <span>{formatTokensCount(totalTokens)} / {formatTokensCount(contextWindow)}</span>
             </div>
           )}
 

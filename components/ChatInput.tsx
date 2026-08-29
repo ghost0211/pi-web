@@ -546,6 +546,10 @@ export function ContextUsageRing({
   const formattedUsed = formatTokensCount(totalTokens);
   const formattedWindow = formatTokensCount(contextWindow);
 
+  const rawContextLine = contextUsage?.contextWindow
+    ? `${contextUsage.tokens !== null && contextUsage.tokens !== undefined ? formatTokensCount(contextUsage.tokens) : "?"} / ${formatTokensCount(contextUsage.contextWindow)} (${contextUsage.percent !== null && contextUsage.percent !== undefined ? `${contextUsage.percent.toFixed(1)}%` : "?"})`
+    : null;
+
   return (
     <div
       ref={containerRef}
@@ -628,6 +632,12 @@ export function ContextUsageRing({
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8 }}>
             <span>{formattedUsed} / {formattedWindow}</span>
           </div>
+
+          {rawContextLine && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-dim)", fontSize: 10, marginBottom: 8, fontFamily: "var(--font-mono)" }}>
+              <span>live: {rawContextLine}</span>
+            </div>
+          )}
 
           <div style={{ width: "100%", height: 4, background: "var(--border)", borderRadius: 2, overflow: "hidden", marginBottom: sessionStats ? 8 : 0 }}>
             <div style={{ width: `${percent}%`, height: "100%", background: ringColor, transition: "width 0.2s ease" }} />

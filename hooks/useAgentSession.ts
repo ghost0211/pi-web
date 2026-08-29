@@ -354,6 +354,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const notifiedPromptRunIdRef = useRef(-1);
   const bashRunningRef = useRef(false);
   const bashRecoveryIdRef = useRef(0);
+  // Latest-value refs for handleAgentEvent: its useCallback deps deliberately
+  // omit volatile state, so closures would otherwise read stale contextUsage /
+  // displayModel and compute the ring against a 128k fallback window.
+  const contextUsageRef = useRef<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
+  const displayModelRef = useRef<{ provider: string; modelId: string } | null>(null);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
@@ -414,6 +419,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+  // Keep latest-value refs in sync for stale-closure-safe reads inside handleAgentEvent.
+  displayModelRef.current = displayModel;
+  contextUsageRef.current = contextUsage;
   const composerDraftKey = session?.id ?? newSessionDraftKey ?? undefined;
 
   const resolveComposerDraftKey = useCallback((key: string | undefined) => {
@@ -1222,9 +1230,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const normalized = normalizeToolCalls(completed);
           setMessages((prev) => {
             const next = [...prev, normalized];
-            const windowSize = contextUsage?.contextWindow && contextUsage.contextWindow > 0
-              ? contextUsage.contextWindow
-              : inferModelContextWindow(displayModel?.modelId);
+            const latestUsage = contextUsageRef.current;
+            const windowSize = latestUsage?.contextWindow && latestUsage.contextWindow > 0
+              ? latestUsage.contextWindow
+              : inferModelContextWindow(displayModelRef.current?.modelId);
             const computed = calculateActiveContextTokens(next, windowSize);
             if (computed.tokens > 0) {
               setContextUsage(computed);

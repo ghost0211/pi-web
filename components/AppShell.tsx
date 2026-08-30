@@ -694,6 +694,27 @@ export function AppShell() {
       .catch(() => {});
   }, []);
 
+  const openSubagentSessionTab = useCallback((info: SessionInfo) => {
+    const sessionId = info.id;
+    const tabId = `subagent:${sessionId}`;
+    const subagentDesc = info.relation?.kind === "subagent" ? info.relation.description : null;
+    const nextTab: Tab = {
+      id: tabId,
+      label: info.name || subagentDesc || `Agent · ${sessionId.slice(0, 6)}`,
+      kind: "subagent",
+      subagentSessionId: sessionId,
+      subagentSession: info,
+    };
+    setFileTabs((prev) => {
+      const existingIndex = prev.findIndex((tab) => tab.id === tabId);
+      if (existingIndex === -1) return [...prev, nextTab];
+      return prev.map((tab, index) => index === existingIndex ? { ...tab, ...nextTab } : tab);
+    });
+    setActiveFileTabId(tabId);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   const handleOpenSession = useCallback(async (sessionId: string) => {
     try {
       const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
@@ -701,31 +722,22 @@ export function AppShell() {
       if (!response.ok || !data.info) throw new Error(data.error ?? `HTTP ${response.status}`);
       const info = data.info;
       if (info.relation?.kind === "subagent" || info.parentSessionId) {
-        const tabId = `subagent:${sessionId}`;
-        const subagentDesc = info.relation?.kind === "subagent" ? info.relation.description : null;
-        const label = info.name || subagentDesc || `Agent · ${sessionId.slice(0, 6)}`;
-        setFileTabs((prev) => {
-          if (prev.some((t) => t.id === tabId)) return prev;
-          return [
-            ...prev,
-            {
-              id: tabId,
-              label,
-              kind: "subagent" as const,
-              subagentSessionId: sessionId,
-            },
-          ];
-        });
-        setActiveFileTabId(tabId);
-        setRightPanelOpen(true);
-        if (isMobile) setSidebarOpen(false);
+        openSubagentSessionTab(info);
         return;
       }
       handleSelectSession(info);
     } catch (error) {
       console.error("[pi-web] failed to open session:", error instanceof Error ? error.message : error);
     }
-  }, [handleSelectSession, isMobile]);
+  }, [handleSelectSession, openSubagentSessionTab]);
+
+  const handleAgentSessionSelect = useCallback((session: SessionInfo) => {
+    if (session.relation?.kind === "subagent") {
+      openSubagentSessionTab(session);
+      return;
+    }
+    handleSelectSession(session);
+  }, [handleSelectSession, openSubagentSessionTab]);
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string) => {
@@ -2228,9 +2240,11 @@ export function AppShell() {
                 <AgentSessionPanel
                   rootSession={activeSessionFamily.root}
                   subagents={activeSessionFamily.subagents}
-                  selectedSessionId={selectedSession.id}
+                  selectedSessionId={rightPanelOpen && activeFileTab?.subagentSessionId
+                    ? activeFileTab.subagentSessionId
+                    : selectedSession.id}
                   runningSessionIds={runningSessionIds}
-                  onSelectSession={handleSelectSession}
+                  onSelectSession={handleAgentSessionSelect}
                 />
               )}
               {activeTopPanel === "system" && (
@@ -2485,6 +2499,8 @@ export function AppShell() {
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
               onOpenSession={handleOpenSession}
+              subagentSessions={activeSessionFamily?.subagents ?? []}
+              runningSessionIds={runningSessionIds}
               soundEnabled={soundEnabled}
               onSoundToggle={onSoundToggle}
               playDoneSound={playDoneSound}
@@ -2610,7 +2626,7 @@ export function AppShell() {
             <div style={{ width: "100%", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
               <ChatWindow
                 key={activeFileTab.subagentSessionId}
-                session={{
+                session={activeFileTab.subagentSession ?? {
                   id: activeFileTab.subagentSessionId,
                   path: "",
                   cwd: activeCwd ?? "",

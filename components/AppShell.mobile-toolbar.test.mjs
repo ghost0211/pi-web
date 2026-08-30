@@ -30,13 +30,21 @@ test("only renders the Agents switcher when the active session family has subage
   assert.match(source, /activeTopPanel === "agents" && activeSessionFamily && selectedSession/);
 });
 
-test("keeps the Agents panel open while switching sessions and positions it at the left", () => {
+test("opens subagents in the right panel while keeping the main session in the center", () => {
   assert.match(source, /const AGENT_PANEL_WIDTH = 420/);
   assert.match(
     source,
     /if \(activeTopPanel === "agents"\)[\s\S]*?left: topBarRect\.left[\s\S]*?width: Math\.min\(AGENT_PANEL_WIDTH, topBarRect\.width\)/,
   );
-  assert.match(source, /<AgentSessionPanel[\s\S]*?onSelectSession=\{handleSelectSession\}/);
+  assert.match(
+    source,
+    /const handleAgentSessionSelect = useCallback[\s\S]*?session\.relation\?\.kind === "subagent"[\s\S]*?openSubagentSessionTab\(session\)[\s\S]*?handleSelectSession\(session\)/,
+  );
+  assert.match(source, /<AgentSessionPanel[\s\S]*?onSelectSession=\{handleAgentSessionSelect\}/);
+  assert.match(source, /subagentSession: info/);
+  assert.match(source, /session=\{activeFileTab\.subagentSession \?\?/);
+  assert.match(source, /subagentSessions=\{activeSessionFamily\?\.subagents \?\? \[\]\}/);
+  assert.match(source, /runningSessionIds=\{runningSessionIds\}/);
 });
 
 test("only renders branch toolbar controls for sessions with branches", () => {

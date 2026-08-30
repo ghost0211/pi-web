@@ -48,6 +48,8 @@ interface Props {
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
   onOpenSession?: (sessionId: string) => void;
+  subagentSessions?: readonly SessionInfo[];
+  runningSessionIds?: ReadonlySet<string>;
   /** Completion sound state + controls, owned by AppShell so tasks finishing in
    *  a non-active workspace can still ring. */
   soundEnabled?: boolean;
@@ -191,7 +193,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
+export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
@@ -968,6 +970,8 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
           messages={messages}
           pendingBash={pendingBash}
           agentRunning={agentRunning || streamState.isStreaming}
+          subagentSessions={subagentSessions}
+          runningSessionIds={runningSessionIds}
           onOpenSession={onOpenSession}
         />
         {chatInputElement}

@@ -2,19 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
-import type { AgentMessage, AssistantMessage, BashExecutionMessage, ToolCallContent, ToolResultMessage } from "@/lib/types";
+import {
+  mergeSubagentDockItems,
+  type SubagentDockItem as DockItem,
+  type SubagentDockStatus as DockStatus,
+} from "@/lib/subagent-dock";
+import type { AgentMessage, AssistantMessage, BashExecutionMessage, SessionInfo, ToolCallContent, ToolResultMessage } from "@/lib/types";
 
 type DockKind = "bash" | "agent" | "progress";
-type DockStatus = "running" | "done" | "failed" | "queued";
 type DockFilter = "recent" | "running" | "done" | "all";
-
-interface DockItem {
-  id: string;
-  title: string;
-  detail?: string;
-  status: DockStatus;
-  timestamp?: number;
-}
 
 interface PendingBashLike {
   command: string;
@@ -25,8 +21,13 @@ interface Props {
   messages: AgentMessage[];
   pendingBash?: PendingBashLike | null;
   agentRunning?: boolean;
+  subagentSessions?: readonly SessionInfo[];
+  runningSessionIds?: ReadonlySet<string>;
   onOpenSession?: (sessionId: string) => void;
 }
+
+const EMPTY_SUBAGENT_SESSIONS: readonly SessionInfo[] = [];
+const EMPTY_RUNNING_SESSION_IDS: ReadonlySet<string> = new Set();
 
 function resolveSubagentSessionId(block: ToolCallContent, result?: ToolResultMessage): string | null {
   if (result?.details) {
@@ -172,7 +173,14 @@ function filterItems(items: DockItem[], filter: DockFilter): DockItem[] {
   return [...items].reverse();
 }
 
-export function KimiTaskDock({ messages, pendingBash, agentRunning = false, onOpenSession }: Props) {
+export function KimiTaskDock({
+  messages,
+  pendingBash,
+  agentRunning = false,
+  subagentSessions = EMPTY_SUBAGENT_SESSIONS,
+  runningSessionIds = EMPTY_RUNNING_SESSION_IDS,
+  onOpenSession,
+}: Props) {
   const { t } = useI18n();
   const [active, setActive] = useState<DockKind | null>(null);
   const [filter, setFilter] = useState<DockFilter>("recent");
@@ -238,8 +246,12 @@ export function KimiTaskDock({ messages, pendingBash, agentRunning = false, onOp
       bash.push({ id: "pending-bash", title: pendingBash.command, status: "running" });
     }
 
-    return { bash, agent, progress };
-  }, [agentRunning, messages, pendingBash]);
+    return {
+      bash,
+      agent: mergeSubagentDockItems(agent, subagentSessions, runningSessionIds),
+      progress,
+    };
+  }, [agentRunning, messages, pendingBash, runningSessionIds, subagentSessions]);
 
   useEffect(() => {
     if (!active) return;

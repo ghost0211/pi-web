@@ -4,6 +4,7 @@ import { useState } from "react";
 import { getFileIcon } from "./FileIcons";
 import { useI18n } from "@/hooks/useI18n";
 import type { FileViewerDisplayMode, FileViewerState } from "@/lib/file-viewer-state";
+import type { SessionInfo } from "@/lib/types";
 
 export interface Tab {
   id: string;
@@ -11,6 +12,7 @@ export interface Tab {
   filePath?: string;
   kind?: "file" | "subagent";
   subagentSessionId?: string | null;
+  subagentSession?: SessionInfo;
   sourceSessionId?: string | null;
   initialDisplayMode?: FileViewerDisplayMode;
   viewerState?: FileViewerState;

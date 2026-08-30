@@ -8,7 +8,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { ChatInput, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, shouldCompressImageFile } = await jiti.import("./ChatInput.tsx");
+const { ChatInput, ContextUsageRing, ModelErrorBanner, ModelScopeWarningBanner, canClearBuiltinCommandInput, canRestoreUserMessage, canRunBuiltinSlashCommandWhileStreaming, compressImageFile, filterModelOptions, getUpwardMenuMaxHeight, getUserMessageText, getUserMessageDraftImages, isExactSlashCommand, shouldCompressImageFile } = await jiti.import("./ChatInput.tsx");
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store.ts");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
@@ -139,6 +139,29 @@ test("filters model options by name, id, and provider", () => {
   assert.equal(filterModelOptions(options, "missing").length, 0);
   assert.equal(filterModelOptions(options, "///"), options);
   assert.equal(filterModelOptions(options, "  "), options);
+});
+
+test("context ring prefers the selected model's catalog window over stale usage metadata", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ContextUsageRing, {
+        contextUsage: { tokens: 221_000, contextWindow: 128_000, percent: 100 },
+        model: { provider: "openai-codex", modelId: "gpt-5.6-sol" },
+        modelList: [{
+          provider: "openai-codex",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          contextWindow: 272_000,
+        }],
+      }),
+    ),
+  );
+
+  assert.match(html, /aria-label="Context Usage: 81%"/);
+  assert.match(html, /aria-valuenow="81"/);
+  assert.doesNotMatch(html, /Context Usage: 100%/);
 });
 
 test("renders the shared field model selector as a disabled gray control", () => {

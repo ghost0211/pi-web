@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useMemo, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
+import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
 import type { SkillsResponse } from "@/lib/api-types";
 import type { TextContent, UserMessage } from "@/lib/types";
@@ -27,6 +27,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
 import type { ToolPreset } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import { calculateContextUsageDisplay, resolveModelContextWindow } from "@/lib/context-window";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 
 export { filterModelOptions } from "./ModelSelector";
@@ -49,7 +50,7 @@ interface Props {
   model?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
-  modelList?: { id: string; name: string; provider: string }[];
+  modelList?: { id: string; name: string; provider: string; contextWindow?: number; maxTokens?: number }[];
   modelError?: string | null;
   /** Diagnostics from resolving `enabledModels`, e.g. a pattern that matched nothing. */
   modelScopeWarnings?: string[];
@@ -453,24 +454,6 @@ function formatTokensCount(n: number | null | undefined): string {
   return String(Math.round(n));
 }
 
-function inferModelContextWindow(modelId?: string): number {
-  if (!modelId) return 128_000;
-  const lower = modelId.toLowerCase();
-  if (lower.includes("gemini") || lower.includes("luna") || lower.includes("1m") || lower.includes("glm-5") || lower.includes("deepseek-v4-flash")) {
-    return 1_048_576;
-  }
-  if (lower.includes("claude") || lower.includes("sonnet") || lower.includes("opus") || lower.includes("haiku") || lower.includes("200k")) {
-    return 200_000;
-  }
-  if (lower.includes("step") || lower.includes("256k") || lower.includes("mai-code")) {
-    return 256_000;
-  }
-  if (lower.includes("deepseek") || lower.includes("64k")) {
-    return 64_000;
-  }
-  return 128_000;
-}
-
 export function ContextUsageRing({
   contextUsage,
   sessionStats,
@@ -499,38 +482,20 @@ export function ContextUsageRing({
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [open]);
 
-  const selectedModelEntry = useMemo(() => {
-    if (!model || !modelList || modelList.length === 0) return null;
-    return (
-      modelList.find((m) => m.id === model.modelId && m.provider === model.provider) ||
-      modelList.find((m) => m.id === model.modelId) ||
-      null
-    );
-  }, [model, modelList]);
-
-  const modelContextWindow = selectedModelEntry?.contextWindow;
-  const contextWindow = (modelContextWindow && modelContextWindow > 0)
-    ? modelContextWindow
-    : (contextUsage?.contextWindow && contextUsage.contextWindow > 0)
-      ? contextUsage.contextWindow
-      : inferModelContextWindow(model?.modelId);
-
-  // 计算当前活跃的上下文 Token 大小
-  let totalTokens = 0;
-  let percent = 0;
-
-  if (compactResult?.estimatedTokensAfter) {
-    totalTokens = compactResult.estimatedTokensAfter;
-    percent = Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
-  } else if (contextUsage?.tokens !== null && contextUsage?.tokens !== undefined && contextUsage.tokens > 0) {
-    totalTokens = contextUsage.tokens;
-    percent = (contextUsage?.percent !== null && contextUsage?.percent !== undefined)
-      ? Math.min(100, Math.max(0, Math.round(contextUsage.percent)))
-      : Math.min(100, Math.max(0, Math.round((totalTokens / contextWindow) * 100)));
-  } else if (contextUsage?.percent !== null && contextUsage?.percent !== undefined && contextUsage.percent > 0) {
-    percent = Math.min(100, Math.max(0, Math.round(contextUsage.percent)));
-    totalTokens = Math.round((percent / 100) * contextWindow);
-  }
+  const resolvedContextWindow = resolveModelContextWindow(
+    model,
+    modelList,
+    contextUsage?.contextWindow,
+  );
+  const {
+    tokens: totalTokens,
+    contextWindow,
+    percent,
+  } = calculateContextUsageDisplay({
+    contextWindow: resolvedContextWindow,
+    contextUsage,
+    compactTokens: compactResult?.estimatedTokensAfter,
+  });
 
   const size = 19;
   const strokeWidth = 2.0;
@@ -543,9 +508,7 @@ export function ContextUsageRing({
   else if (percent >= 75) ringColor = "#f59e0b";
   else ringColor = "#10b981";
 
-  const rawContextLine = contextUsage?.contextWindow
-    ? `${contextUsage.tokens !== null && contextUsage.tokens !== undefined ? formatTokensCount(contextUsage.tokens) : "?"} / ${formatTokensCount(contextUsage.contextWindow)} (${contextUsage.percent !== null && contextUsage.percent !== undefined ? `${contextUsage.percent.toFixed(1)}%` : "?"})`
-    : null;
+  const contextLine = `${formatTokensCount(totalTokens)} / ${formatTokensCount(contextWindow)} (${percent.toFixed(1)}%)`;
 
   return (
     <div
@@ -626,15 +589,9 @@ export function ContextUsageRing({
             </span>
           </div>
 
-          {rawContextLine ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8, fontFamily: "var(--font-mono)" }}>
-              <span>{rawContextLine}</span>
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8 }}>
-              <span>{formatTokensCount(totalTokens)} / {formatTokensCount(contextWindow)}</span>
-            </div>
-          )}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-muted)", fontSize: 11, marginBottom: 8, fontFamily: "var(--font-mono)" }}>
+            <span>{contextLine}</span>
+          </div>
 
           <div style={{ width: "100%", height: 4, background: "var(--border)", borderRadius: 2, overflow: "hidden", marginBottom: sessionStats ? 8 : 0 }}>
             <div style={{ width: `${percent}%`, height: "100%", background: ringColor, transition: "width 0.2s ease" }} />

@@ -460,6 +460,22 @@ test("keeps a newly sent user message at the top while its response starts", () 
   assert.match(chatWindowSource, /const isInitialMeasurement = !promptAnchorAdjustmentDoneRef\.current;[\s\S]*?promptAnchorAdjustmentDoneRef\.current = true;[\s\S]*?if \(needsInitialAdjustment\) scrollUserMsgToTop\(\)/);
 });
 
+test("session reload context estimates use authoritative model metadata", () => {
+  const loadSessionSource = source.slice(
+    source.indexOf("  const loadSession = useCallback"),
+    source.indexOf("  const loadContext = useCallback"),
+  );
+  const messageEndSource = source.slice(
+    source.indexOf('      case "message_end"'),
+    source.indexOf('      case "tool_execution_start"'),
+  );
+
+  assert.match(source, /type ModelEntry = \{[^}]*contextWindow\?: number/);
+  assert.match(loadSessionSource, /resolveModelContextWindow\(\s*d\.context\.model,\s*modelListRef\.current/);
+  assert.match(messageEndSource, /resolveModelContextWindow\(\s*displayModelRef\.current,\s*modelListRef\.current/);
+  assert.doesNotMatch(loadSessionSource, /inferModelContextWindow/);
+});
+
 test("keeps prompt anchor measurement outside the React update cycle", () => {
   const anchorEffectStart = chatWindowSource.indexOf(
     "useLayoutEffect(() => {\n    const spacer = promptAnchorSpacerRef.current;",

@@ -20,6 +20,7 @@ import { getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type Too
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { calculateActiveContextTokens } from "@/lib/context-tokens";
+import { resolveModelContextWindow } from "@/lib/context-window";
 import { userMessageKey } from "@/lib/prompt-recovery";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
@@ -61,24 +62,6 @@ interface AgentEvent {
 interface CompactCommandResult {
   tokensBefore?: number;
   estimatedTokensAfter?: number;
-}
-
-function inferModelContextWindow(modelId?: string): number {
-  if (!modelId) return 128_000;
-  const lower = modelId.toLowerCase();
-  if (lower.includes("gemini") || lower.includes("luna") || lower.includes("1m") || lower.includes("glm-5") || lower.includes("deepseek-v4-flash")) {
-    return 1_048_576;
-  }
-  if (lower.includes("claude") || lower.includes("sonnet") || lower.includes("opus") || lower.includes("haiku") || lower.includes("200k")) {
-    return 200_000;
-  }
-  if (lower.includes("step") || lower.includes("256k") || lower.includes("mai-code")) {
-    return 256_000;
-  }
-  if (lower.includes("deepseek") || lower.includes("64k")) {
-    return 64_000;
-  }
-  return 128_000;
 }
 
 interface LastAssistantTextResponse {
@@ -272,7 +255,7 @@ export interface AttachedImage {
 }
 
 type SelectedModel = { provider: string; modelId: string };
-type ModelEntry = { id: string; name: string; provider: string };
+type ModelEntry = { id: string; name: string; provider: string; contextWindow?: number; maxTokens?: number };
 type ModelsResponse = {
   models: Record<string, string>;
   modelList?: ModelEntry[];
@@ -359,6 +342,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // displayModel and compute the ring against a 128k fallback window.
   const contextUsageRef = useRef<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const displayModelRef = useRef<{ provider: string; modelId: string } | null>(null);
+  const modelListRef = useRef<ModelEntry[]>([]);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
@@ -422,6 +406,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // Keep latest-value refs in sync for stale-closure-safe reads inside handleAgentEvent.
   displayModelRef.current = displayModel;
   contextUsageRef.current = contextUsage;
+  modelListRef.current = modelList;
+
+  // Keep every producer (session-file estimates, SDK state, compaction events)
+  // on the authoritative model-catalog denominator once that metadata is loaded.
+  useEffect(() => {
+    setContextUsage((prev) => {
+      if (!prev || prev.tokens === null || prev.tokens === undefined) return prev;
+      const contextWindow = resolveModelContextWindow(displayModel, modelList, prev.contextWindow);
+      if (contextWindow === prev.contextWindow) return prev;
+      return {
+        tokens: prev.tokens,
+        contextWindow,
+        percent: Math.min(100, Math.max(0, (prev.tokens / contextWindow) * 100)),
+      };
+    });
+  }, [displayModel, modelList, contextUsage?.contextWindow]);
+
   const composerDraftKey = session?.id ?? newSessionDraftKey ?? undefined;
 
   const resolveComposerDraftKey = useCallback((key: string | undefined) => {
@@ -514,8 +515,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
 
       messagesLoaded = true;
-      const modelId = d.context.model?.modelId;
-      const windowSize = inferModelContextWindow(modelId);
+      const windowSize = resolveModelContextWindow(
+        d.context.model,
+        modelListRef.current,
+        contextUsageRef.current?.contextWindow,
+      );
       const computedUsage = calculateActiveContextTokens(persistedMessages, windowSize);
       if (computedUsage.tokens > 0) {
         setContextUsage(computedUsage);
@@ -1231,9 +1235,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setMessages((prev) => {
             const next = [...prev, normalized];
             const latestUsage = contextUsageRef.current;
-            const windowSize = latestUsage?.contextWindow && latestUsage.contextWindow > 0
-              ? latestUsage.contextWindow
-              : inferModelContextWindow(displayModelRef.current?.modelId);
+            const windowSize = resolveModelContextWindow(
+              displayModelRef.current,
+              modelListRef.current,
+              latestUsage?.contextWindow,
+            );
             const computed = calculateActiveContextTokens(next, windowSize);
             if (computed.tokens > 0) {
               setContextUsage(computed);
@@ -1313,7 +1319,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setCompactResult(res);
           if (res?.estimatedTokensAfter) {
             setContextUsage((prev) => {
-              const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : inferModelContextWindow(displayModel?.modelId);
+              const windowSize = resolveModelContextWindow(
+                displayModelRef.current,
+                modelListRef.current,
+                prev?.contextWindow,
+              );
               const tokens = res.estimatedTokensAfter;
               const percent = Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100)));
               return {
@@ -1615,7 +1625,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setCompactResult(compactRes);
       if (compactRes?.estimatedTokensAfter) {
         setContextUsage((prev) => {
-          const windowSize = prev?.contextWindow && prev.contextWindow > 0 ? prev.contextWindow : inferModelContextWindow(displayModel?.modelId);
+          const windowSize = resolveModelContextWindow(
+            displayModelRef.current,
+            modelListRef.current,
+            prev?.contextWindow,
+          );
           const tokens = compactRes.estimatedTokensAfter;
           const percent = Math.min(100, Math.max(0, Math.round((tokens / windowSize) * 100)));
           return {
@@ -1647,6 +1661,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setModelThinkingLevelMaps(d.thinkingLevelMaps ?? {});
     setModelThinkingLevelPins(d.thinkingLevelPins ?? {});
     const nextModelList = d.modelList ?? [];
+    modelListRef.current = nextModelList;
     setModelList(nextModelList);
     if (isNew && !sessionIdRef.current) {
       const match = d.defaultModel

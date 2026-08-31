@@ -327,7 +327,9 @@ test("keeps a failed first submission recoverable across a composer remount", ()
     "failed submission",
     [image],
     undefined,
+    undefined,
     "",
+    [],
     [],
     [],
   );
@@ -336,20 +338,22 @@ test("keeps a failed first submission recoverable across a composer remount", ()
     value: "failed submission",
     images: [image],
     textFiles: [],
+    binaryFiles: [],
   });
   assert.deepEqual(
-    mergeRestoredSubmissionDraft("failed submission", [image], undefined, "new draft", [], []),
+    mergeRestoredSubmissionDraft("failed submission", [image], undefined, undefined, "new draft", [], [], []),
     {
       value: "failed submission\n\nnew draft",
       images: [image],
       textFiles: [],
+      binaryFiles: [],
     },
   );
 });
 
 test("preserves duplicate image attachments when restoring a submission", () => {
   const image = { data: "AQID", mimeType: "image/png" };
-  const restored = mergeRestoredSubmissionDraft("", [image, image], undefined, "", [image], []);
+  const restored = mergeRestoredSubmissionDraft("", [image, image], undefined, undefined, "", [image], [], []);
 
   assert.deepEqual(restored.images, [image, image, image]);
 });
@@ -359,18 +363,20 @@ test("moves a provisional new-session draft to the real session key", () => {
   const sessionKey = "session-rekey-test";
   clearDraft(provisionalKey);
   clearDraft(sessionKey);
-  setDraft(provisionalKey, { value: "queued while preflight ran", images: [], textFiles: [] });
+  setDraft(provisionalKey, { value: "queued while preflight ran", images: [], textFiles: [], binaryFiles: [] });
 
   assert.deepEqual(rekeyDraft(provisionalKey, sessionKey), {
     value: "queued while preflight ran",
     images: [],
     textFiles: [],
+    binaryFiles: [],
   });
   assert.equal(getDraft(provisionalKey), null);
   assert.deepEqual(getDraft(sessionKey), {
     value: "queued while preflight ran",
     images: [],
     textFiles: [],
+    binaryFiles: [],
   });
 
   clearDraft(sessionKey);
@@ -381,17 +387,18 @@ test("rekey keeps a synchronously restored draft when React state is still empty
   const sessionKey = "session-rekey-race";
   clearDraft(provisionalKey);
   clearDraft(sessionKey);
-  setDraft(provisionalKey, { value: "restored before state flush", images: [], textFiles: [] });
+  setDraft(provisionalKey, { value: "restored before state flush", images: [], textFiles: [], binaryFiles: [] });
 
   assert.deepEqual(
-    rekeyDraft(provisionalKey, sessionKey, { value: "", images: [], textFiles: [] }),
-    { value: "restored before state flush", images: [], textFiles: [] },
+    rekeyDraft(provisionalKey, sessionKey, { value: "", images: [], textFiles: [], binaryFiles: [] }),
+    { value: "restored before state flush", images: [], textFiles: [], binaryFiles: [] },
   );
   assert.equal(getDraft(provisionalKey), null);
   assert.deepEqual(getDraft(sessionKey), {
     value: "restored before state flush",
     images: [],
     textFiles: [],
+    binaryFiles: [],
   });
 
   clearDraft(sessionKey);

@@ -8,13 +8,29 @@
  */
 
 export const MAX_ATTACHED_TEXT_FILE_BYTES = 200 * 1024; // 200 KB
+/** Binary attachments travel as base64 in a labeled block; cap keeps messages sane. */
+export const MAX_ATTACHED_BINARY_FILE_BYTES = 2 * 1024 * 1024; // 2 MB
+/** Never inline a binary file larger than this by bytes (encoded ×1.37). */
+export const MAX_ATTACHED_BINARY_BASE64_CHARS = Math.ceil(MAX_ATTACHED_BINARY_FILE_BYTES * 4 / 3) + 16;
 export const MAX_ATTACHED_TEXT_FILES = 5;
+export const MAX_ATTACHED_BINARY_FILES = 3;
 
 export interface AttachedTextFile {
   /** Original file name, e.g. "schema.sql". */
   name: string;
   /** Detected or declared text content. */
   content: string;
+  /** MIME type from the file, if any (may be empty). */
+  mimeType?: string;
+  /** Size in bytes of the original file. */
+  size: number;
+}
+
+export interface AttachedBinaryFile {
+  /** Original file name, e.g. "report.pdf". */
+  name: string;
+  /** Base64-encoded content (no data: prefix). */
+  data: string;
   /** MIME type from the file, if any (may be empty). */
   mimeType?: string;
   /** Size in bytes of the original file. */
@@ -73,4 +89,21 @@ export function buildMessageWithTextAttachments(message: string, files: Attached
   const inlined = files.map(inlineTextFileAttachment).join("\n\n");
   if (!message.trim()) return inlined;
   return `${message.trim()}\n\n${inlined}`;
+}
+
+/**
+ * Build the labeled base64 block that the attachment extension decodes and
+ * writes to `<cwd>/.pi-web-attachments/` so the agent can read/parse it.
+ */
+export function encodeBinaryFileAttachment(file: AttachedBinaryFile): string {
+  const safeName = file.name.replace(/[\n\r]/g, " ");
+  const size = file.size > 0 ? ` size="${file.size}"` : "";
+  return `[pi-web binary attachment: name="${safeName}"${size} encoding="base64"]\n${file.data}\n[/pi-web binary attachment]`;
+}
+
+/** Build the message that appends binary attachment blocks after user text. */
+export function buildMessageWithBinaryAttachments(message: string, files: AttachedBinaryFile[]): string {
+  const blocks = files.map(encodeBinaryFileAttachment).join("\n\n");
+  if (!message.trim()) return blocks;
+  return `${message.trim()}\n\n${blocks}`;
 }

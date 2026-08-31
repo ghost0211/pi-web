@@ -6,6 +6,7 @@ import { listSessionFamilies } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
+import { readHiddenProjects, addHiddenProject } from "@/lib/hidden-projects";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
@@ -806,15 +807,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [openProjectMenuKey, setOpenProjectMenuKey] = useState<string | null>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set();
-    try {
-      const stored = localStorage.getItem("pi-web:hidden-projects");
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return new Set(parsed);
-      }
-    } catch {}
-    return new Set();
+    // Normalized over the legacy bare-array format; only keys matter here.
+    return new Set(readHiddenProjects().map((entry) => entry.key));
   });
 
   useEffect(() => {
@@ -828,14 +822,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [openProjectMenuKey]);
 
-  const handleRemoveProject = useCallback((projectKey: string) => {
-    setHiddenProjects((prev) => {
-      const next = new Set(prev).add(projectKey);
-      try {
-        localStorage.setItem("pi-web:hidden-projects", JSON.stringify(Array.from(next)));
-      } catch {}
-      return next;
-    });
+  const handleRemoveProject = useCallback((projectKey: string, root?: string) => {
+    addHiddenProject({ key: projectKey, ...(root ? { root } : {}) });
+    setHiddenProjects((prev) => new Set(prev).add(projectKey));
     setOpenProjectMenuKey(null);
   }, []);
 
@@ -1620,7 +1609,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     <button
                       type="button"
                       onClick={() => {
-                        handleRemoveProject(project.key);
+                        handleRemoveProject(project.key, project.root);
                       }}
                       style={{
                         display: "flex",

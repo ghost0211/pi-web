@@ -21,9 +21,13 @@ import {
 import {
   MAX_ATTACHED_TEXT_FILE_BYTES,
   MAX_ATTACHED_TEXT_FILES,
+  MAX_ATTACHED_BINARY_FILE_BYTES,
+  MAX_ATTACHED_BINARY_FILES,
   buildMessageWithTextAttachments,
+  buildMessageWithBinaryAttachments,
   isLikelyTextFile,
   type AttachedTextFile,
+  type AttachedBinaryFile,
 } from "@/lib/file-attachments";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
@@ -318,6 +322,31 @@ async function readTextFileAttachments(files: File[]): Promise<AttachedTextFile[
       results.push({ name: file.name, content, mimeType: file.type || undefined, size: file.size });
     } catch {
       // Unreadable (binary decoding failure etc.); skip.
+    }
+  }
+  return results;
+}
+
+/** Read non-image, non-text files as base64 binary attachments. */
+async function readBinaryFileAttachments(files: File[]): Promise<AttachedBinaryFile[]> {
+  const results: AttachedBinaryFile[] = [];
+  for (const file of files) {
+    if (file.size > MAX_ATTACHED_BINARY_FILE_BYTES) continue;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+      }
+      results.push({
+        name: file.name,
+        data: btoa(binary),
+        mimeType: file.type || undefined,
+        size: file.size,
+      });
+    } catch {
+      // Unreadable; skip.
     }
   }
   return results;
@@ -680,8 +709,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     draftKey ? getDraft(draftKey)?.textFiles ?? [] : []
   ));
   const attachedTextFilesRef = useRef<AttachedTextFile[]>(attachedTextFiles);
+  const [attachedBinaryFiles, setAttachedBinaryFiles] = useState<AttachedBinaryFile[]>(() => (
+    draftKey ? getDraft(draftKey)?.binaryFiles ?? [] : []
+  ));
+  const attachedBinaryFilesRef = useRef<AttachedBinaryFile[]>(attachedBinaryFiles);
   const trimmedValue = value.trimStart();
-  const bashMode = attachedImages.length === 0 && trimmedValue.startsWith("!");
+  const bashMode = attachedImages.length === 0 && attachedTextFiles.length === 0 && attachedBinaryFiles.length === 0 && trimmedValue.startsWith("!");
   const bashExcluded = bashMode && trimmedValue.startsWith("!!");
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
@@ -791,8 +824,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         value: valueRef.current,
         images: attachedImagesRef.current.map(imageToDraftImage),
         textFiles: attachedTextFilesRef.current,
+        binaryFiles: attachedBinaryFilesRef.current,
       };
-      const moved = rekeyStoredDraft(previousKey, nextKey, currentDraft) ?? { value: "", images: [], textFiles: [] };
+      const moved = rekeyStoredDraft(previousKey, nextKey, currentDraft) ?? { value: "", images: [], textFiles: [], binaryFiles: [] };
       const unchanged = moved.value === currentDraft.value
         && moved.images.length === currentDraft.images.length
         && moved.images.every((image, index) => (
@@ -803,6 +837,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         && moved.textFiles.every((file, index) => (
           file.name === currentDraft.textFiles[index]?.name
           && file.size === currentDraft.textFiles[index]?.size
+        ))
+        && moved.binaryFiles.length === currentDraft.binaryFiles.length
+        && moved.binaryFiles.every((file, index) => (
+          file.name === currentDraft.binaryFiles[index]?.name
+          && file.size === currentDraft.binaryFiles[index]?.size
         ));
       draftKeyRef.current = nextKey;
       if (unchanged) return;
@@ -811,8 +850,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       valueRef.current = moved.value;
       attachedImagesRef.current = movedImages;
       attachedTextFilesRef.current = moved.textFiles;
+      attachedBinaryFilesRef.current = moved.binaryFiles;
       setValue(moved.value);
       setAttachedTextFiles(moved.textFiles);
+      setAttachedBinaryFiles(moved.binaryFiles);
       setAttachedImages((current) => {
         current.forEach(revokeImagePreview);
         return movedImages;
@@ -836,6 +877,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         text,
         images,
         undefined,
+        undefined,
         targetsCurrentComposer ? valueRef.current : (storedDraft?.value ?? ""),
         targetsCurrentComposer
           ? attachedImagesRef.current.map(imageToDraftImage)
@@ -843,6 +885,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         targetsCurrentComposer
           ? attachedTextFilesRef.current
           : (storedDraft?.textFiles ?? []),
+        targetsCurrentComposer
+          ? attachedBinaryFilesRef.current
+          : (storedDraft?.binaryFiles ?? []),
       );
       // The first optimistic message switches ChatWindow out of its empty-state
       // layout and remounts this component. Persist synchronously so recovery is
@@ -931,6 +976,20 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
+  const appendBinaryFiles = useCallback((files: AttachedBinaryFile[]) => {
+    const remaining = Math.max(
+      0,
+      MAX_ATTACHED_BINARY_FILES - attachedBinaryFilesRef.current.length,
+    );
+    const accepted = files.slice(0, remaining);
+    if (!accepted.length) return;
+    setAttachedBinaryFiles((prev) => {
+      const next = [...prev, ...accepted];
+      attachedBinaryFilesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const processImageFiles = useCallback(async (files: File[]) => {
     const remaining = Math.max(
       0,
@@ -978,21 +1037,33 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
+  const removeBinaryFile = useCallback((index: number) => {
+    setAttachedBinaryFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      attachedBinaryFilesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const processFiles = useCallback((files: File[]) => {
     const imageFiles: File[] = [];
     const textFiles: File[] = [];
+    const binaryFiles: File[] = [];
     for (const file of files) {
       if (file.type.startsWith("image/")) {
         imageFiles.push(file);
-      } else {
+      } else if (isLikelyTextFile(file.name, file.type)) {
         textFiles.push(file);
+      } else {
+        binaryFiles.push(file);
       }
     }
     if (imageFiles.length) void processImageFiles(imageFiles);
-    // Non-image files are read as text and attached; binary/oversized files
-    // are skipped by readTextFileAttachments.
+    // Text files inline as code blocks; the rest travel as base64 blocks that
+    // the binary-attachment extension writes to the workspace.
     if (textFiles.length) void readTextFileAttachments(textFiles).then(appendTextFiles);
-  }, [appendTextFiles, processImageFiles]);
+    if (binaryFiles.length) void readBinaryFileAttachments(binaryFiles).then(appendBinaryFiles);
+  }, [appendBinaryFiles, appendTextFiles, processImageFiles]);
 
   const clearImages = useCallback(() => {
     attachedImagesRef.current = [];
@@ -1012,6 +1083,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     clearImages();
     attachedTextFilesRef.current = [];
     setAttachedTextFiles([]);
+    attachedBinaryFilesRef.current = [];
+    setAttachedBinaryFiles([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -1023,8 +1096,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       value,
       images: attachedImages.map(imageToDraftImage),
       textFiles: attachedTextFiles,
+      binaryFiles: attachedBinaryFiles,
     });
-  }, [attachedImages, attachedTextFiles, draftKey, value]);
+  }, [attachedImages, attachedTextFiles, attachedBinaryFiles, draftKey, value]);
 
   useEffect(() => {
     const previousDraftKey = draftKeyRef.current;
@@ -1035,6 +1109,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         value: valueRef.current,
         images: attachedImagesRef.current.map(imageToDraftImage),
         textFiles: attachedTextFilesRef.current,
+        binaryFiles: attachedBinaryFilesRef.current,
       });
     }
 
@@ -1043,11 +1118,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const nextValue = draft?.value ?? "";
     const nextImages = draftImagesToAttachedImages(draft?.images);
     const nextTextFiles = draft?.textFiles ?? [];
+    const nextBinaryFiles = draft?.binaryFiles ?? [];
     valueRef.current = nextValue;
     attachedImagesRef.current = nextImages;
     attachedTextFilesRef.current = nextTextFiles;
+    attachedBinaryFilesRef.current = nextBinaryFiles;
     setValue(nextValue);
     setAttachedTextFiles(nextTextFiles);
+    setAttachedBinaryFiles(nextBinaryFiles);
     setAtQuery(null);
     setHistoryMenuOpen(false);
     setAttachedImages((prev) => {
@@ -1070,7 +1148,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {
-    if (attachedImages.length || !msg.startsWith("/") || !onBuiltinCommand) return false;
+    if (attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || !msg.startsWith("/") || !onBuiltinCommand) return false;
     const result = await onBuiltinCommand(msg);
     if (!result.handled) return false;
     if (!result.error && canClearBuiltinCommandInput(valueRef.current, attachedImagesRef.current.length, msg)) clearInput();
@@ -1079,19 +1157,23 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();
-    if (!msg && !attachedImages.length && !attachedTextFiles.length) return;
+    if (!msg && !attachedImages.length && !attachedTextFiles.length && !attachedBinaryFiles.length) return;
     onAudioUnlock?.();
     const builtinAllowed = !isStreaming || canRunBuiltinSlashCommandWhileStreaming(msg);
     if (builtinAllowed && await runBuiltinCommand(msg)) return;
     if (isStreaming) return;
     clearInput();
-    // Text files are inlined into the message text (pi has no file-attachment
-    // channel); images travel in the separate images array.
-    const finalMessage = attachedTextFiles.length
+    // Text files inline as code blocks; binary files travel as base64 blocks
+    // that the attachment extension writes to the workspace; images travel in
+    // the separate images array.
+    const withText = attachedTextFiles.length
       ? buildMessageWithTextAttachments(msg, attachedTextFiles)
       : msg;
+    const finalMessage = attachedBinaryFiles.length
+      ? buildMessageWithBinaryAttachments(withText, attachedBinaryFiles)
+      : withText;
     onSend(finalMessage, attachedImages.length ? attachedImages : undefined);
-  }, [value, attachedImages, attachedTextFiles, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, attachedTextFiles, attachedBinaryFiles, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1126,7 +1208,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? t(slashQuery ? "chat.match" : "chat.command")
     : t(slashQuery ? "chat.matches" : "chat.commands", { count: filteredSlashCommands.length });
   const hasInputText = Boolean(value.trim());
-  const canQueueStreamingMessage = hasInputText || attachedImages.length > 0;
+  const canQueueStreamingMessage = hasInputText || attachedImages.length > 0 || attachedTextFiles.length > 0 || attachedBinaryFiles.length > 0;
 
   // ── @ file autocomplete ──────────────────────────────────────────────────
   // Recomputed from the text before the caret on every change/caret move.
@@ -1312,10 +1394,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     let msg = value.trim();
-    if (!msg && !attachedImages.length && !attachedTextFiles.length) return;
+    if (!msg && !attachedImages.length && !attachedTextFiles.length && !attachedBinaryFiles.length) return;
     onAudioUnlock?.();
     if (attachedTextFiles.length) {
       msg = buildMessageWithTextAttachments(msg, attachedTextFiles);
+    }
+    if (attachedBinaryFiles.length) {
+      msg = buildMessageWithBinaryAttachments(msg, attachedBinaryFiles);
     }
     if (!attachedImages.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
       void runBuiltinCommand(msg);
@@ -1333,7 +1418,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     } else if (mode === "followup" && onFollowUp) {
       onFollowUp(msg, attachedImages.length ? attachedImages : undefined);
     }
-  }, [value, attachedImages, attachedTextFiles, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand]);
+  }, [value, attachedImages, attachedTextFiles, attachedBinaryFiles, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;
@@ -1824,6 +1909,36 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             }}
           >
             {compactError}
+          </div>
+        )}
+        {/* Binary file attachments (base64 blocks, decoded by the extension) */}
+        {attachedBinaryFiles.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
+            {attachedBinaryFiles.map((file, i) => (
+              <div key={`${file.name}-${i}`} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 6, fontSize: 11, color: "var(--text-muted)", minWidth: 0 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, color: "var(--text-dim)" }}>
+                  <path d="M21 8v13H3V8" />
+                  <path d="M1 3h22v5H1z" />
+                  <path d="M10 12h4" />
+                </svg>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={file.name}>{file.name}</span>
+                <span style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10 }}>{Math.max(1, Math.round(file.size / 1024))}KB</span>
+                <button
+                  onClick={() => removeBinaryFile(i)}
+                  aria-label={t("i18n.remove")}
+                  style={{
+                    flexShrink: 0, width: 16, height: 16, borderRadius: "50%",
+                    background: "var(--bg)", border: "1px solid var(--border)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", padding: 0, color: "var(--text-muted)",
+                  }}
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
+                  </svg>
+                </button>
+              </div>
+            ))}
           </div>
         )}
         {/* Text file attachments (inlined into the message on send) */}
@@ -2754,11 +2869,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     padding: 0,
                     borderRadius: "50%",
                     border: "none",
-                    background: (value.trim() || attachedImages.length) ? "var(--accent)" : "color-mix(in srgb, var(--border) 75%, transparent)",
-                    color: (value.trim() || attachedImages.length) ? "#fff" : "var(--text-dim)",
-                    cursor: (value.trim() || attachedImages.length) ? "pointer" : "not-allowed",
+                    background: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "var(--accent)" : "color-mix(in srgb, var(--border) 75%, transparent)",
+                    color: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "#fff" : "var(--text-dim)",
+                    cursor: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "pointer" : "not-allowed",
                     flexShrink: 0,
-                    boxShadow: (value.trim() || attachedImages.length) ? "0 2px 8px rgba(37,99,235,0.28)" : "none",
+                    boxShadow: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "0 2px 8px rgba(37,99,235,0.28)" : "none",
                     transition: "all 0.15s ease",
                   }}
                 >

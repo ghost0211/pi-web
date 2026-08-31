@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { resolveModelDiscoveryAuth } from "@/lib/model-discovery-auth";
-import { buildModelsListUrl, parseDiscoveredModels } from "@/lib/model-discovery";
+import { buildModelsListUrl, parseDiscoveredModels, type DiscoveredModel } from "@/lib/model-discovery";
+import { loadModelsDevCatalog } from "@/lib/model-catalog-cache";
+import { pickCatalogMetadata } from "@/lib/model-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +81,32 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No models found in the upstream response" }, { status: 502 });
     }
 
-    return NextResponse.json({ models, endpoint: endpoint.toString() });
+    // Merge models.dev metadata (reasoning, thinkingLevelMap, context window,
+    // max tokens) so imported models get real limits without a manual catalog
+    // fill. Network/catalog failures must never fail discovery, so degrade
+    // gracefully.
+    let enriched = models;
+    try {
+      const catalog = await loadModelsDevCatalog();
+      const byId = new Map<string, typeof catalog>();
+      for (const entry of catalog) {
+        const list = byId.get(entry.id);
+        if (list) list.push(entry);
+        else byId.set(entry.id, [entry]);
+      }
+      enriched = models.map((model) => {
+        const metadata = pickCatalogMetadata(byId.get(model.id) ?? []);
+        if (!metadata) return model;
+        return {
+          ...model,
+          ...metadata,
+        } as DiscoveredModel;
+      });
+    } catch {
+      // Catalog is optional; keep the discovered model list as-is.
+    }
+
+    return NextResponse.json({ models: enriched, endpoint: endpoint.toString() });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = error instanceof DOMException && error.name === "TimeoutError" ? 504 : 500;

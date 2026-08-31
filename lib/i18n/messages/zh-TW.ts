@@ -512,6 +512,7 @@ export const zhTWLocale: LocalePlugin = {
     "models.catalogPriceConsensus": "共有 {support}/{total} 筆紀錄採用此價格",
     "models.catalogPriceUnreliable": "找不到可靠的價格",
     "models.catalogUndo": "復原",
+    "models.providerNameTaken": "已存在名為 {name} 的 Provider。",
     "models.capabilities": "能力",
     "models.reasoning": "推理 / 思考",
     "models.imageInput": "圖片輸入",

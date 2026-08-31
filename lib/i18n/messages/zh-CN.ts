@@ -512,6 +512,7 @@ export const zhCNLocale: LocalePlugin = {
     "models.catalogPriceConsensus": "价格得到 {support}/{total} 条记录支持",
     "models.catalogPriceUnreliable": "未找到可靠价格",
     "models.catalogUndo": "撤销",
+    "models.providerNameTaken": "已存在名为 {name} 的 Provider。",
     "models.capabilities": "能力",
     "models.reasoning": "推理 / 思考",
     "models.imageInput": "图片输入",

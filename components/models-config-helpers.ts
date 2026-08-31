@@ -70,3 +70,24 @@ export function serializeHeaderRows(rows: readonly HeaderRow[]): Record<string, 
   }
   return Object.keys(headers).length ? headers : undefined;
 }
+
+/**
+ * Rename a provider key in-place. Returns the new providers map, or null when
+ * the rename is impossible (missing source, blank/unchanged name, or a key
+ * collision). Colliding renames must never overwrite an existing provider.
+ */
+export function renameProviderEntry<Value>(
+  providers: Record<string, Value> | undefined,
+  from: string,
+  to: string,
+): Record<string, Value> | null {
+  const next = to.trim();
+  if (!next || next === from) return null;
+  if (providers?.[from] === undefined) return null;
+  if (Object.prototype.hasOwnProperty.call(providers, next)) return null;
+  const entries = Object.entries(providers);
+  const idx = entries.findIndex(([k]) => k === from);
+  if (idx === -1) return null;
+  entries[idx] = [next, entries[idx][1]];
+  return Object.fromEntries(entries);
+}

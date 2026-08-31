@@ -12,6 +12,7 @@ import {
   hasModelCostDraftValue,
   modelCostToDraft,
   parseCompleteModelCost,
+  renameProviderEntry,
   serializeHeaderRows,
   setCompatBool,
   updateHeaderRow,
@@ -174,8 +175,8 @@ const inputStyle = {
   boxSizing: "border-box" as const,
 };
 
-function TextInput({ value, onChange, placeholder, mono }: { value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean }) {
-  return <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+function TextInput({ value, onChange, placeholder, mono, onKeyDown }: { value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean; onKeyDown?: React.KeyboardEventHandler<HTMLInputElement> }) {
+  return <input value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} placeholder={placeholder}
     style={{ ...inputStyle, fontFamily: mono ? "var(--font-mono)" : "inherit" }} />;
 }
 
@@ -288,20 +289,42 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Provider detail ───────────────────────────────────────────────────────────
 
-function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddModels }: {
+function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddModels, onNameDraft }: {
   name: string; provider: ProviderEntry;
-  onChange: (p: ProviderEntry) => void; onRename: (n: string) => void; onDelete: () => void;
+  onChange: (p: ProviderEntry) => void; onRename: (n: string) => boolean; onDelete: () => void;
   onAddModels: (models: DiscoveredModel[]) => void;
+  onNameDraft?: (draft: string | null) => void;
 }) {
   const { t } = useI18n();
   const [editingName, setEditingName] = useState(name);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [discoveryState, setDiscoveryState] = useState<ModelDiscoveryState>({ phase: "idle" });
   const [discoveryQuery, setDiscoveryQuery] = useState("");
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const discoveryRequestIdRef = useRef(0);
   const selectShownRef = useRef<HTMLInputElement>(null);
-  useEffect(() => setEditingName(name), [name]);
+  useEffect(() => { setEditingName(name); setRenameError(null); }, [name]);
   const set = <K extends keyof ProviderEntry>(k: K, v: ProviderEntry[K]) => onChange({ ...provider, [k]: v });
+
+  const commitRename = useCallback((raw: string) => {
+    const next = raw.trim();
+    if (!next || next === name) return;
+    if (onRename(next)) {
+      setRenameError(null);
+      setEditingName(next);
+    } else {
+      setRenameError(t("models.providerNameTaken", { name: next }));
+    }
+  }, [name, onRename, t]);
+
+  // Report a pending typed name to the panel so clicking 保存 commits it
+  // instead of silently saving under the old provider key.
+  useEffect(() => {
+    if (!onNameDraft) return;
+    const draft = editingName.trim();
+    onNameDraft(draft && draft !== name ? draft : null);
+    return () => onNameDraft(null);
+  }, [onNameDraft, editingName, name]);
 
   useEffect(() => {
     if (!provider.api) onChange({ ...provider, api: "openai-completions" });
@@ -392,9 +415,22 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
       </div>
 
        <Field label={t("i18n.providerName")}>
-        <TextInput value={editingName} onChange={setEditingName} placeholder="provider-name" mono />
+        <TextInput
+          value={editingName}
+          onChange={(v) => { setEditingName(v); setRenameError(null); }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            commitRename(editingName);
+          }}
+          placeholder="provider-name"
+          mono
+        />
+        {renameError && (
+          <span style={{ color: "#ef4444", fontSize: 11 }}>{renameError}</span>
+        )}
         {editingName !== name && editingName.trim() && (
-          <button onClick={() => onRename(editingName.trim())}
+          <button onClick={() => commitRename(editingName)}
             style={{ marginTop: 4, padding: "3px 10px", background: "var(--accent)", border: "none", borderRadius: 4, color: "#fff", cursor: "pointer", fontSize: 11, alignSelf: "flex-start" }}>
              {t("i18n.rename")}
           </button>
@@ -765,6 +801,12 @@ function fillEmptyModelFields(
   }
   if (model.reasoning === undefined && preset.reasoning === true) {
     next.reasoning = true;
+    appliedCount += 1;
+  }
+  // models.dev reasoning_options → Pi thinkingLevelMap. Only fill when the
+  // model has no map yet so an explicit hand-edit is never clobbered.
+  if (!model.thinkingLevelMap && preset.thinkingLevelMap) {
+    next.thinkingLevelMap = { ...preset.thinkingLevelMap };
     appliedCount += 1;
   }
   if (!model.input?.length && preset.input?.length) {
@@ -1836,6 +1878,16 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Pending provider-name draft (typed but not yet committed via 重命名).
+  // Clicking 保存 must commit it; without this the edit is silently dropped.
+  const pendingRenameRef = useRef<{ from: string; to: string } | null>(null);
+  const reportProviderNameDraft = useCallback((from: string, to: string | null) => {
+    if (to) {
+      pendingRenameRef.current = { from, to };
+    } else if (pendingRenameRef.current?.from === from) {
+      pendingRenameRef.current = null;
+    }
+  }, []);
 
   const refreshAuthProviders = useCallback(() => {
     fetch("/api/auth/providers")
@@ -1881,21 +1933,20 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
     setConfig((prev) => ({ ...prev, providers: { ...(prev.providers ?? {}), [name]: p } }));
   }, []);
 
-  const renameProvider = useCallback((oldName: string, newName: string) => {
-    setConfig((prev) => {
-      const entries = Object.entries(prev.providers ?? {});
-      const idx = entries.findIndex(([k]) => k === oldName);
-      if (idx === -1) return prev;
-      entries[idx] = [newName, entries[idx][1]];
-      return { ...prev, providers: Object.fromEntries(entries) };
-    });
+  const renameProvider = useCallback((oldName: string, newName: string): boolean => {
+    if (!newName.trim() || newName.trim() === oldName) return false;
+    const next = newName.trim();
+    const renamed = renameProviderEntry(config.providers, oldName, next);
+    if (!renamed) return false;
+    setConfig((prev) => ({ ...prev, providers: renamed }));
     setSelection((prev) => {
       if (!prev) return prev;
-      if (prev.type === "provider" && prev.name === oldName) return { type: "provider", name: newName };
-      if (prev.type === "model" && prev.providerName === oldName) return { ...prev, providerName: newName };
+      if (prev.type === "provider" && prev.name === oldName) return { type: "provider", name: next };
+      if (prev.type === "model" && prev.providerName === oldName) return { ...prev, providerName: next };
       return prev;
     });
-  }, []);
+    return true;
+  }, [config.providers]);
 
   const deleteProvider = useCallback((name: string) => {
     setConfig((prev) => {
@@ -1931,7 +1982,17 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
       for (const discoveredModel of discovered) {
         if (existingIds.has(discoveredModel.id)) continue;
         existingIds.add(discoveredModel.id);
-        models.push({ id: discoveredModel.id, name: discoveredModel.name });
+        const entry: ModelEntry = {
+          id: discoveredModel.id,
+          name: discoveredModel.name,
+          ...(discoveredModel.reasoning ? { reasoning: true } : {}),
+          ...(discoveredModel.thinkingLevelMap
+            ? { thinkingLevelMap: { ...discoveredModel.thinkingLevelMap } }
+            : {}),
+          ...(discoveredModel.contextWindow ? { contextWindow: discoveredModel.contextWindow } : {}),
+          ...(discoveredModel.maxTokens ? { maxTokens: discoveredModel.maxTokens } : {}),
+        };
+        models.push(entry);
       }
       return { ...prev, providers: { ...(prev.providers ?? {}), [providerName]: { ...provider, models } } };
     });
@@ -1961,10 +2022,35 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
     setSaveError(null);
     setSavedOk(false);
     try {
+      // Commit any pending provider-name draft first so Save persists the
+      // typed name instead of silently writing it under the old key.
+      let body = config;
+      const pending = pendingRenameRef.current;
+      pendingRenameRef.current = null;
+      if (pending && pending.to && pending.to !== pending.from) {
+        const renamed = renameProviderEntry(body.providers, pending.from, pending.to);
+        if (renamed) {
+          body = { ...body, providers: renamed };
+          // Keep the sidebar/selection in sync so the rename is visible
+          // immediately even before the server round-trip completes.
+          setConfig(body);
+          setSelection((prev) => {
+            if (!prev) return prev;
+            if (prev.type === "provider" && prev.name === pending.from) return { type: "provider", name: pending.to };
+            if (prev.type === "model" && prev.providerName === pending.from) return { ...prev, providerName: pending.to };
+            return prev;
+          });
+        } else if (Object.prototype.hasOwnProperty.call(body.providers ?? {}, pending.to)) {
+          // Keep the draft so a second click of 保存 still reports it.
+          pendingRenameRef.current = pending;
+          setSaveError(t("models.providerNameTaken", { name: pending.to }));
+          return;
+        }
+      }
       const res = await fetch("/api/models-config", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify(body),
       });
       const d = await res.json() as { success?: boolean; error?: string };
       if (!res.ok || d.error) setSaveError(d.error ?? `HTTP ${res.status}`);
@@ -1974,7 +2060,7 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
     } finally {
       setSaving(false);
     }
-  }, [config]);
+  }, [config, t]);
 
   const providers = Object.entries(config.providers ?? {});
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
@@ -2005,6 +2091,7 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
           onRename={(n) => renameProvider(selection.name, n)}
           onDelete={() => deleteProvider(selection.name)}
           onAddModels={(models) => addDiscoveredModels(selection.name, models)}
+          onNameDraft={(draft) => reportProviderNameDraft(selection.name, draft)}
         />
       );
     }

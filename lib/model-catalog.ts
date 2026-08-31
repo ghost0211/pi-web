@@ -15,6 +15,7 @@ export interface ModelCatalogEntry {
   id: string;
   name: string;
   reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
   input?: string[];
   contextWindow?: number;
   maxTokens?: number;
@@ -28,6 +29,12 @@ export interface ModelCatalogPreset {
   contextWindow?: number;
   maxTokens?: number;
   cost?: CompleteModelCatalogCost;
+  /**
+   * Pi thinking-level → upstream effort value map. `null` means the level is
+   * explicitly unavailable (pi won't send it and the UI disables it). Absent
+   * levels fall back to pi's default effort for the model.
+   */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 export type ModelCatalogMatchMethod = "provider" | "base-url" | "consensus" | "none";
@@ -68,12 +75,43 @@ const KNOWN_PROVIDER_HOSTS: Record<string, readonly string[]> = {
 };
 const SUPPORTED_INPUT_MODALITIES = new Set(["text", "image"]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * Map models.dev reasoning_options to a Pi thinkingLevelMap.
+ *
+ * models.dev records the upstream effort values a model accepts (e.g.
+ * `[{ type: "effort", values: ["low", "medium", "high"] }]`). Pi's canonical
+ * seven levels are off/minimal/low/medium/high/xhigh/max; the map translates
+ * them to upstream values, and `null` marks a level pi must not send (the
+ * UI hides it and the engine skips it). `off: null` keeps levels off unless
+ * the upstream explicitly advertises "none"/"off".
+ */
+export function thinkingLevelMapFromReasoningOptions(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const effortValues = value
+    .filter((option) => isRecord(option) && option.type === "effort" && Array.isArray(option.values))
+    .flatMap((option) => (option.values as unknown[])
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+      .map((entry) => entry.trim().toLocaleLowerCase()));
+  if (effortValues.length === 0) return undefined;
+
+  const upstream = new Set(effortValues);
+  const map: Record<string, string | null> = { off: null };
+  if (upstream.has("none")) map.off = "none";
+  else if (upstream.has("off")) map.off = "off";
+  for (const level of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+    map[level] = upstream.has(level) ? level : null;
+  }
+  return map;
 }
 
 function cleanString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function optionalNonNegativeNumber(value: unknown): number | undefined {
@@ -174,6 +212,62 @@ function modeValue<T>(
   return winner.value;
 }
 
+const THINKING_LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * Merge per-provider thinkingLevelMaps (catalog consensus). A level is kept
+ * when every defined entry agrees; divergent or absent-per-entry levels are
+ * written as `null` (disabled) so an unsupported effort is never sent.
+ * Returns undefined when no entry defines a map.
+ */
+export function mergeThinkingLevelMaps(
+  maps: readonly (Record<string, string | null> | undefined)[],
+): Record<string, string | null> | undefined {
+  const defined = maps.filter((map): map is Record<string, string | null> => Boolean(map));
+  if (defined.length === 0) return undefined;
+  const merged: Record<string, string | null> = {};
+  for (const level of THINKING_LEVEL_ORDER) {
+    let value: string | null | undefined;
+    let agrees = true;
+    for (const map of defined) {
+      if (!(level in map)) continue;
+      if (value === undefined) {
+        value = map[level];
+      } else if (value !== map[level]) {
+        agrees = false;
+        break;
+      }
+    }
+    if (value === undefined) continue;
+    merged[level] = agrees ? value : null;
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+/**
+ * Pick catalog metadata for a model id across all provider entries. Context
+ * window / max tokens / reasoning take the most common non-undefined value
+ * (mode), because the same id may be listed by several catalog providers
+ * with slightly different limits. Returns undefined when nothing matches.
+ */
+export function pickCatalogMetadata(
+  entries: readonly ModelCatalogEntry[],
+): { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null>; contextWindow?: number; maxTokens?: number } | undefined {
+  if (entries.length === 0) return undefined;
+  const reasoningValues = entries.flatMap((entry) => entry.reasoning === undefined ? [] : [entry.reasoning]);
+  const reasoning = modeValue(reasoningValues, reasoningValues.length, String);
+  const thinkingLevelMap = mergeThinkingLevelMaps(entries.map((entry) => entry.thinkingLevelMap));
+  const contextWindow = modeNumber(entries.flatMap((entry) => entry.contextWindow === undefined ? [] : [entry.contextWindow]));
+  const maxTokens = modeNumber(entries.flatMap((entry) => entry.maxTokens === undefined ? [] : [entry.maxTokens]));
+  const picked = {
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+  };
+  return Object.keys(picked).length ? picked : undefined;
+}
+
 function modeNumber(values: readonly number[]): number | undefined {
   if (values.length === 0) return undefined;
   const groups = new Map<number, number>();
@@ -187,6 +281,7 @@ function metadataFromEntry(entry: ModelCatalogEntry): ModelCatalogPreset {
   return {
     name: entry.name,
     reasoning: entry.reasoning,
+    thinkingLevelMap: entry.thinkingLevelMap,
     input: entry.input,
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
@@ -195,6 +290,7 @@ function metadataFromEntry(entry: ModelCatalogEntry): ModelCatalogPreset {
 
 function consensusMetadata(entries: readonly ModelCatalogEntry[]): ModelCatalogPreset {
   const total = entries.length;
+  const thinkingLevelMap = mergeThinkingLevelMaps(entries.map((entry) => entry.thinkingLevelMap));
   return {
     name: modeValue(entries.map((entry) => entry.name), total, (value) => value.toLocaleLowerCase()),
     reasoning: modeValue(
@@ -202,6 +298,7 @@ function consensusMetadata(entries: readonly ModelCatalogEntry[]): ModelCatalogP
       total,
       String,
     ),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     input: modeValue(
       entries.flatMap((entry) => entry.input ? [entry.input] : []),
       total,
@@ -312,6 +409,8 @@ export function flattenModelsDevCatalog(value: unknown): ModelCatalogEntry[] {
       };
       if (providerBaseUrl) entry.providerBaseUrl = providerBaseUrl;
       if (typeof rawModel.reasoning === "boolean") entry.reasoning = rawModel.reasoning;
+      const thinkingLevelMap = thinkingLevelMapFromReasoningOptions(rawModel.reasoning_options);
+      if (thinkingLevelMap) entry.thinkingLevelMap = thinkingLevelMap;
       const input = readInputModalities(rawModel.modalities);
       if (input) entry.input = input;
       if (isRecord(rawModel.limit)) {

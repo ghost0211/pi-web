@@ -512,6 +512,7 @@ export const enLocale: LocalePlugin = {
     "models.catalogPriceConsensus": "Price agreed by {support}/{total} records",
     "models.catalogPriceUnreliable": "No reliable price found",
     "models.catalogUndo": "Undo",
+    "models.providerNameTaken": "A provider named {name} already exists.",
     "models.capabilities": "Capabilities",
     "models.reasoning": "Reasoning / thinking",
     "models.imageInput": "Image input",

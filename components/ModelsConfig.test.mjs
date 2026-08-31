@@ -8,6 +8,7 @@ const {
   hasModelCostDraftValue,
   modelCostToDraft,
   parseCompleteModelCost,
+  renameProviderEntry,
   serializeHeaderRows,
   setCompatBool,
   updateHeaderRow,
@@ -96,6 +97,55 @@ test("blank header drafts are omitted until they have a name", () => {
   );
 });
 
+test("renames a provider key preserving its entry order", () => {
+  const providers = {
+    "a-first": { baseUrl: "https://a.example/v1", api: "openai-completions" },
+    "b-second": { baseUrl: "https://b.example/v1" },
+  };
+  const renamed = renameProviderEntry(providers, "a-first", "renamed-a");
+
+  assert.deepEqual(renamed, {
+    "renamed-a": { baseUrl: "https://a.example/v1", api: "openai-completions" },
+    "b-second": { baseUrl: "https://b.example/v1" },
+  });
+});
+
+test("refuses to rename onto an existing provider key", () => {
+  const providers = {
+    "a-first": { baseUrl: "https://a.example/v1" },
+    "b-second": { baseUrl: "https://b.example/v1" },
+  };
+
+  assert.equal(renameProviderEntry(providers, "a-first", "b-second"), null);
+  // The source stays intact and the target is never overwritten.
+  assert.deepEqual(providers, {
+    "a-first": { baseUrl: "https://a.example/v1" },
+    "b-second": { baseUrl: "https://b.example/v1" },
+  });
+});
+
+test("refuses blank, unchanged, or missing-source renames", () => {
+  const providers = {
+    "a-first": { baseUrl: "https://a.example/v1" },
+  };
+
+  assert.equal(renameProviderEntry(providers, "a-first", "   "), null);
+  assert.equal(renameProviderEntry(providers, "a-first", "a-first"), null);
+  assert.equal(renameProviderEntry(providers, "missing", "new-name"), null);
+  assert.equal(renameProviderEntry(undefined, "a-first", "new-name"), null);
+});
+
+test("a typed provider name is committed when clicking Save directly", () => {
+  // The Provider 名称 field keeps a local draft; clicking 保存 must commit it
+  // instead of silently saving under the old provider key. The panel reads the
+  // draft through a ref snapshot captured from the detail's effect.
+  assert.match(source, /pendingRenameRef\.current = \{ from, to \}/);
+  assert.match(source, /typed name instead of silently writing it under the old key/);
+  assert.match(source, /onNameDraft=\{\(draft\) => reportProviderNameDraft/);
+  assert.match(source, /const pending = pendingRenameRef\.current/);
+  assert.match(source, /setSaveError\(t\("models\.providerNameTaken"/);
+});
+
 test("model cost drafts default blank prices to zero unless all are blank", () => {
   const complete = {
     input: "1.25",
@@ -141,6 +191,17 @@ test("manual price editing commits completed costs and removes only an all-blank
   assert.match(modelDetail, /costDraftRef\.current = nextDraft/);
   assert.match(modelDetail, /costTemplateRef\.current/);
   assert.match(modelDetail, /value=\{costDraft\[key\]\}/);
+});
+
+test("catalog fill applies reasoning_options thinkingLevelMap only when absent", () => {
+  const fill = source.slice(
+    source.indexOf("function fillEmptyModelFields"),
+    source.indexOf("function ModelDetail"),
+  );
+
+  assert.match(fill, /if \(!model\.thinkingLevelMap && preset\.thinkingLevelMap\)/);
+  assert.match(fill, /next\.thinkingLevelMap = \{ \.\.\.preset\.thinkingLevelMap \}/);
+  assert.match(fill, /next\.reasoning = true/);
 });
 
 test("model specs keep catalog-filled prices visible outside advanced settings", () => {

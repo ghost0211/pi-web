@@ -1,6 +1,14 @@
 export interface DiscoveredModel {
   id: string;
   name?: string;
+  /** Model supports reasoning, from models.dev metadata when known. */
+  reasoning?: boolean;
+  /** Pi thinking-level → upstream effort map, from models.dev reasoning_options. */
+  thinkingLevelMap?: Record<string, string | null>;
+  /** Context window in tokens, from models.dev metadata when known. */
+  contextWindow?: number;
+  /** Max output tokens, from models.dev metadata when known. */
+  maxTokens?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

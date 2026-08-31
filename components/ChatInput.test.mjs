@@ -326,26 +326,30 @@ test("keeps a failed first submission recoverable across a composer remount", ()
   const restored = mergeRestoredSubmissionDraft(
     "failed submission",
     [image],
+    undefined,
     "",
+    [],
     [],
   );
 
   assert.deepEqual(restored, {
     value: "failed submission",
     images: [image],
+    textFiles: [],
   });
   assert.deepEqual(
-    mergeRestoredSubmissionDraft("failed submission", [image], "new draft", []),
+    mergeRestoredSubmissionDraft("failed submission", [image], undefined, "new draft", [], []),
     {
       value: "failed submission\n\nnew draft",
       images: [image],
+      textFiles: [],
     },
   );
 });
 
 test("preserves duplicate image attachments when restoring a submission", () => {
   const image = { data: "AQID", mimeType: "image/png" };
-  const restored = mergeRestoredSubmissionDraft("", [image, image], "", [image]);
+  const restored = mergeRestoredSubmissionDraft("", [image, image], undefined, "", [image], []);
 
   assert.deepEqual(restored.images, [image, image, image]);
 });
@@ -355,16 +359,18 @@ test("moves a provisional new-session draft to the real session key", () => {
   const sessionKey = "session-rekey-test";
   clearDraft(provisionalKey);
   clearDraft(sessionKey);
-  setDraft(provisionalKey, { value: "queued while preflight ran", images: [] });
+  setDraft(provisionalKey, { value: "queued while preflight ran", images: [], textFiles: [] });
 
   assert.deepEqual(rekeyDraft(provisionalKey, sessionKey), {
     value: "queued while preflight ran",
     images: [],
+    textFiles: [],
   });
   assert.equal(getDraft(provisionalKey), null);
   assert.deepEqual(getDraft(sessionKey), {
     value: "queued while preflight ran",
     images: [],
+    textFiles: [],
   });
 
   clearDraft(sessionKey);
@@ -375,16 +381,17 @@ test("rekey keeps a synchronously restored draft when React state is still empty
   const sessionKey = "session-rekey-race";
   clearDraft(provisionalKey);
   clearDraft(sessionKey);
-  setDraft(provisionalKey, { value: "restored before state flush", images: [] });
+  setDraft(provisionalKey, { value: "restored before state flush", images: [], textFiles: [] });
 
   assert.deepEqual(
-    rekeyDraft(provisionalKey, sessionKey, { value: "", images: [] }),
-    { value: "restored before state flush", images: [] },
+    rekeyDraft(provisionalKey, sessionKey, { value: "", images: [], textFiles: [] }),
+    { value: "restored before state flush", images: [], textFiles: [] },
   );
   assert.equal(getDraft(provisionalKey), null);
   assert.deepEqual(getDraft(sessionKey), {
     value: "restored before state flush",
     images: [],
+    textFiles: [],
   });
 
   clearDraft(sessionKey);

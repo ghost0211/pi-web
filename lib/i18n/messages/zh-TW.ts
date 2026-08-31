@@ -356,6 +356,7 @@ export const zhTWLocale: LocalePlugin = {
     "chat.followUp": "後續訊息",
     "chat.send": "傳送",
     "chat.attachImage": "附加圖片",
+    "chat.attachFile": "附加檔案",
     "chat.previewImage": "預覽圖片",
     "chat.filterModels": "篩選模型…",
     "chat.noMatchingModels": "找不到相符的模型",

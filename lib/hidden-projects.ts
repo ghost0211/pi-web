@@ -43,12 +43,12 @@ export function readHiddenProjects(
         if (typeof entry === "object" && entry !== null
           && typeof (entry as RichProjectRef).key === "string"
           && (entry as RichProjectRef).key.trim()) {
-          return {
-            key: (entry as RichProjectRef).key,
-            root: typeof (entry as RichProjectRef).root === "string"
-              ? (entry as RichProjectRef).root
-              : undefined,
-          };
+          const root = typeof (entry as RichProjectRef).root === "string"
+            ? (entry as RichProjectRef).root
+            : undefined;
+          return root
+            ? { key: (entry as RichProjectRef).key, root }
+            : { key: (entry as RichProjectRef).key };
         }
         return null;
       })

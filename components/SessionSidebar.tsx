@@ -7,6 +7,7 @@ import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { readHiddenProjects, addHiddenProject } from "@/lib/hidden-projects";
+import { readHiddenSessions, addHiddenSession } from "@/lib/hidden-sessions";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
@@ -810,6 +811,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     // Normalized over the legacy bare-array format; only keys matter here.
     return new Set(readHiddenProjects().map((entry) => entry.key));
   });
+  const [hiddenSessions, setHiddenSessions] = useState<Set<string>>(() => {
+    return new Set(readHiddenSessions().map((entry) => entry.id));
+  });
 
   useEffect(() => {
     if (!openProjectMenuKey) return;
@@ -826,6 +830,23 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     addHiddenProject({ key: projectKey, ...(root ? { root } : {}) });
     setHiddenProjects((prev) => new Set(prev).add(projectKey));
     setOpenProjectMenuKey(null);
+  }, []);
+
+  const handlePermanentlyRemoveProject = useCallback(async (projectKey: string, _root?: string) => {
+    // Delete every persisted session file belonging to this project.
+    const toDelete = allSessions.filter((session) => session.cwd === projectKey);
+    await Promise.allSettled(toDelete.map((session) => (
+      fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" })
+    )));
+    // Also remove any hide records so the project is fully gone.
+    setHiddenProjects((prev) => { const next = new Set(prev); next.delete(projectKey); return next; });
+    setOpenProjectMenuKey(null);
+    await loadSessions();
+  }, [allSessions, loadSessions]);
+
+  const handleHideSession = useCallback((sessionId: string, projectKey?: string) => {
+    addHiddenSession({ id: sessionId, ...(projectKey ? { projectKey } : {}) });
+    setHiddenSessions((prev) => new Set(prev).add(sessionId));
   }, []);
 
   const handleCopyProjectPath = useCallback(async (root: string) => {
@@ -1345,7 +1366,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                   return name.includes(q) || firstMsg.includes(q) || id.includes(q);
                 });
               })
-            : projectFamilies;
+              .filter((family) => !hiddenSessions.has(family.root.id))
+            : projectFamilies.filter((family) => !hiddenSessions.has(family.root.id));
 
           if (sessionSearch.trim() && visibleProjectFamilies.length === 0) {
             return null;
@@ -1620,6 +1642,37 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         background: "none",
                         border: "none",
                         borderRadius: 6,
+                        color: "var(--text)",
+                        fontSize: 12,
+                        textAlign: "left",
+                        cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                        <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                        <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                        <line x1="2" y1="2" x2="22" y2="22" />
+                      </svg>
+                      <span>{t("sidebar.hideProject")}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handlePermanentlyRemoveProject(project.key, project.root);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "100%",
+                        padding: "6px 10px",
+                        background: "none",
+                        border: "none",
+                        borderRadius: 6,
                         color: "#ef4444",
                         fontSize: 12,
                         textAlign: "left",
@@ -1629,10 +1682,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
                     >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
                       </svg>
-                      <span>{t("sidebar.removeFromList")}</span>
+                      <span>{t("sidebar.removeProjectPermanently")}</span>
                     </button>
                   </div>
                 )}
@@ -1664,8 +1719,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                           isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
                           onClick={() => handleSelectSessionFromList(family.root)}
                           onRenamed={loadSessions}
-                          onDeleted={(id) => {
-                            onSessionDeleted?.(id);
+                          onHide={(id) => {
+                            handleHideSession(id, project.key);
                             loadSessions();
                           }}
                         />
@@ -1814,7 +1869,7 @@ function SessionItem({
   isUnread,
   onClick,
   onRenamed,
-  onDeleted,
+  onHide,
   depth = 0,
   hasChildren = false,
   collapsed = false,
@@ -1826,7 +1881,7 @@ function SessionItem({
   isUnread?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
-  onDeleted?: (id: string) => void;
+  onHide?: (id: string) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
@@ -1882,22 +1937,16 @@ function SessionItem({
     }
   }, [renameValue, session.id, session.name, onRenamed, title]);
 
-  const performDelete = useCallback(async () => {
+  const performDelete = useCallback(() => {
     if (session.transient) return;
     setConfirmDelete(false);
-    setDeleting(true);
-    try {
-      await fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
-      onDeleted?.(session.id);
-    } catch {
-      setDeleting(false);
-    }
-  }, [session.id, session.transient, onDeleted]);
+    onHide?.(session.id);
+  }, [session.id, session.transient, onHide]);
 
   const handleDeleteClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (e.shiftKey) {
-      void performDelete();
+      performDelete();
     } else {
       setConfirmDelete(true);
     }
@@ -1905,7 +1954,7 @@ function SessionItem({
 
   const handleDeleteConfirm = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    void performDelete();
+    performDelete();
   }, [performDelete]);
 
   const handleDeleteCancel = useCallback((e: React.MouseEvent) => {
@@ -1974,10 +2023,10 @@ function SessionItem({
               }}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                <path d="M10 11v6M14 11v6" />
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                <line x1="2" y1="2" x2="22" y2="22" />
               </svg>
               {t("sidebar.delete")}
             </button>
@@ -2119,8 +2168,8 @@ function SessionItem({
                   transition: "all 0.12s ease",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(239,68,68,0.12)";
-                  e.currentTarget.style.color = "#ef4444";
+                  e.currentTarget.style.background = "var(--bg-selected)";
+                  e.currentTarget.style.color = "var(--accent)";
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = "var(--bg-hover)";
@@ -2128,10 +2177,10 @@ function SessionItem({
                 }}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                  <path d="M10 11v6M14 11v6" />
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                  <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                  <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                  <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                  <line x1="2" y1="2" x2="22" y2="22" />
                 </svg>
               </button>
             </div>

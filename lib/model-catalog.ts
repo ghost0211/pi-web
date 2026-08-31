@@ -82,8 +82,13 @@ const SUPPORTED_INPUT_MODALITIES = new Set(["text", "image"]);
  * `[{ type: "effort", values: ["low", "medium", "high"] }]`). Pi's canonical
  * seven levels are off/minimal/low/medium/high/xhigh/max; the map translates
  * them to upstream values, and `null` marks a level pi must not send (the
- * UI hides it and the engine skips it). `off: null` keeps levels off unless
- * the upstream explicitly advertises "none"/"off".
+ * UI hides it and the engine skips it).
+ *
+ * DeepSeek-style models advertise medium/xhigh as accepted values but map
+ * them to the same actual effort as high (see the DeepSeek docs mapping
+ * table: medium→high, xhigh→high). Those are redundant with high, so this
+ * normalization keeps only the distinct strengths low/high/max and disables
+ * medium/xhigh, matching pi's built-in deepseek/zai model definitions.
  */
 export function thinkingLevelMapFromReasoningOptions(
   value: unknown,
@@ -97,12 +102,17 @@ export function thinkingLevelMapFromReasoningOptions(
   if (effortValues.length === 0) return undefined;
 
   const upstream = new Set(effortValues);
-  const map: Record<string, string | null> = { off: null };
-  if (upstream.has("none")) map.off = "none";
-  else if (upstream.has("off")) map.off = "off";
-  for (const level of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) {
-    map[level] = upstream.has(level) ? level : null;
-  }
+  // off and xhigh stay undefined (absent): off keeps the auto/default level,
+  // and xhigh is excluded by pi's getSupportedThinkingLevels (xhigh requires
+  // an explicit mapping). Medium is redundant with high on DeepSeek-style
+  // models (docs: medium→high, xhigh→high), so it is disabled explicitly.
+  const map: Record<string, string | null> = {
+    minimal: null,
+    low: upstream.has("low") ? "low" : null,
+    medium: null,
+    high: upstream.has("high") ? "high" : null,
+    max: upstream.has("max") ? "max" : null,
+  };
   return map;
 }
 
@@ -215,9 +225,10 @@ function modeValue<T>(
 const THINKING_LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * Merge per-provider thinkingLevelMaps (catalog consensus). A level is kept
- * when every defined entry agrees; divergent or absent-per-entry levels are
- * written as `null` (disabled) so an unsupported effort is never sent.
+ * Merge per-provider thinkingLevelMaps (catalog union). A level is enabled
+ * when ANY defined entry supports it (string value), because catalog providers
+ * record conservative subsets of the same model's accepted efforts; a missing
+ * or divergent entry must not disable a level another entry proves works.
  * Returns undefined when no entry defines a map.
  */
 export function mergeThinkingLevelMaps(
@@ -227,19 +238,21 @@ export function mergeThinkingLevelMaps(
   if (defined.length === 0) return undefined;
   const merged: Record<string, string | null> = {};
   for (const level of THINKING_LEVEL_ORDER) {
-    let value: string | null | undefined;
-    let agrees = true;
+    let enabled: string | null = null;
+    let present = false;
     for (const map of defined) {
-      if (!(level in map)) continue;
-      if (value === undefined) {
-        value = map[level];
-      } else if (value !== map[level]) {
-        agrees = false;
+      const entry = map[level];
+      if (typeof entry === "string") {
+        enabled = entry;
+        present = true;
         break;
       }
+      if (entry === null) present = true;
+      // undefined means the provider's map intentionally omits the level
+      // (e.g. normalized maps leave off/xhigh absent); do not mark present.
     }
-    if (value === undefined) continue;
-    merged[level] = agrees ? value : null;
+    if (!present) continue;
+    merged[level] = enabled === null ? null : enabled;
   }
   return Object.keys(merged).length ? merged : undefined;
 }

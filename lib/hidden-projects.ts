@@ -66,9 +66,16 @@ export function writeHiddenProjects(
   if (!storage) return;
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(projects.map(({ key, root }) => ({ key, ...(root ? { root } : {}) }))));
+    notifyHiddenStateChanged();
   } catch {
     // Browser storage is best-effort.
   }
+}
+
+/** Alias so hidden-sessions can reuse the same event. */
+export function notifyHiddenStateChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event("pi-web:hidden-state-changed"));
 }
 
 export function addHiddenProject(

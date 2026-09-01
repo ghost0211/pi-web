@@ -67,6 +67,9 @@ export function writeHiddenSessions(
     storage.setItem(STORAGE_KEY, JSON.stringify(
       sessions.map(({ id, projectKey }) => ({ id, ...(projectKey ? { projectKey } : {}) })),
     ));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("pi-web:hidden-state-changed"));
+    }
   } catch {
     // Browser storage is best-effort.
   }
@@ -79,6 +82,23 @@ export function addHiddenSession(
   const current = readHiddenSessions(storage);
   if (current.some((entry) => entry.id === session.id)) return current;
   const next = [...current, session];
+  writeHiddenSessions(next, storage);
+  return next;
+}
+
+/** Mark several sessions hidden at once (e.g. when hiding a whole project). */
+export function addHiddenSessions(
+  sessions: HiddenSessionRef[],
+  storage: StorageLike | null = getBrowserStorage(),
+): HiddenSessionRef[] {
+  const current = readHiddenSessions(storage);
+  const known = new Set(current.map((entry) => entry.id));
+  const next = [...current];
+  for (const session of sessions) {
+    if (known.has(session.id)) continue;
+    known.add(session.id);
+    next.push(session);
+  }
   writeHiddenSessions(next, storage);
   return next;
 }

@@ -9,7 +9,6 @@ import {
 import {
   readHiddenSessions,
   removeHiddenSession,
-  addHiddenSession,
   removeHiddenSessionsForProject,
 } from "@/lib/hidden-sessions";
 import type { SessionInfo } from "@/lib/types";
@@ -27,7 +26,7 @@ import {
 
 export function SessionsConfig({ onClose, embedded = false }: { onClose: () => void; embedded?: boolean }) {
   const { t, locale } = useI18n();
-  const [projects, setProjects] = useState(() => readHiddenProjects());
+  const [projects, setProjects] = useState<string[]>([]);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -49,28 +48,45 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
     }
   }, []);
 
-  useEffect(() => { void loadSessions(); }, [loadSessions]);
+  // Refresh hide state (settings panel and sidebar share localStorage).
+  const refreshProjects = useCallback(() => {
+    const hiddenProjectKeys = new Set(readHiddenProjects().map((entry) => entry.key));
+    const sessionProjectKeys = new Set(
+      readHiddenSessions().map((entry) => entry.projectKey).filter((key): key is string => Boolean(key)),
+    );
+    const merged = Array.from(new Set([...hiddenProjectKeys, ...sessionProjectKeys]));
+    setProjects(merged);
+    setHiddenSessions(new Set(readHiddenSessions().map((entry) => entry.id)));
+    setSelectedProject((current) => current && merged.includes(current) ? current : (merged[0] ?? null));
+  }, []);
+
+  const projectRoots = new Map(readHiddenProjects().map((entry) => [entry.key, entry.root]));
 
   useEffect(() => {
-    if (!selectedProject && projects.length > 0) setSelectedProject(projects[0].key);
-  }, [projects, selectedProject]);
+    void loadSessions();
+    refreshProjects();
+    const onStateChange = () => refreshProjects();
+    window.addEventListener("pi-web:hidden-state-changed", onStateChange);
+    return () => window.removeEventListener("pi-web:hidden-state-changed", onStateChange);
+  }, [loadSessions, refreshProjects]);
 
-  const selectedHiddenProject = projects.find((project) => project.key === selectedProject);
+  const selectedProjectKey = selectedProject;
   const projectSessions = useMemo(() => (
-    selectedProject
+    selectedProjectKey
       ? sessions
-          .filter((session) => session.cwd === selectedProject)
+          .filter((session) => session.cwd === selectedProjectKey)
           .sort((a, b) => b.modified.localeCompare(a.modified))
       : []
-  ), [sessions, selectedProject]);
+  ), [sessions, selectedProjectKey]);
+
+  const projectHidden = selectedProjectKey
+    ? readHiddenProjects().some((entry) => entry.key === selectedProjectKey)
+    : false;
 
   const restoreProject = (key: string) => {
-    const next = removeHiddenProject(key);
-    setProjects(next);
-    if (selectedProject === key) setSelectedProject(next[0]?.key ?? null);
-    // Sessions stay hidden individually; only the project is restored.
-    const hidden = new Set(readHiddenSessions().map((entry) => entry.id));
-    setHiddenSessions(hidden);
+    removeHiddenProject(key);
+    removeHiddenSessionsForProject(key);
+    refreshProjects();
   };
 
   const removeProjectPermanently = async (key: string) => {
@@ -79,59 +95,48 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
       fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" })
     )));
     removeHiddenSessionsForProject(key);
-    const next = removeHiddenProject(key);
-    setProjects(next);
-    setHiddenSessions(new Set(readHiddenSessions().map((entry) => entry.id)));
+    removeHiddenProject(key);
+    refreshProjects();
     await loadSessions();
   };
 
-  const toggleSessionHidden = (sessionId: string) => {
-    if (hiddenSessions.has(sessionId)) {
-      removeHiddenSession(sessionId);
-      setHiddenSessions((prev) => {
-        const next = new Set(prev);
-        next.delete(sessionId);
-        return next;
-      });
-    } else {
-      addHiddenSession({ id: sessionId, projectKey: selectedProject ?? undefined });
-      setHiddenSessions((prev) => new Set(prev).add(sessionId));
-    }
+  const restoreSession = (sessionId: string) => {
+    // Restoring one session also un-hides its project so the session is
+    // visible in the main sidebar again.
+    removeHiddenSession(sessionId);
+    if (selectedProjectKey) removeHiddenProject(selectedProjectKey);
+    refreshProjects();
   };
 
   const deleteSession = async (sessionId: string) => {
     await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
     removeHiddenSession(sessionId);
-    setHiddenSessions((prev) => {
-      const next = new Set(prev);
-      next.delete(sessionId);
-      return next;
-    });
+    refreshProjects();
     await loadSessions();
   };
 
-  const humanPath = (root?: string) => root ?? "";
+  const humanPath = (key: string) => projectRoots.get(key) ?? key;
 
   return (
     <ConfigPanelShell embedded={embedded} title={t("common.sessions")} subtitle="pi-web:hidden-*" closeLabel={t("i18n.close")} onClose={onClose}>
       <ConfigSplitView>
-        {/* Left: hidden projects */}
+        {/* Left: projects with any hidden content (project hidden or hidden sessions) */}
         <ConfigSidebar>
           <div style={{ padding: "8px 10px", fontSize: 11, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            {t("sidebar.hiddenProjects")}
+            {t("settings.hiddenProjects")}
           </div>
           {projects.length === 0 ? (
             <div style={{ padding: "10px 8px", fontSize: 11, color: "var(--text-dim)" }}>
               {t("settings.noHiddenProjects")}
             </div>
-          ) : projects.map((project) => (
+          ) : projects.map((key) => (
             <ConfigSidebarItem
-              key={project.key}
-              active={selectedProject === project.key}
-              onClick={() => setSelectedProject(project.key)}
+              key={key}
+              active={selectedProject === key}
+              onClick={() => setSelectedProject(key)}
             >
               <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                {humanPath(project.root)}
+                {humanPath(key)}
               </span>
             </ConfigSidebarItem>
           ))}
@@ -140,26 +145,28 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
         {/* Right: sessions of the selected project */}
         <ConfigDetail>
           <ConfigDetailStack>
-            {!selectedHiddenProject ? (
+            {!selectedProjectKey ? (
               <ConfigEmptyState>{t("settings.selectHiddenProject")}</ConfigEmptyState>
             ) : (
               <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }} title={humanPath(selectedHiddenProject.root)}>
-                      {humanPath(selectedHiddenProject.root)}
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }} title={humanPath(selectedProjectKey)}>
+                      {humanPath(selectedProjectKey)}
                     </div>
                     <div style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-                      {selectedHiddenProject.key}
+                      {selectedProjectKey}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    <ConfigButton onClick={() => restoreProject(selectedHiddenProject.key)}>
-                      {t("settings.restoreProject")}
-                    </ConfigButton>
+                    {projectHidden && (
+                      <ConfigButton onClick={() => restoreProject(selectedProjectKey)}>
+                        {t("settings.restoreProject")}
+                      </ConfigButton>
+                    )}
                     <ConfigButton
                       variant="danger"
-                      onClick={() => { void removeProjectPermanently(selectedHiddenProject.key); }}
+                      onClick={() => { void removeProjectPermanently(selectedProjectKey); }}
                     >
                       {t("settings.removeProjectPermanently")}
                     </ConfigButton>
@@ -174,6 +181,8 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     {projectSessions.map((session) => {
                       const hidden = hiddenSessions.has(session.id);
+                      const displayFirstMessage = session.firstMessage ?? "";
+                      const title = session.name || displayFirstMessage.slice(0, 50) || session.id.slice(0, 12);
                       return (
                         <div
                           key={session.id}
@@ -185,27 +194,28 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
                             background: "var(--bg-panel)",
                             border: "1px solid var(--border)",
                             borderRadius: 6,
+                            opacity: hidden ? 0.55 : 1,
                           }}
                         >
                           <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: hidden ? 0.5 : 1 }}>
-                              {session.name ?? session.id.slice(0, 8)}
+                            <div style={{ fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={title}>
+                              {title}
                             </div>
                             <div style={{ fontSize: 10, color: "var(--text-dim)" }}>
-                              {formatRelativeTime(session.modified, locale)} · {session.messageCount} msgs · {hidden ? t("settings.sessionHidden") : ""}
+                              {formatRelativeTime(session.modified, locale)} · {session.messageCount} msgs{hidden ? ` · ${t("settings.sessionHidden")}` : ""}
                             </div>
                           </div>
                           <button
                             type="button"
-                            onClick={() => toggleSessionHidden(session.id)}
-                            title={hidden ? t("settings.restoreSession") : t("sidebar.hideSession")}
+                            onClick={() => restoreSession(session.id)}
+                            title={t("settings.restoreSession")}
                             style={{
                               flexShrink: 0, padding: "3px 8px", fontSize: 10,
                               border: "1px solid var(--border)", borderRadius: 4,
-                              background: "var(--bg)", color: "var(--text-muted)", cursor: "pointer",
+                              background: "var(--bg)", color: "var(--text)", cursor: "pointer",
                             }}
                           >
-                            {hidden ? t("settings.restoreSession") : t("sidebar.hideSession")}
+                            {t("settings.restoreSession")}
                           </button>
                           <button
                             type="button"

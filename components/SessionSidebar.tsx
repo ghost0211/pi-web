@@ -7,7 +7,7 @@ import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
 import { readHiddenProjects, addHiddenProject } from "@/lib/hidden-projects";
-import { readHiddenSessions, addHiddenSession } from "@/lib/hidden-sessions";
+import { readHiddenSessions, addHiddenSession, addHiddenSessions } from "@/lib/hidden-sessions";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
@@ -815,6 +815,25 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     return new Set(readHiddenSessions().map((entry) => entry.id));
   });
 
+  // Keep hide state in sync when another component (e.g. Settings → Sessions)
+  // writes to localStorage in the same tab or another tab.
+  useEffect(() => {
+    const refreshHidden = () => {
+      setHiddenProjects(new Set(readHiddenProjects().map((entry) => entry.key)));
+      setHiddenSessions(new Set(readHiddenSessions().map((entry) => entry.id)));
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== "pi-web:hidden-projects" && event.key !== "pi-web:hidden-sessions") return;
+      refreshHidden();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("pi-web:hidden-state-changed", refreshHidden);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pi-web:hidden-state-changed", refreshHidden);
+    };
+  }, []);
+
   useEffect(() => {
     if (!openProjectMenuKey) return;
     const handleOutside = (e: MouseEvent) => {
@@ -827,10 +846,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [openProjectMenuKey]);
 
   const handleRemoveProject = useCallback((projectKey: string, root?: string) => {
+    // Hide the project AND every session under it, so restoring a single
+    // session later can keep the others hidden.
     addHiddenProject({ key: projectKey, ...(root ? { root } : {}) });
+    const sessionsInProject = allSessions
+      .filter((session) => session.cwd === projectKey)
+      .map((session) => ({ id: session.id, projectKey }));
+    if (sessionsInProject.length) addHiddenSessions(sessionsInProject);
     setHiddenProjects((prev) => new Set(prev).add(projectKey));
+    setHiddenSessions((prev) => new Set([...prev, ...sessionsInProject.map((s) => s.id)]));
     setOpenProjectMenuKey(null);
-  }, []);
+  }, [allSessions]);
 
   const handlePermanentlyRemoveProject = useCallback(async (projectKey: string, _root?: string) => {
     // Delete every persisted session file belonging to this project.

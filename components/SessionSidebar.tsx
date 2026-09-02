@@ -850,17 +850,20 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     // session later can keep the others hidden.
     addHiddenProject({ key: projectKey, ...(root ? { root } : {}) });
     const sessionsInProject = allSessions
-      .filter((session) => session.cwd === projectKey)
+      .filter((session) => workspaceKeyOf(session) === projectKey)
       .map((session) => ({ id: session.id, projectKey }));
     if (sessionsInProject.length) addHiddenSessions(sessionsInProject);
     setHiddenProjects((prev) => new Set(prev).add(projectKey));
     setHiddenSessions((prev) => new Set([...prev, ...sessionsInProject.map((s) => s.id)]));
+    if (selectedSessionId && sessionsInProject.some((session) => session.id === selectedSessionId)) {
+      onSessionDeleted?.(selectedSessionId);
+    }
     setOpenProjectMenuKey(null);
-  }, [allSessions]);
+  }, [allSessions, onSessionDeleted, selectedSessionId]);
 
   const handlePermanentlyRemoveProject = useCallback(async (projectKey: string, _root?: string) => {
     // Delete every persisted session file belonging to this project.
-    const toDelete = allSessions.filter((session) => session.cwd === projectKey);
+    const toDelete = allSessions.filter((session) => workspaceKeyOf(session) === projectKey);
     await Promise.allSettled(toDelete.map((session) => (
       fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" })
     )));
@@ -873,7 +876,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const handleHideSession = useCallback((sessionId: string, projectKey?: string) => {
     addHiddenSession({ id: sessionId, ...(projectKey ? { projectKey } : {}) });
     setHiddenSessions((prev) => new Set(prev).add(sessionId));
-  }, []);
+    onSessionDeleted?.(sessionId);
+  }, [onSessionDeleted]);
 
   const handleCopyProjectPath = useCallback(async (root: string) => {
     setOpenProjectMenuKey(null);

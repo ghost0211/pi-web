@@ -35,11 +35,18 @@ supported, traced packaging format.
 
 ## Runtime behavior
 
-`src-tauri/src/main.rs` reserves an ephemeral loopback port (never the fixed
-30141 — the desktop app may coexist with a dev server), spawns
-`node.exe server.js` with `HOSTNAME=127.0.0.1`, shows a bundled loading page,
-polls for the first HTTP response, then navigates the window to the server URL.
-Binding only to loopback avoids the Windows firewall prompt and keeps the
+`src-tauri/src/main.rs` reserves an ephemeral loopback port on the first launch
+and stores it in `desktop-settings.json` only after the sidecar passes a
+nonce-authenticated readiness check. Later launches reuse that port when it is
+available. A temporary collision uses an unpersisted fallback for that launch,
+then retries the canonical port next time. The stable port keeps the WebView
+origin stable so browser-local preferences (including hidden projects/sessions)
+survive restarts, while still allowing the desktop app to coexist with the fixed
+30141 dev server. The shell spawns `node.exe server.js` with
+`HOSTNAME=127.0.0.1`, shows a bundled loading page, polls
+`/api/desktop-health` for the per-launch nonce, then navigates the window to the
+server URL. A timeout leaves the trusted loading page visible rather than
+navigating to an unverified process that won a loopback bind race. Binding only to loopback avoids the Windows firewall prompt and keeps the
 existing threat model ("local UI for a local agent") intact.
 
 The shell sets `PI_WEB_DESKTOP=1` (marker for future desktop-only server

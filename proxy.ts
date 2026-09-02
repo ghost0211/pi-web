@@ -22,9 +22,15 @@ export function proxy(request: NextRequest) {
     return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
   }
 
+  // The desktop shell proves sidecar identity with a per-launch nonce instead
+  // of Basic Auth. Exempt only this route in desktop mode; the route itself is
+  // unavailable without PI_WEB_DESKTOP and the nonce env variable.
+  const isDesktopHealth = process.env.PI_WEB_DESKTOP === "1"
+    && request.nextUrl.pathname === "/api/desktop-health";
   const password = process.env.PI_WEB_PASSWORD;
   if (
-    isWebPasswordEnabled(password)
+    !isDesktopHealth
+    && isWebPasswordEnabled(password)
     && !isValidBasicAuthorization(request.headers.get("authorization"), password)
   ) {
     return new NextResponse("Authentication required", {

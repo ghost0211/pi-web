@@ -86,12 +86,18 @@ duplicate entry, and the app-data/log location stays stable.
 CI (`.github/workflows/desktop-windows.yml`) builds the installer on
 `windows-latest`:
 
+Every installer update must increment the patch version; never move or reuse an
+existing desktop tag. Keep `package.json`, the root `package-lock.json`, and
+`src-tauri/Cargo.toml` / `Cargo.lock` in sync, commit the bump, then tag it:
+
 ```bash
-git tag desktop-v0.9.0 && git push origin desktop-v0.9.0
+# Example: 0.9.0 -> 0.9.1
+git tag desktop-v0.9.1 && git push origin desktop-v0.9.1
 ```
 
-…or trigger the workflow manually and download the artifact. Tag pushes also
-create a GitHub release with the installer attached.
+The workflow rejects a tag that does not match both package versions. Or trigger
+the workflow manually and download the artifact (without creating a release).
+Tag pushes create a GitHub release with the installer attached.
 
 ## Troubleshooting
 

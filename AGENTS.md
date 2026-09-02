@@ -61,9 +61,11 @@ app/api/
   auth/providers/route.ts         GET OAuth and API-key provider lists
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/pi-cwd-YYYYMMDD
+  desktop-health/route.ts         GET nonce response for Tauri sidecar verification
   files/[...path]/route.ts        GET file contents for viewer
   home/route.ts                   GET user home directory
   models/route.ts                 GET { models, modelList, defaultModel }
+  models/scope/route.ts           GET/PUT — edit settings.json enabledModels (/scoped-models)
   models-config/route.ts          GET/PUT — read/write ~/.pi/agent/models.json
   models-config/catalog/route.ts  GET models.dev pricing presets
   models-config/discover/route.ts POST fetch a configured provider's upstream model list
@@ -151,7 +153,7 @@ The last preset explicitly selected by the user is stored in browser `localStora
 `GET /api/models` returns `defaultModel` read from `~/.pi/agent/settings.json`. `ChatWindow` pre-selects this on mount for new sessions. Explicit browser model/thinking selections are applied atomically during AgentSession construction, then `lib/startup-preferences.ts` persists their effective values without replaying `set_model`/`set_thinking_level`; implicit `enabledModels` fallbacks and thinking pins are not persisted.
 
 ### `enabledModels` scoping
-The `enabledModels` setting uses pi's `--models` syntax: minimatch globs against `provider/modelId` or a bare `modelId`, fuzzy matching for non-glob patterns, and an optional `:thinkingLevel` suffix. Never compare those patterns as literal strings — `lib/model-scope.ts` delegates to the SDK's `resolveModelScopeWithDiagnostics()` so pi-web and the TUI agree on the visible model list, and falls back to all available models when patterns resolve to nothing. `startRpcSession()` resolves that scope before creating an AgentSession and passes the selected initial model, thinking pin, and SDK-native `scopedModels` atomically; `GET /api/models` reuses the helper only for selector data, `thinkingLevelPins`, and `modelScopeWarnings` display.
+The `enabledModels` setting uses pi's `--models` syntax: minimatch globs against `provider/modelId` or a bare `modelId`, fuzzy matching for non-glob patterns, and an optional `:thinkingLevel` suffix. Never compare those patterns as literal strings — `lib/model-scope.ts` delegates to the SDK's `resolveModelScopeWithDiagnostics()` so pi-web and the TUI agree on the visible model list, and falls back to all available models when patterns resolve to nothing. `startRpcSession()` resolves that scope before creating an AgentSession and passes the selected initial model, thinking pin, and SDK-native `scopedModels` atomically; `GET /api/models` reuses the helper only for selector data, `thinkingLevelPins`, and `modelScopeWarnings` display. Settings → Model scope mirrors pi's `/scoped-models`: `GET/PUT /api/models/scope` resolves stored patterns to checkbox ids and persists exact selections through `SettingsManager.setEnabledModels()`; selecting every model clears the setting so providers added later remain automatically visible only in the unrestricted state.
 
 ### SSE reconnect on page refresh mid-stream
 On `ChatWindow` mount, `GET /api/agent/[id]` is called. If `state.isStreaming === true`, SSE is reconnected automatically. `thinkingLevel` and `isCompacting` are also synced from this response.
@@ -238,8 +240,9 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 - `src-tauri/` is a Tauri 2 shell that spawns the Next.js standalone server as a bundled Node.js sidecar and loads it in WebView2; see `docs/adr/0004-windows-desktop-tauri.md` and `desktop/README.md`.
 - Dev: `npm run dev` (terminal 1) + `npm run desktop:dev` (terminal 2). The dev shell attaches to port 30141 and spawns no sidecar.
 - `npm run desktop:server` assembles `src-tauri/{server,node}` (gitignored); it sets `PI_WEB_STANDALONE_BUILD=1`, which is the only thing that enables `output: "standalone"` in `next.config.ts` — npm release builds must keep producing regular `.next` output for `next start`.
-- `npm run desktop:build` produces the NSIS installer; CI (`.github/workflows/desktop-windows.yml`) builds it on `windows-latest` from `desktop-v*` tags.
+- `npm run desktop:build` produces the NSIS installer; CI (`.github/workflows/desktop-windows.yml`) builds it on `windows-latest` from `desktop-v*` tags. Every release increments the patch version and uses a new immutable tag; the workflow verifies that `desktop-vX.Y.Z`, `package.json`, and `src-tauri/Cargo.toml` agree.
 - The shell sets `PI_WEB_DESKTOP=1` and `PI_WEB_SKIP_VERSION_CHECK=1` on the sidecar; desktop updates ship via the installer, not the npm version check.
+- Production desktop persists and reuses its loopback sidecar port in `desktop-settings.json` so the WebView origin remains stable across launches. The first port is persisted only after a nonce-authenticated `/api/desktop-health` response; a temporary collision uses an unpersisted fallback for that launch and never navigates WebView2 to an unverified local service. Stable origin is required for browser-local preferences such as hidden projects/sessions.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

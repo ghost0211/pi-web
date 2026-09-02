@@ -1,10 +1,11 @@
 // Pi Web Desktop: a thin Tauri shell around the local pi-web Next.js server.
 //
 // The web UI is served by a Node.js sidecar (the Next.js standalone build in
-// `server/` plus a bundled Node runtime in `node/`). This process reserves a
-// free loopback port, spawns the sidecar, waits for it to answer HTTP, then
-// points the WebView2 window at it. Closing the app kills the whole sidecar
-// process tree because agent sessions (and any shells they spawned) live in it.
+// `server/` plus a bundled Node runtime in `node/`). The first launch reserves
+// a free loopback port and persists it; later launches reuse that port when it
+// is available so WebView2 keeps a stable origin (and therefore localStorage).
+// Closing the app kills the whole sidecar process tree because agent sessions
+// (and any shells their tools spawned) live in it.
 //
 // The shell also owns the desktop-only behaviors: a system tray icon and the
 // "what does closing the window mean" setting (minimize to tray vs. quit),
@@ -14,12 +15,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
@@ -61,10 +62,51 @@ fn settings_path(app: &AppHandle) -> Option<PathBuf> {
         .map(|dir| dir.join("desktop-settings.json"))
 }
 
+fn load_settings_object(
+    app: &AppHandle,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let path = settings_path(app).ok_or_else(|| "desktop settings path unavailable".to_string())?;
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(format!("failed to read desktop settings: {error}")),
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|error| format!("invalid desktop settings JSON: {error}"))?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "desktop settings must be a JSON object".to_string())
+}
+
+fn read_settings_object(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
+    load_settings_object(app).unwrap_or_default()
+}
+
+/// Fail closed on corrupt/unreadable settings instead of replacing the file
+/// with one field and silently deleting preferences owned by other features.
+fn update_setting(app: &AppHandle, key: &str, value: serde_json::Value) {
+    let mut settings = match load_settings_object(app) {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("refusing to overwrite desktop settings: {error}");
+            return;
+        }
+    };
+    settings.insert(key.to_string(), value);
+    let Some(path) = settings_path(app) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(error) = fs::write(path, serde_json::Value::Object(settings).to_string()) {
+        eprintln!("failed to write desktop settings: {error}");
+    }
+}
+
 fn read_close_behavior(app: &AppHandle) -> String {
-    let raw = settings_path(app).and_then(|path| fs::read_to_string(path).ok());
-    raw.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("closeBehavior")?.as_str().map(str::to_owned))
+    read_settings_object(app)
+        .get("closeBehavior")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
         .filter(|behavior| behavior == CLOSE_BEHAVIOR_TRAY || behavior == CLOSE_BEHAVIOR_QUIT)
         .unwrap_or_else(|| CLOSE_BEHAVIOR_TRAY.to_string())
 }
@@ -76,12 +118,19 @@ fn persist_close_behavior(app: &AppHandle) {
         .lock()
         .map(|value| value.clone())
         .unwrap_or_else(|_| CLOSE_BEHAVIOR_TRAY.to_string());
-    let Some(path) = settings_path(app) else { return };
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let body = serde_json::json!({ "closeBehavior": behavior }).to_string();
-    let _ = fs::write(path, body);
+    update_setting(app, "closeBehavior", serde_json::Value::String(behavior));
+}
+
+fn read_server_port(app: &AppHandle) -> Option<u16> {
+    read_settings_object(app)
+        .get("serverPort")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0)
+}
+
+fn persist_server_port(app: &AppHandle, port: u16) {
+    update_setting(app, "serverPort", serde_json::Value::from(port));
 }
 
 fn current_close_behavior(app: &AppHandle) -> String {
@@ -199,21 +248,63 @@ fn free_loopback_port() -> u16 {
         .expect("failed to reserve an ephemeral loopback port")
 }
 
-/// Any complete HTTP response (even an error status) proves the server is up.
-fn http_ready(port: u16) -> bool {
+fn loopback_port_available(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+struct ServerPortSelection {
+    port: u16,
+    /// The first successful launch establishes the canonical WebView origin.
+    /// A one-off fallback caused by a temporary collision must not replace it.
+    persist_on_ready: bool,
+}
+
+/// Reusing the same loopback port keeps the desktop WebView on a stable origin,
+/// so browser-local preferences (including hidden projects/sessions) survive
+/// app restarts. If the saved port is temporarily occupied, use an unpersisted
+/// fallback for this launch and retry the canonical port next time.
+fn desktop_server_port(app: &AppHandle) -> ServerPortSelection {
+    match read_server_port(app) {
+        Some(port) if loopback_port_available(port) => ServerPortSelection {
+            port,
+            persist_on_ready: false,
+        },
+        Some(_) => ServerPortSelection {
+            port: free_loopback_port(),
+            persist_on_ready: false,
+        },
+        None => ServerPortSelection {
+            port: free_loopback_port(),
+            persist_on_ready: true,
+        },
+    }
+}
+
+fn new_health_token() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
+}
+
+/// Only the bundled sidecar knows this per-launch nonce. Checking it prevents a
+/// loopback bind race from navigating WebView2 to an unrelated local service.
+fn http_ready(port: u16, health_token: &str) -> bool {
     let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
     if stream
-        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .write_all(b"GET /api/desktop-health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .is_err()
     {
         return false;
     }
-    let mut buf = [0u8; 16];
-    matches!(stream.read(&mut buf), Ok(n) if n > 0)
+    let mut response = Vec::with_capacity(1024);
+    let _ = stream.take(4096).read_to_end(&mut response);
+    String::from_utf8_lossy(&response).contains(health_token)
 }
 
 /// `<install>/node`, containing the bundled Node.js runtime.
@@ -244,11 +335,13 @@ fn path_with_bundled_node(node_dir: &std::path::Path) -> Option<std::ffi::OsStri
     std::env::join_paths(paths).ok().or(existing)
 }
 
-fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, u16)> {
+fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, ServerPortSelection, String)> {
     let node_dir = node_dir(app);
     let server_dir = server_dir(app);
     let node_bin = node_dir.join(if cfg!(windows) { "node.exe" } else { "node" });
-    let port = free_loopback_port();
+    let port_selection = desktop_server_port(app);
+    let port = port_selection.port;
+    let health_token = new_health_token();
 
     // Persist server logs so startup failures on user machines are debuggable.
     let log_dir = app.path().app_log_dir().unwrap_or_else(|_| server_dir.clone());
@@ -269,6 +362,7 @@ fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, u16)> {
         .env("PORT", port.to_string())
         // Marker for future desktop-only server behavior.
         .env("PI_WEB_DESKTOP", "1")
+        .env("PI_WEB_DESKTOP_HEALTH_TOKEN", &health_token)
         // Desktop updates ship through the installer, not the npm self-check.
         .env("PI_WEB_SKIP_VERSION_CHECK", "1")
         .stdout(stdout)
@@ -283,7 +377,9 @@ fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, u16)> {
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    command.spawn().map(|child| (child, port))
+    command
+        .spawn()
+        .map(|child| (child, port_selection, health_token))
 }
 
 fn kill_server(app: &AppHandle) {
@@ -356,23 +452,36 @@ fn main() {
                 let window = build_main_window(&handle, WebviewUrl::App("index.html".into()), false);
                 install_close_handler(&window);
                 match spawn_server(&handle) {
-                    Ok((child, port)) => {
+                    Ok((child, port_selection, health_token)) => {
                         handle
                             .state::<Mutex<DesktopServer>>()
                             .lock()
                             .expect("desktop server state poisoned")
                             .child = Some(child);
+                        let ready_handle = handle.clone();
                         std::thread::spawn(move || {
+                            let port = port_selection.port;
                             let deadline = Instant::now() + READY_TIMEOUT;
-                            while Instant::now() < deadline && !http_ready(port) {
+                            let mut ready = false;
+                            while Instant::now() < deadline {
+                                if http_ready(port, &health_token) {
+                                    ready = true;
+                                    break;
+                                }
                                 std::thread::sleep(READY_POLL_INTERVAL);
                             }
-                            // Navigate even after a timeout: the WebView error
-                            // page beats a silent hang, and the loading page
-                            // tells the user where the server log lives.
-                            let url = Url::parse(&format!("http://127.0.0.1:{port}/"))
-                                .expect("invalid loopback URL");
-                            let _ = window.navigate(url);
+                            if ready {
+                                if port_selection.persist_on_ready {
+                                    persist_server_port(&ready_handle, port);
+                                }
+                                let url = Url::parse(&format!("http://127.0.0.1:{port}/"))
+                                    .expect("invalid loopback URL");
+                                let _ = window.navigate(url);
+                            } else {
+                                eprintln!("pi-web sidecar readiness check timed out");
+                            }
+                            // On timeout keep the trusted bundled loading page
+                            // visible; never navigate to an unverified service.
                             let _ = window.show();
                             let _ = window.set_focus();
                         });

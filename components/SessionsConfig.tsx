@@ -12,6 +12,7 @@ import {
   removeHiddenSessionsForProject,
 } from "@/lib/hidden-sessions";
 import type { SessionInfo } from "@/lib/types";
+import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import {
   ConfigPanelShell,
@@ -74,7 +75,7 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
   const projectSessions = useMemo(() => (
     selectedProjectKey
       ? sessions
-          .filter((session) => session.cwd === selectedProjectKey)
+          .filter((session) => workspaceKeyOf(session) === selectedProjectKey)
           .sort((a, b) => b.modified.localeCompare(a.modified))
       : []
   ), [sessions, selectedProjectKey]);
@@ -90,7 +91,7 @@ export function SessionsConfig({ onClose, embedded = false }: { onClose: () => v
   };
 
   const removeProjectPermanently = async (key: string) => {
-    const toDelete = sessions.filter((session) => session.cwd === key);
+    const toDelete = sessions.filter((session) => workspaceKeyOf(session) === key);
     await Promise.allSettled(toDelete.map((session) => (
       fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" })
     )));

@@ -19,6 +19,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import {
   cpSync,
   createWriteStream,
@@ -75,13 +76,32 @@ function run(command, args, options = {}) {
   }
 }
 
+function resolveNextBin() {
+  // Same resolution strategy as bin/pi-web.js.
+  const require = createRequire(import.meta.url);
+  try {
+    return require.resolve("next/dist/bin/next", { paths: [repoRoot] });
+  } catch {
+    try {
+      const nextPkg = require.resolve("next/package.json", { paths: [repoRoot] });
+      return join(dirname(nextPkg), "dist", "bin", "next");
+    } catch {
+      return join(repoRoot, "node_modules", "next", "dist", "bin", "next");
+    }
+  }
+}
+
 function buildNextApp() {
   if (process.env.PI_DESKTOP_SKIP_NEXT_BUILD === "1") {
     console.log("build-desktop-server: skipping next build (PI_DESKTOP_SKIP_NEXT_BUILD=1)");
     return;
   }
   console.log("build-desktop-server: running next build…");
-  run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], {
+  // Invoke next's CLI entry directly with the current Node. Spawning npm.cmd
+  // hits EINVAL on Windows — since the CVE-2024-27980 fix, Node refuses to
+  // spawn .cmd/.bat files without shell:true. Keep the args in sync with the
+  // "build" script in package.json.
+  run(process.execPath, [resolveNextBin(), "build", "--webpack"], {
     cwd: repoRoot,
     env: { ...process.env, PI_WEB_STANDALONE_BUILD: "1" },
   });

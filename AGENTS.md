@@ -233,6 +233,14 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 --font-mono
 ```
 
+## Windows Desktop (Tauri)
+
+- `src-tauri/` is a Tauri 2 shell that spawns the Next.js standalone server as a bundled Node.js sidecar and loads it in WebView2; see `docs/adr/0004-windows-desktop-tauri.md` and `desktop/README.md`.
+- Dev: `npm run dev` (terminal 1) + `npm run desktop:dev` (terminal 2). The dev shell attaches to port 30141 and spawns no sidecar.
+- `npm run desktop:server` assembles `src-tauri/{server,node}` (gitignored); it sets `PI_WEB_STANDALONE_BUILD=1`, which is the only thing that enables `output: "standalone"` in `next.config.ts` — npm release builds must keep producing regular `.next` output for `next start`.
+- `npm run desktop:build` produces the NSIS installer; CI (`.github/workflows/desktop-windows.yml`) builds it on `windows-latest` from `desktop-v*` tags.
+- The shell sets `PI_WEB_DESKTOP=1` and `PI_WEB_SKIP_VERSION_CHECK=1` on the sidecar; desktop updates ship via the installer, not the npm version check.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know

@@ -13,6 +13,9 @@ try {
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: configDir,
+  // Only the desktop (Tauri) build needs the self-contained standalone server;
+  // keep it out of the npm release build so `next start` output stays as-is.
+  ...(process.env.PI_WEB_STANDALONE_BUILD === "1" ? { output: "standalone" as const } : {}),
   serverExternalPackages: [
     "undici",
     "web-push",

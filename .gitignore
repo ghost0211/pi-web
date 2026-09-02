@@ -43,3 +43,9 @@ next-env.d.ts
 .factory
 e2e_*.mjs
 .pi-web-attachments/
+
+# desktop (Tauri)
+/src-tauri/target/
+/src-tauri/server/
+/src-tauri/node/
+/src-tauri/gen/schemas/

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pi Web</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #111827;
+    --text-muted: #4b5563;
+    --text-dim: #9ca3af;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121215;
+      --text: #f4f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+      --accent: #3b82f6;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    user-select: none;
+    cursor: default;
+  }
+  .container { text-align: center; max-width: 26rem; padding: 0 2rem; }
+  .spinner {
+    width: 2.25rem;
+    height: 2.25rem;
+    margin: 0 auto 1.25rem;
+    border: 3px solid var(--text-dim);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; }
+  p { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; }
+  #slow { display: none; margin-top: 1rem; color: var(--text-dim); font-size: 0.78rem; }
+  #slow code {
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="spinner" aria-hidden="true"></div>
+    <h1>Starting Pi Web…</h1>
+    <p>The local server is starting up. This usually takes a few seconds.</p>
+    <p id="slow">
+      Taking longer than expected. If the app does not load, check the server log at
+      <code>%LOCALAPPDATA%\com.github.ghost0211.pi-web\logs\pi-web-server.log</code>
+      and restart the app.
+    </p>
+  </div>
+  <script>
+    setTimeout(function () {
+      document.getElementById("slow").style.display = "block";
+    }, 20000);
+  </script>
+</body>
+</html>

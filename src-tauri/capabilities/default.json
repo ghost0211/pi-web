@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for the main window. The window-state and single-instance plugins run entirely on the Rust side, so no plugin permissions are needed here.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Pi Web",
+  "productName": "Pi Web Desktop",
   "version": "../package.json",
   "identifier": "com.github.ghost0211.pi-web",
   "build": {

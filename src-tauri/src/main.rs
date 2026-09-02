@@ -148,7 +148,7 @@ fn kill_server(app: &AppHandle) {
 
 fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> WebviewWindow {
     WebviewWindowBuilder::new(app, "main", url)
-        .title("Pi Web")
+        .title("Pi Web Desktop")
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
         .visible(visible)

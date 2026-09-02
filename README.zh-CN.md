@@ -56,7 +56,7 @@ npm run dev
 
 ### Windows 桌面端
 
-项目提供 Windows 桌面客户端（Tauri + WebView2，内置 Node.js 运行时，无需单独安装 Node.js）。可通过 `npm run desktop:build` 本地构建 NSIS 安装包，或使用 CI 工作流构建；详见 [`desktop/README.md`](./desktop/README.md)。
+项目提供 Windows 桌面客户端 —— **Pi Web Desktop**（Tauri + WebView2，内置 Node.js 运行时，无需单独安装 Node.js）。可通过 `npm run desktop:build` 本地构建 NSIS 安装包，或使用 CI 工作流构建；详见 [`desktop/README.md`](./desktop/README.md)。
 
 ## 启动参数与环境变量
 

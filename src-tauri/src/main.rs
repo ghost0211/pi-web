@@ -1,10 +1,15 @@
 // Pi Web Desktop: a thin Tauri shell around the local pi-web Next.js server.
 //
 // The web UI is served by a Node.js sidecar (the Next.js standalone build in
-// `server/` plus a bundled Node runtime in `node/`). This process reserves a free
-// loopback port, spawns the sidecar, waits for it to answer HTTP, then points
-// the WebView2 window at it. Closing the app kills the whole sidecar process
-// tree because agent sessions (and any shells they spawned) live in it.
+// `server/` plus a bundled Node runtime in `node/`). This process reserves a
+// free loopback port, spawns the sidecar, waits for it to answer HTTP, then
+// points the WebView2 window at it. Closing the app kills the whole sidecar
+// process tree because agent sessions (and any shells they spawned) live in it.
+//
+// The shell also owns the desktop-only behaviors: a system tray icon and the
+// "what does closing the window mean" setting (minimize to tray vs. quit),
+// persisted in `<app_config>/desktop-settings.json` and editable both from the
+// tray menu and from the web settings UI via IPC commands.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -15,16 +20,177 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{
+    AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 
 /// Matches `npm run dev` (next dev -H 127.0.0.1 -p 30141).
 const DEV_SERVER_URL: &str = "http://127.0.0.1:30141/";
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
+const CLOSE_BEHAVIOR_TRAY: &str = "minimize-to-tray";
+const CLOSE_BEHAVIOR_QUIT: &str = "quit";
+const TRAY_ID: &str = "main-tray";
+const TRAY_ITEM_SHOW: &str = "show";
+const TRAY_ITEM_QUIT: &str = "quit";
+const TRAY_ITEM_MINIMIZE_ON_CLOSE: &str = "minimize-on-close";
+
 /// Handle to the sidecar so it can be terminated on exit.
 struct DesktopServer {
     child: Option<Child>,
+}
+
+/// Close behavior preference. Default: minimize to tray — closing the window
+/// must not kill the user's agent sessions unless they opt in.
+struct DesktopSettings {
+    close_behavior: Mutex<String>,
+}
+
+/// Handle to the tray check item so the IPC command can keep it in sync.
+struct TrayHandles {
+    minimize_on_close: CheckMenuItem<tauri::Wry>,
+}
+
+fn settings_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("desktop-settings.json"))
+}
+
+fn read_close_behavior(app: &AppHandle) -> String {
+    let raw = settings_path(app).and_then(|path| fs::read_to_string(path).ok());
+    raw.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|value| value.get("closeBehavior")?.as_str().map(str::to_owned))
+        .filter(|behavior| behavior == CLOSE_BEHAVIOR_TRAY || behavior == CLOSE_BEHAVIOR_QUIT)
+        .unwrap_or_else(|| CLOSE_BEHAVIOR_TRAY.to_string())
+}
+
+fn persist_close_behavior(app: &AppHandle) {
+    let behavior = app
+        .state::<DesktopSettings>()
+        .close_behavior
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_else(|_| CLOSE_BEHAVIOR_TRAY.to_string());
+    let Some(path) = settings_path(app) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let body = serde_json::json!({ "closeBehavior": behavior }).to_string();
+    let _ = fs::write(path, body);
+}
+
+fn current_close_behavior(app: &AppHandle) -> String {
+    app.state::<DesktopSettings>()
+        .close_behavior
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_else(|_| CLOSE_BEHAVIOR_TRAY.to_string())
+}
+
+/// Single writer used by the tray menu, the IPC command, and startup: keeps
+/// state, the tray check item, and the persisted file in sync.
+fn apply_close_behavior(app: &AppHandle, behavior: &str) {
+    if behavior != CLOSE_BEHAVIOR_TRAY && behavior != CLOSE_BEHAVIOR_QUIT {
+        return;
+    }
+    if let Ok(mut value) = app.state::<DesktopSettings>().close_behavior.lock() {
+        *value = behavior.to_string();
+    }
+    if let Some(handles) = app.try_state::<TrayHandles>() {
+        let _ = handles
+            .minimize_on_close
+            .set_checked(behavior == CLOSE_BEHAVIOR_TRAY);
+    }
+    persist_close_behavior(app);
+}
+
+#[tauri::command]
+fn get_close_behavior(app: AppHandle) -> String {
+    current_close_behavior(&app)
+}
+
+#[tauri::command]
+fn set_close_behavior(app: AppHandle, behavior: String) -> Result<(), String> {
+    if behavior != CLOSE_BEHAVIOR_TRAY && behavior != CLOSE_BEHAVIOR_QUIT {
+        return Err(format!("unknown close behavior: {behavior}"));
+    }
+    apply_close_behavior(&app, &behavior);
+    Ok(())
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show = MenuItemBuilder::with_id(TRAY_ITEM_SHOW, "Show Pi Web Desktop").build(app)?;
+    let minimize_on_close =
+        CheckMenuItemBuilder::with_id(TRAY_ITEM_MINIMIZE_ON_CLOSE, "Minimize to tray on close")
+            .checked(current_close_behavior(app) == CLOSE_BEHAVIOR_TRAY)
+            .build(app)?;
+    let quit = MenuItemBuilder::with_id(TRAY_ITEM_QUIT, "Quit").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .items(&[&show, &minimize_on_close, &quit])
+        .build()?;
+
+    let minimize_item_for_events = minimize_on_close.clone();
+    TrayIconBuilder::with_id(TRAY_ID)
+        .icon(app.default_window_icon().expect("no window icon").clone())
+        .tooltip("Pi Web Desktop")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            TRAY_ITEM_SHOW => show_main_window(app),
+            TRAY_ITEM_QUIT => app.exit(0),
+            TRAY_ITEM_MINIMIZE_ON_CLOSE => {
+                // CheckMenuItem has already toggled itself at this point.
+                let checked = minimize_item_for_events.is_checked().unwrap_or(true);
+                apply_close_behavior(
+                    app,
+                    if checked { CLOSE_BEHAVIOR_TRAY } else { CLOSE_BEHAVIOR_QUIT },
+                );
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    app.manage(TrayHandles { minimize_on_close });
+    Ok(())
+}
+
+/// Closing the window hides it instead of exiting when the user prefers the
+/// tray; "Quit" from the tray menu calls `app.exit(0)` which never reaches
+/// this handler, so it always performs a real exit.
+fn install_close_handler(window: &WebviewWindow) {
+    let window_ref = window.clone();
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            let app = window_ref.app_handle();
+            if current_close_behavior(&app) == CLOSE_BEHAVIOR_TRAY {
+                api.prevent_close();
+                let _ = window_ref.hide();
+            }
+        }
+    });
 }
 
 fn free_loopback_port() -> u16 {
@@ -159,7 +325,7 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> Webview
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Focus the existing window when a second instance is launched.
+            // A second launch acts as "restore from tray": focus the window.
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
@@ -168,18 +334,27 @@ fn main() {
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Mutex::new(DesktopServer { child: None }))
+        .invoke_handler(tauri::generate_handler![get_close_behavior, set_close_behavior])
         .setup(|app| {
             let handle = app.handle().clone();
+            handle.manage(DesktopSettings {
+                close_behavior: Mutex::new(read_close_behavior(&handle)),
+            });
+            if let Err(error) = setup_tray(&handle) {
+                eprintln!("failed to set up the system tray: {error}");
+            }
             // Runtime branch (instead of #[cfg]) so both paths typecheck under
             // a single `cargo check`.
             if cfg!(debug_assertions) {
                 // `tauri dev`: attach to the separately-started Next.js dev
                 // server (see desktop/README.md); no sidecar is spawned.
                 let url = Url::parse(DEV_SERVER_URL).expect("invalid dev server URL");
-                build_main_window(&handle, WebviewUrl::External(url), true);
+                let window = build_main_window(&handle, WebviewUrl::External(url), true);
+                install_close_handler(&window);
             } else {
                 // Show a local loading page while the sidecar boots.
                 let window = build_main_window(&handle, WebviewUrl::App("index.html".into()), false);
+                install_close_handler(&window);
                 match spawn_server(&handle) {
                     Ok((child, port)) => {
                         handle

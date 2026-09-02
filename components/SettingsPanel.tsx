@@ -5,6 +5,12 @@ import { useI18n } from "@/hooks/useI18n";
 import { useTheme, type ThemePreference } from "@/hooks/useTheme";
 import { useFontSize, type FontSizePreference } from "@/hooks/useFontSize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import {
+  getDesktopCloseBehavior,
+  isDesktopApp,
+  setDesktopCloseBehavior,
+  type DesktopCloseBehavior,
+} from "@/lib/desktop";
 import type { ShellToolSettingsResponse } from "@/lib/api-types";
 import {
   setLastSettingsSection,
@@ -56,7 +62,7 @@ function ThemeIcon({ preference }: { preference: ThemePreference }) {
   return <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></svg>;
 }
 
-type GeneralSubTab = "appearance" | "automation" | "environment";
+type GeneralSubTab = "appearance" | "automation" | "environment" | "desktop";
 
 interface GeneralSettingsData {
   theme?: string;
@@ -79,6 +85,11 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
   const [shellSaving, setShellSaving] = useState(false);
   const [savingField, setSavingField] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Desktop-shell integration: the subtab only exists when the page runs
+  // inside Pi Web Desktop (window.__TAURI__ bridge present).
+  const [desktopApp] = useState(() => isDesktopApp());
+  const [closeBehavior, setCloseBehavior] = useState<DesktopCloseBehavior | null>(null);
+  const [closeBehaviorSaving, setCloseBehaviorSaving] = useState(false);
 
   const themeOptions: { id: ThemePreference; label: string }[] = [
     { id: "light", label: t("settings.themeLight") },
@@ -115,8 +126,13 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
     }).catch((cause) => {
       if (!cancelled) setErrorMsg(cause instanceof Error ? cause.message : String(cause));
     });
+    if (desktopApp) {
+      void getDesktopCloseBehavior()
+        .then((behavior) => { if (!cancelled) setCloseBehavior(behavior); })
+        .catch((cause) => { if (!cancelled) setErrorMsg(cause instanceof Error ? cause.message : String(cause)); });
+    }
     return () => { cancelled = true; };
-  }, []);
+  }, [desktopApp]);
 
   const updateSetting = async (field: keyof GeneralSettingsData, value: unknown) => {
     setSavingField(String(field));
@@ -160,6 +176,19 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
     }
   };
 
+  const updateCloseBehavior = async (value: DesktopCloseBehavior) => {
+    setCloseBehaviorSaving(true);
+    setErrorMsg(null);
+    try {
+      await setDesktopCloseBehavior(value);
+      setCloseBehavior(value);
+    } catch (cause) {
+      setErrorMsg(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCloseBehaviorSaving(false);
+    }
+  };
+
   return (
     <div className="settings-general">
       <div className="settings-subtab-bar">
@@ -184,6 +213,15 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
         >
           {t("settings.tabEnvironment")}
         </button>
+        {desktopApp && (
+          <button
+            type="button"
+            className={`settings-subtab-pill ${subTab === "desktop" ? "is-active" : ""}`}
+            onClick={() => setSubTab("desktop")}
+          >
+            {t("settings.tabDesktop")}
+          </button>
+        )}
       </div>
 
       <div className="settings-general-content">
@@ -406,6 +444,37 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
               </div>
             </section>
           </>
+        )}
+
+        {subTab === "desktop" && desktopApp && (
+          <section className="settings-general-section">
+            <h3 className="settings-general-heading">{t("settings.closeBehavior")}</h3>
+            <p className="settings-general-description">{t("settings.closeBehaviorDescription")}</p>
+            <div role="radiogroup" aria-label={t("settings.closeBehavior")} className="settings-language-options">
+              {([
+                { id: "minimize-to-tray" as DesktopCloseBehavior, label: t("settings.closeBehaviorTray") },
+                { id: "quit" as DesktopCloseBehavior, label: t("settings.closeBehaviorQuit") },
+              ]).map((option) => {
+                const selected = closeBehavior === option.id;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={closeBehaviorSaving}
+                    onClick={() => void updateCloseBehavior(option.id)}
+                    className="settings-language-option"
+                  >
+                    <span className="settings-language-radio">
+                      {selected && <span className="settings-language-radio-dot" />}
+                    </span>
+                    <span className="settings-language-label">{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         )}
 
         {errorMsg && <p role="alert" className="settings-general-error">{errorMsg}</p>}

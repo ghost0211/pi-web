@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-remote",
+  "description": "Grants the loopback-hosted pi-web pages (any ephemeral port) access to the desktop shell settings commands.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": ["allow-get-close-behavior", "allow-set-close-behavior"]
+}

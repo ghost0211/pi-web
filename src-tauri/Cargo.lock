@@ -2474,6 +2474,7 @@ dependencies = [
 name = "pi-web-desktop"
 version = "0.9.0"
 dependencies = [
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",

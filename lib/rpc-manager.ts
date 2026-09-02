@@ -873,6 +873,12 @@ export class AgentSessionWrapper {
       }
 
       case "reload": {
+        // Reloading invalidates the extension runner mid-flight; any tool call
+        // executing through an extension wrapper would lose its real result to
+        // the stale-ctx assertion (pi SDK wrapRegisteredTool). Refuse instead.
+        if (this.inner.isStreaming) {
+          throw new Error("Cannot reload while the session is running; wait for the current run to finish and try again.");
+        }
         const activeToolNames = this.inner.getActiveToolNames();
         await this.waitForExtensionsBound();
         this.extensionStatuses.clear();
@@ -1547,6 +1553,9 @@ export class AgentSessionWrapper {
       },
       switchSession: async () => ({ cancelled: true }),
       reload: async () => {
+        if (this.inner.isStreaming) {
+          throw new Error("Cannot reload while the session is running; wait for the current run to finish and try again.");
+        }
         this.extensionStatuses.clear();
         this.resetExtensionWidgetsForReload();
         this.syncProjectTrust();

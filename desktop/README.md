@@ -86,18 +86,25 @@ duplicate entry, and the app-data/log location stays stable.
 CI (`.github/workflows/desktop-windows.yml`) builds the installer on
 `windows-latest`:
 
-Every installer update must increment the patch version; never move or reuse an
-existing desktop tag. Keep `package.json`, the root `package-lock.json`, and
-`src-tauri/Cargo.toml` / `Cargo.lock` in sync, commit the bump, then tag it:
+Every installer update must increment the patch version; never move or reuse a
+tag once its release has been published. Keep `package.json`, the root
+`package-lock.json`, and `src-tauri/Cargo.toml` / `Cargo.lock` in sync, commit
+the bump, then tag it:
 
 ```bash
 # Example: 0.9.0 -> 0.9.1
 git tag desktop-v0.9.1 && git push origin desktop-v0.9.1
 ```
 
-The workflow rejects a tag that does not match both package versions. Or trigger
+The workflow rejects a tag that does not match all four package versions. Or trigger
 the workflow manually and download the artifact (without creating a release).
 Tag pushes create a GitHub release with the installer attached.
+
+CI layout: an `ubuntu-latest` job runs `npm test` / `tsc` / `lint` first — the
+web test suite is Linux-validated and several pre-existing tests encode POSIX
+assumptions (CRLF source markers, `PATH` vs `Path` casing). The Windows job then
+focuses on the installer build. Fixing those tests to be Windows-native is a
+separate work item.
 
 ## Troubleshooting
 

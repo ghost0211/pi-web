@@ -2,7 +2,8 @@ name: desktop-windows
 
 # Builds the Windows (NSIS) installer for the Tauri desktop client.
 # Trigger manually, or push a version-matching tag like `desktop-v0.9.1` to
-# also attach the installer to a GitHub release. Never move an existing tag.
+# also attach the installer to a GitHub release. Never move a tag once its
+# release has been published.
 
 on:
   workflow_dispatch:
@@ -14,16 +15,14 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  # The web test suite is Linux-validated; several pre-existing tests encode
+  # POSIX assumptions (CRLF source markers, PATH vs Path casing). Run
+  # verification where it is green and keep the Windows job focused on the
+  # platform-specific installer build.
+  test:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Verify desktop release version
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        shell: bash
-        run: |
-          node -e "const fs=require('fs'); const npm=require('./package.json').version; const lock=require('./package-lock.json').version; const cargo=fs.readFileSync('src-tauri/Cargo.toml','utf8').match(/^version = \"([^\"]+)\"/m)?.[1]; const cargoLock=fs.readFileSync('src-tauri/Cargo.lock','utf8').match(/name = \"pi-web-desktop\"\r?\nversion = \"([^\"]+)\"/)?.[1]; const expected='desktop-v'+npm; if (process.env.GITHUB_REF_NAME !== expected || [lock,cargo,cargoLock].some(v => v !== npm)) { console.error('Expected '+expected+' with all package/Cargo versions '+npm+', got tag '+process.env.GITHUB_REF_NAME+', lock '+lock+', Cargo '+cargo+', Cargo.lock '+cargoLock); process.exit(1); }"
 
       - uses: actions/setup-node@v4
         with:
@@ -41,6 +40,26 @@ jobs:
 
       - name: Lint web app
         run: npm run lint
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify desktop release version
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: bash
+        run: |
+          node -e "const fs=require('fs'); const npm=require('./package.json').version; const lock=require('./package-lock.json').version; const cargo=fs.readFileSync('src-tauri/Cargo.toml','utf8').match(/^version = \"([^\"]+)\"/m)?.[1]; const cargoLock=fs.readFileSync('src-tauri/Cargo.lock','utf8').match(/name = \"pi-web-desktop\"\r?\nversion = \"([^\"]+)\"/)?.[1]; const expected='desktop-v'+npm; if (process.env.GITHUB_REF_NAME !== expected || [lock,cargo,cargoLock].some(v => v !== npm)) { console.error('Expected '+expected+' with all package/Cargo versions '+npm+', got tag '+process.env.GITHUB_REF_NAME+', lock '+lock+', Cargo '+cargo+', Cargo.lock '+cargoLock); process.exit(1); }"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
 
       - name: Cache Rust build
         uses: swatinem/rust-cache@v2

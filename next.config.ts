@@ -16,6 +16,19 @@ const nextConfig: NextConfig = {
   // Only the desktop (Tauri) build needs the self-contained standalone server;
   // keep it out of the npm release build so `next start` output stays as-is.
   ...(process.env.PI_WEB_STANDALONE_BUILD === "1" ? { output: "standalone" as const } : {}),
+  // The pi SDK reads theme JSONs and other assets via dynamically computed
+  // paths, which @vercel/nft cannot statically detect — force-include the SDK
+  // dist trees so the standalone (desktop) server is complete. Only affects
+  // server trace output; regular `next build` / `next start` are unaffected.
+  outputFileTracingIncludes: {
+    "/*": [
+      "./node_modules/@earendil-works/pi-coding-agent/dist/**/*",
+      "./node_modules/@earendil-works/pi-agent-core/dist/**/*",
+      "./node_modules/@earendil-works/pi-ai/dist/**/*",
+      "./node_modules/@earendil-works/pi-tui/dist/**/*",
+      "./node_modules/@earendil-works/pi-telemetry/dist/**/*",
+    ],
+  },
   serverExternalPackages: [
     "undici",
     "web-push",

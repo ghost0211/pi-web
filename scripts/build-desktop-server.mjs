@@ -127,6 +127,13 @@ function copyStandaloneServer() {
   if (!existsSync(piSdk)) {
     fail(`standalone output is missing ${piSdk} — check outputFileTracing config`);
   }
+  // Canary for dynamically-pathed runtime assets that nft cannot detect
+  // (regression: the SDK theme loader ENOENT'd on dark.json in the desktop
+  // build). Covered by outputFileTracingIncludes in next.config.ts.
+  const themeCanary = join(piSdk, "dist", "modes", "interactive", "theme", "dark.json");
+  if (!existsSync(themeCanary)) {
+    fail(`standalone output is missing ${themeCanary} — check outputFileTracingIncludes`);
+  }
   console.log(`build-desktop-server: server bundle ready (${formatMiB(dirSize(serverResourceDir))})`);
 }
 

@@ -5,6 +5,15 @@ Node.js sidecar running the Next.js standalone build, then loads it in a
 WebView2 window. All UI, API, and agent-session code is shared with the web
 version — this directory only contains the shell's loading page.
 
+The shell adds the desktop-only behaviors on top: a system tray icon
+(show/quit/left-click to restore) and the close-behavior setting
+(Settings → General → Desktop, or the tray menu's "Minimize to tray on
+close" check item). Closing the window minimizes to the tray by default so
+agent sessions keep running; "Quit" from the tray menu always exits for
+real. The setting is persisted in `<app_config>/desktop-settings.json` and
+reaches the web settings UI through IPC commands granted to loopback
+origins only (`src-tauri/capabilities/desktop-remote.json`).
+
 See `docs/adr/0004-windows-desktop-tauri.md` for the architecture rationale.
 
 ## Layout
@@ -104,3 +113,5 @@ create a GitHub release with the installer attached.
 - `tauri-plugin-updater` auto-updates (needs signing keys + release wiring)
 - code signing certificate
 - native notifications (the in-app sound and web-push still work)
+- localized tray menu labels (the web settings UI is fully localized; the
+  tray menu is English-only for now)

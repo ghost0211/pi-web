@@ -37,6 +37,20 @@ test("keeps local file markdown links in the app", () => {
   assert.doesNotMatch(html, /target=|rel=|\snode=/);
 });
 
+test("preserveLineBreaks renders single newlines as hard breaks (user messages)", () => {
+  const plain = renderMarkdown("第一行\n第二行");
+  assert.doesNotMatch(plain, /<br/);
+
+  const withBreaks = renderToStaticMarkup(
+    React.createElement(MarkdownBody, {
+      cwd: "/home/me/project",
+      preserveLineBreaks: true,
+      onOpenFile() {},
+    }, "第一行\n第二行"),
+  );
+  assert.match(withBreaks, /第一行<br\/>\n?第二行/);
+});
+
 test("keeps single-tilde CJK numeric ranges literal instead of striking them", () => {
   const html = renderMarkdown("5~7U 保证金 × 100~200倍杠杆");
 

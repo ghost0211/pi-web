@@ -4,7 +4,7 @@ import { useMemo, type MouseEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { resolveLocalFileHref } from "@/lib/file-links";
 import { encodeFilePathForApi } from "@/lib/file-paths";
-import { markdownRehypePlugins, markdownRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
+import { markdownRehypePlugins, markdownRemarkPlugins, markdownUserRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
 import { MermaidBlock, CodeBlock } from "./MermaidBlock";
 
 interface MarkdownBodyProps {
@@ -13,9 +13,11 @@ interface MarkdownBodyProps {
   isStreaming?: boolean;
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
+  /** Render single newlines as hard line breaks (user-authored messages). */
+  preserveLineBreaks?: boolean;
 }
 
-export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile }: MarkdownBodyProps) {
+export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile, preserveLineBreaks }: MarkdownBodyProps) {
   const normalizedMarkdown = useMemo(() => normalizeDisplayMath(children), [children]);
   // Stable renderer identities keep stateful blocks mounted across message hover updates.
   const components = useMemo<Components>(() => ({
@@ -91,7 +93,7 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>
       <ReactMarkdown
-        remarkPlugins={markdownRemarkPlugins}
+        remarkPlugins={preserveLineBreaks ? markdownUserRemarkPlugins : markdownRemarkPlugins}
         rehypePlugins={markdownRehypePlugins}
         components={components}
       >

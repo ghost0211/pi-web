@@ -3,6 +3,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkFrontmatter from "remark-frontmatter";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
@@ -349,6 +350,17 @@ export const markdownPreviewRemarkPlugins: ReactMarkdownOptions["remarkPlugins"]
   [remarkFrontmatter, ["yaml"]],
   [remarkGfm, remarkGfmOptions],
   remarkMath,
+];
+
+// User-authored messages are plain text pasted/typed by the user, where a single
+// newline is an intentional line break (exam questions, logs, config snippets).
+// CommonMark would collapse these soft breaks into spaces; the TUI preserves
+// them, so user messages render with remark-breaks for parity (#680).
+export const markdownUserRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [
+  [remarkFrontmatter, ["yaml"]],
+  [remarkGfm, remarkGfmOptions],
+  remarkMath,
+  remarkBreaks,
 ];
 
 export const markdownRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [

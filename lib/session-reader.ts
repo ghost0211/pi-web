@@ -455,9 +455,11 @@ export function buildSessionHistory(
   const sliced = sliceActiveBranch(entries, leafId ?? null, pageSize, excludeLeaf);
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
+  let firstEntryParentId: string | null = null;
   for (const entry of sliced) {
     const message = entryToUiMessage(entry, options);
     if (!message) continue;
+    if (messages.length === 0) firstEntryParentId = entry.parentId ?? null;
     messages.push(message);
     entryIds.push(entry.id);
   }
@@ -467,6 +469,7 @@ export function buildSessionHistory(
     entryIds,
     oldestEntryId: sliced[0]?.id ?? null,
     hasMore: Boolean(tail && tail > 0 && sliced[0]?.parentId),
+    firstEntryParentId,
   };
 }
 
@@ -496,10 +499,12 @@ export function buildSessionContext(
   // fork/navigation targets aligned while preserving pi's compaction ordering.
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
+  let firstEntryParentId: string | null = null;
   for (const entry of contextEntries) {
     const localEntry = entry as unknown as SessionEntry;
     const m = entryToUiMessage(localEntry, options);
     if (m) {
+      if (messages.length === 0) firstEntryParentId = localEntry.parentId ?? null;
       messages.push(m);
       entryIds.push(localEntry.id);
     }
@@ -510,6 +515,7 @@ export function buildSessionContext(
     entryIds,
     oldestEntryId: sliced[0]?.id ?? null,
     hasMore,
+    firstEntryParentId,
     ...getSessionSettings(entries, leafId),
   };
 }

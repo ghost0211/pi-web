@@ -233,7 +233,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
   }, [chatInputRef]);
 
   const {
-    loading, error, messages, entryIds, historyCursor, hasEarlierMessages, streamState,
+    loading, error, messages, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
@@ -763,7 +763,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                 const prevAssistantEntryId =
                   msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
                     ? entryIds[idx - 1]
-                    : undefined;
+                    : msg.role === "user" && idx === 0 && !hasEarlierMessages
+                      // "Edit from here" on the first message truncates the
+                      // branch to before it, i.e. navigates to its parent (#628).
+                      ? (firstEntryParentId ?? undefined)
+                      : undefined;
                 const isVisible = msg.role === "user" || msg.role === "assistant";
                 const currentRefIdx = visibleRefIndexByMessage.get(idx);
                 const keyPrefix = options.keyPrefix ?? "message";
@@ -791,7 +795,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                     onOpenFile={onOpenFile}
                     onOpenSession={onOpenSession}
                     entryId={entryIds[idx]}
-                    onFork={sessionBusy || isNew || (idx === 0 && msg.role === "user") ? undefined : handleFork}
+                    onFork={sessionBusy || isNew ? undefined : handleFork}
                     forking={forkingEntryId === entryIds[idx]}
                     onNavigate={sessionBusy ? undefined : handleNavigate}
                     prevAssistantEntryId={sessionBusy ? undefined : prevAssistantEntryId}

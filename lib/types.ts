@@ -354,6 +354,10 @@ export interface SessionHistory {
   /** Raw active-branch cursor used to fetch the next older page. */
   oldestEntryId: string | null;
   hasMore: boolean;
+  /** Parent of the first message entry — the "Edit from here" navigation
+   *  target for the first user message, whose branch truncation point sits
+   *  before any displayed entry. Null when the first entry has no parent. */
+  firstEntryParentId?: string | null;
 }
 
 /** SDK-selected model context. Compaction may replace old messages with a summary. */

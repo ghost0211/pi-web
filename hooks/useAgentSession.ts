@@ -284,6 +284,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [entryIds, setEntryIds] = useState<string[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  // Navigation target for "Edit from here" on the first message (#628).
+  const [firstEntryParentId, setFirstEntryParentId] = useState<string | null>(null);
   const [streamState, dispatch] = useReducer(streamReducer, INITIAL_STREAMING_STATE);
   const [agentRunning, setAgentRunning] = useState(false);
   const [bashRunning, setBashRunning] = useState(false);
@@ -490,6 +492,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           setEntryIds([]);
           setHistoryCursor(null);
           setHasEarlierMessages(false);
+          setFirstEntryParentId(null);
           setError(null);
         }
         return null;
@@ -504,6 +507,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setEntryIds(persistedHistory.entryIds ?? []);
       setHistoryCursor(persistedHistory.oldestEntryId);
       setHasEarlierMessages(persistedHistory.hasMore);
+      setFirstEntryParentId(persistedHistory.firstEntryParentId ?? null);
       setToolPresetState(d.toolNames !== undefined ? getPresetFromToolNames(d.toolNames) : "default");
       setCurrentModelOverride((current) => modelSwitchPendingRef.current ? current : null);
       setError(null);
@@ -569,6 +573,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const page = d.history ?? d.context;
       setHistoryCursor(page.oldestEntryId);
       setHasEarlierMessages(page.hasMore);
+      setFirstEntryParentId(page.firstEntryParentId ?? null);
       setData((prev) => {
         if (!prev || prev.sessionId !== sid) return prev;
         if (!before) return { ...prev, context: d.context, history: page };
@@ -581,6 +586,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             entryIds: [...page.entryIds, ...previousHistory.entryIds],
             oldestEntryId: page.oldestEntryId,
             hasMore: page.hasMore,
+            firstEntryParentId: page.firstEntryParentId,
           },
         };
       });
@@ -2141,7 +2147,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, entryIds, historyCursor, hasEarlierMessages, streamState,
+    data, loading, error, activeLeafId, messages, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats,

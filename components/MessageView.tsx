@@ -1450,7 +1450,8 @@ function CompactionMessageView({ message }: { message: CustomMessage }) {
 
   return (
     <div style={{ marginBottom: 16 }}>
-      <div
+      <details
+        className="compaction-message-details"
         style={{
           border: "1px solid var(--border)",
           borderRadius: 8,
@@ -1458,38 +1459,41 @@ function CompactionMessageView({ message }: { message: CustomMessage }) {
           background: "var(--bg)",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "7px 10px",
-            borderBottom: "1px solid var(--border)",
-            background: "var(--bg-panel)",
-            color: "var(--text-muted)",
-          }}
-        >
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650 }}>
-            compaction
+        <summary style={{ cursor: "pointer", background: "var(--bg-panel)", color: "var(--text-muted)" }}>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 10px",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <span className="compaction-message-chevron" aria-hidden="true">›</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650 }}>
+              compaction
+            </span>
+            {time && <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
           </span>
-          {time && <span style={{ marginLeft: "auto", color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
-        </div>
+          <span style={{ display: "block", padding: "10px 13px 11px" }}>
+            <span style={{ display: "block", color: "var(--text)", fontSize: 15, fontWeight: 700, lineHeight: 1.35 }}>
+              {t("i18n.conversationCompacted")}
+            </span>
+            <span style={{ display: "block", marginTop: 3, color: "var(--text)", fontSize: 14, lineHeight: 1.5 }}>
+              {t("i18n.compactionDescription")}
+            </span>
+          </span>
+        </summary>
 
-        <div style={{ padding: "11px 13px 12px" }}>
-          <div style={{ color: "var(--text)", fontSize: 15, fontWeight: 700, lineHeight: 1.35 }}>
-             {t("i18n.conversationCompacted")}
-          </div>
-          <div style={{ marginTop: 3, marginBottom: 10, color: "var(--text)", fontSize: 14, lineHeight: 1.5 }}>
-             {t("i18n.compactionDescription")}
-          </div>
+        <div style={{ padding: "11px 13px 12px", borderTop: "1px solid var(--border)" }}>
           {parsedSummary.body ? (
             <MarkdownBody className="markdown-compaction-message">{parsedSummary.body}</MarkdownBody>
           ) : (
-             <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{t("i18n.noSummary")}</span>
+            <span style={{ color: "var(--text-dim)", fontSize: 12 }}>{t("i18n.noSummary")}</span>
           )}
           <CompactionFileMetadata readFiles={parsedSummary.readFiles} modifiedFiles={parsedSummary.modifiedFiles} />
         </div>
-      </div>
+      </details>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { resolveSessionPath, buildSessionContext } from "@/lib/session-reader";
+import { resolveSessionPath, buildSessionContext, buildSessionHistory } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
 
 export async function GET(
@@ -30,15 +30,19 @@ export async function GET(
     const sm = liveRpc?.inner.sessionManager ?? SessionManager.open(filePath!);
     // `before` is the oldest entry already on the client; fetch its ancestors
     // only (excludeLeaf) so prepending the page does not duplicate `before`.
-    const context = buildSessionContext(sm.getEntries() as never, before ?? leafId, {
+    const entries = sm.getEntries() as never;
+    const targetLeafId = before ?? leafId ?? sm.getLeafId();
+    const contextOptions = {
       deferThinking,
       deferToolResultImages,
       tail,
       excludeLeaf: Boolean(before),
       sessionId: id,
-    });
+    };
+    const context = buildSessionContext(entries, targetLeafId, contextOptions);
+    const history = buildSessionHistory(entries, targetLeafId, contextOptions);
 
-    return NextResponse.json({ context, tail, before: before ?? null });
+    return NextResponse.json({ context, history, tail, before: before ?? null });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

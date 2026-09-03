@@ -158,6 +158,9 @@ The `enabledModels` setting uses pi's `--models` syntax: minimatch globs against
 ### SSE reconnect on page refresh mid-stream
 On `ChatWindow` mount, `GET /api/agent/[id]` is called. If `state.isStreaming === true`, SSE is reconnected automatically. `thinkingLevel` and `isCompacting` are also synced from this response.
 
+### Compaction history vs model context
+Session detail/context APIs return two distinct views: `context` is SDK-selected and compaction-aware (old messages replaced by the summary), while `history` is the raw active-branch timeline used by the UI. Never render `context.messages` when `history` is available, or compacted conversations become inaccessible. `buildSessionHistory()` paginates through compaction boundaries and keeps `entryIds[]` aligned; compaction summary cards are collapsed by default.
+
 ### Compaction SSE events
 Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `auto_compaction_start` / `auto_compaction_end`. `handleAgentEvent` accepts both sets to keep `isCompacting` in sync. Manual compact is a blocking POST — the button stays disabled until the response returns.
 

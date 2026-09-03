@@ -7,6 +7,8 @@ import type {
   ExtensionStatusItem,
   ExtensionUiRequest,
   ExtensionWidgetItem,
+  SessionContext,
+  SessionHistory,
   SessionInfo,
   SessionTreeNode,
   UserMessage,
@@ -42,14 +44,9 @@ export interface SessionData {
   tree: SessionTreeNode[];
   leafId: string | null;
   toolNames?: string[];
-  context: {
-    messages: AgentMessage[];
-    entryIds: string[];
-    oldestEntryId: string | null;
-    hasMore: boolean;
-    thinkingLevel: string;
-    model: { provider: string; modelId: string } | null;
-  };
+  context: SessionContext;
+  /** Raw active-branch messages for display; absent on older servers. */
+  history?: SessionHistory;
   /** Cumulative usage over ALL session-file entries (incl. compacted history). */
   stats?: SessionFileStats;
 }
@@ -467,7 +464,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       };
     }
     const fileStats = data?.stats;
-    const stats = mergeSessionStats(fileStats, data?.context.messages ?? [], messages);
+    const stats = mergeSessionStats(fileStats, data?.history?.messages ?? data?.context.messages ?? [], messages);
     if (stats.tokens.total === 0 && messages.length === 0 && !fileStats) return null;
     return {
       sessionFile: data?.filePath || undefined,
@@ -477,7 +474,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       totalActiveMs: data?.totalActiveMs,
       ...(contextUsage ? { contextUsage } : {}),
     } satisfies SessionStatsInfo;
-  }, [messages, sessionStatsOverride, contextUsage, data?.context.messages, data?.filePath, data?.totalActiveMs, data?.stats, session?.id, session?.name]);
+  }, [messages, sessionStatsOverride, contextUsage, data?.context.messages, data?.history?.messages, data?.filePath, data?.totalActiveMs, data?.stats, session?.id, session?.name]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
     let messagesLoaded = false;
@@ -500,13 +497,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json() as SessionData;
       if (sessionIdRef.current !== sid) return null;
-      const persistedMessages = d.context.messages;
+      const persistedHistory = d.history ?? d.context;
       setData(d);
       setActiveLeafId(d.leafId);
-      setMessages(persistedMessages);
-      setEntryIds(d.context.entryIds ?? []);
-      setHistoryCursor(d.context.oldestEntryId);
-      setHasEarlierMessages(d.context.hasMore);
+      setMessages(persistedHistory.messages);
+      setEntryIds(persistedHistory.entryIds ?? []);
+      setHistoryCursor(persistedHistory.oldestEntryId);
+      setHasEarlierMessages(persistedHistory.hasMore);
       setToolPresetState(d.toolNames !== undefined ? getPresetFromToolNames(d.toolNames) : "default");
       setCurrentModelOverride((current) => modelSwitchPendingRef.current ? current : null);
       setError(null);
@@ -520,7 +517,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         modelListRef.current,
         contextUsageRef.current?.contextWindow,
       );
-      const computedUsage = calculateActiveContextTokens(persistedMessages, windowSize);
+      const computedUsage = calculateActiveContextTokens(d.context.messages, windowSize);
       if (computedUsage.tokens > 0) {
         setContextUsage(computedUsage);
       }
@@ -567,28 +564,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const url = `/api/sessions/${encodeURIComponent(sid)}/context?${params}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const d = await res.json() as { context: SessionData["context"] };
+      const d = await res.json() as { context: SessionContext; history?: SessionHistory };
       if (sessionIdRef.current !== sid) return;
-      setHistoryCursor(d.context.oldestEntryId);
-      setHasEarlierMessages(d.context.hasMore);
+      const page = d.history ?? d.context;
+      setHistoryCursor(page.oldestEntryId);
+      setHasEarlierMessages(page.hasMore);
       setData((prev) => {
         if (!prev || prev.sessionId !== sid) return prev;
-        const context = before ? {
-          ...prev.context,
-          messages: [...d.context.messages, ...prev.context.messages],
-          entryIds: [...d.context.entryIds, ...prev.context.entryIds],
-          oldestEntryId: d.context.oldestEntryId,
-          hasMore: d.context.hasMore,
-        } : d.context;
-        return { ...prev, context };
+        if (!before) return { ...prev, context: d.context, history: page };
+        const previousHistory = prev.history ?? prev.context;
+        return {
+          ...prev,
+          history: {
+            ...previousHistory,
+            messages: [...page.messages, ...previousHistory.messages],
+            entryIds: [...page.entryIds, ...previousHistory.entryIds],
+            oldestEntryId: page.oldestEntryId,
+            hasMore: page.hasMore,
+          },
+        };
       });
       if (before) {
         // Older page: prepend so scroll position stays anchored.
-        setMessages((prev) => [...d.context.messages, ...prev]);
-        setEntryIds((prev) => [...d.context.entryIds, ...prev]);
+        setMessages((prev) => [...page.messages, ...prev]);
+        setEntryIds((prev) => [...page.entryIds, ...prev]);
       } else {
-        setMessages(d.context.messages);
-        setEntryIds(d.context.entryIds ?? []);
+        setMessages(page.messages);
+        setEntryIds(page.entryIds ?? []);
       }
     } catch (e) {
       console.error("Failed to load context:", e);

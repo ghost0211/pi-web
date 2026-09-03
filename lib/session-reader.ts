@@ -6,7 +6,7 @@ import {
 import { closeSync, type Dirent, fstatSync, openSync, readSync } from "fs";
 import { readdir } from "fs/promises";
 import { isAbsolute, join, normalize as normalizePath, relative, resolve as resolvePath, sep } from "path";
-import type { AgentMessage, ImageContent, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
+import type { AgentMessage, ImageContent, SessionEntry, SessionHeader, SessionInfo, SessionContext, SessionHistory } from "./types";
 import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
 import { normalizeToolCalls } from "./normalize";
 import { projectIdentityKey } from "./project-identity";
@@ -439,6 +439,35 @@ export interface BuildSessionContextOptions {
   excludeLeaf?: boolean;
   /** Session id used to build lazy URLs for historical tool-result images. */
   sessionId?: string;
+}
+
+export function buildSessionHistory(
+  entries: SessionEntry[],
+  leafId?: string | null,
+  options: BuildSessionContextOptions = {},
+): SessionHistory {
+  if (leafId === null) {
+    return { messages: [], entryIds: [], oldestEntryId: null, hasMore: false };
+  }
+
+  const { tail, excludeLeaf } = options;
+  const pageSize = tail && tail > 0 ? tail : Number.MAX_SAFE_INTEGER;
+  const sliced = sliceActiveBranch(entries, leafId ?? null, pageSize, excludeLeaf);
+  const messages: AgentMessage[] = [];
+  const entryIds: string[] = [];
+  for (const entry of sliced) {
+    const message = entryToUiMessage(entry, options);
+    if (!message) continue;
+    messages.push(message);
+    entryIds.push(entry.id);
+  }
+
+  return {
+    messages,
+    entryIds,
+    oldestEntryId: sliced[0]?.id ?? null,
+    hasMore: Boolean(tail && tail > 0 && sliced[0]?.parentId),
+  };
 }
 
 export function buildSessionContext(

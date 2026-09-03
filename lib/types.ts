@@ -348,11 +348,16 @@ export interface SessionInfo {
   transient?: boolean;
 }
 
-export interface SessionContext {
+export interface SessionHistory {
   messages: AgentMessage[];
   entryIds: string[]; // parallel to messages — the session entry id for each message
+  /** Raw active-branch cursor used to fetch the next older page. */
   oldestEntryId: string | null;
   hasMore: boolean;
+}
+
+/** SDK-selected model context. Compaction may replace old messages with a summary. */
+export interface SessionContext extends SessionHistory {
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
 }

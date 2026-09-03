@@ -26,6 +26,21 @@ function renderMessage(message, props = {}) {
   );
 }
 
+test("renders compaction summaries collapsed by default", () => {
+  const html = renderMessage({
+    role: "custom",
+    customType: "compaction",
+    content: "Detailed compacted context",
+    display: true,
+    timestamp: Date.now(),
+  });
+
+  assert.match(html, /<details[^>]*class="[^"]*compaction-message-details[^"]*"/);
+  assert.doesNotMatch(html, /<details[^>]*\sopen(?:=|\s|>)/);
+  assert.match(html, /<summary/);
+  assert.match(html, /Detailed compacted context/);
+});
+
 test("keeps streamed tool input out of collapsed markup while counting it", () => {
   const block = {
     type: "toolCall",

@@ -9,6 +9,7 @@ import {
   invalidateSessionPathCache,
   invalidateSessionListCache,
   buildSessionContext,
+  buildSessionHistory,
   readSessionHeader,
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
@@ -43,12 +44,16 @@ export async function GET(
     const deferToolResultImages = searchParams.has("deferMedia");
     const rawTail = Number(searchParams.get("tail"));
     const tail = Number.isFinite(rawTail) && rawTail > 0 ? Math.min(rawTail, 1000) : 50;
-    const context = buildSessionContext(entries as never, leafId, {
+    const contextOptions = {
       deferThinking,
       deferToolResultImages,
       tail,
       sessionId: id, // local: lazy URLs for historical tool-result images
-    });
+    };
+    // Keep the SDK-selected, compaction-aware context separate from the raw
+    // active-branch history. The model uses `context`; the UI renders `history`.
+    const context = buildSessionContext(entries as never, leafId, contextOptions);
+    const history = buildSessionHistory(entries as never, leafId, contextOptions);
     const totalActiveMs = computeSessionTotalActiveMs(entries);
     // Cumulative usage over ALL entries, including history compacted away —
     // the same aggregation the SDK's getSessionStats() uses. Lets the client
@@ -99,6 +104,7 @@ export async function GET(
       leafId,
       tree,
       context,
+      history,
       stats,
       totalActiveMs,
       ...(toolNames !== undefined ? { toolNames } : {}),

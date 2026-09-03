@@ -280,9 +280,11 @@ test("uses server pagination state instead of guessing from rendered rows", () =
     source.indexOf("const loadTools = useCallback"),
   );
   assert.match(source, /const \[hasEarlierMessages, setHasEarlierMessages\] = useState\(false\)/);
-  assert.match(source, /setHasEarlierMessages\(d\.context\.hasMore\)/);
-  assert.match(source, /setHistoryCursor\(d\.context\.oldestEntryId\)/);
-  assert.match(loadContextSource, /setData\(\(prev\) => \{[\s\S]*messages: \[\.\.\.d\.context\.messages, \.\.\.prev\.context\.messages\]/);
+  assert.match(source, /const persistedHistory = d\.history \?\? d\.context/);
+  assert.match(source, /setHasEarlierMessages\(persistedHistory\.hasMore\)/);
+  assert.match(source, /setHistoryCursor\(persistedHistory\.oldestEntryId\)/);
+  assert.match(loadContextSource, /const page = d\.history \?\? d\.context/);
+  assert.match(loadContextSource, /messages: \[\.\.\.page\.messages, \.\.\.previousHistory\.messages\]/);
   assert.match(chatWindowSource, /const oldestId = historyCursor/);
   assert.doesNotMatch(chatWindowSource, /const oldestId = entryIds\[0\]/);
   assert.match(chatWindowSource, /if \(!hasEarlierMessages\) return/);
@@ -472,6 +474,7 @@ test("session reload context estimates use authoritative model metadata", () => 
 
   assert.match(source, /type ModelEntry = \{[^}]*contextWindow\?: number/);
   assert.match(loadSessionSource, /resolveModelContextWindow\(\s*d\.context\.model,\s*modelListRef\.current/);
+  assert.match(loadSessionSource, /calculateActiveContextTokens\(d\.context\.messages, windowSize\)/);
   assert.match(messageEndSource, /resolveModelContextWindow\(\s*displayModelRef\.current,\s*modelListRef\.current/);
   assert.doesNotMatch(loadSessionSource, /inferModelContextWindow/);
 });

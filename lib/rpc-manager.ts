@@ -162,6 +162,31 @@ export function resolveSessionIdleTimeoutMs(): number {
   return Math.floor(parsed);
 }
 
+/**
+ * The SDK delays writing a forked session file until its first assistant
+ * message (newSession/createBranchedSession contract). pi-web destroys the
+ * wrapper right after fork, so a fork at the first user message — whose
+ * retained branch contains no assistant reply — would evaporate before ever
+ * reaching disk. Write the deferred file eagerly in that case (#628).
+ */
+function persistDeferredSessionFile(manager: SessionManager): void {
+  const sessionFile = manager.getSessionFile();
+  if (!sessionFile || existsSync(sessionFile)) return;
+
+  const header = manager.getHeader();
+  if (!header) return;
+
+  const content = [header, ...manager.getEntries()]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n") + "\n";
+  writeFileSync(sessionFile, content, { encoding: "utf8", flag: "wx" });
+
+  // Mirror persistBashOnlySession(): after writing the generated entries
+  // ourselves, mark the SDK manager as flushed so a later flush does not
+  // rewrite the header.
+  (manager as unknown as { flushed: boolean }).flushed = true;
+}
+
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
   constructor() {
@@ -728,12 +753,14 @@ export class AgentSessionWrapper {
             const newManager = SessionManager.create(sessionManager.getCwd(), sessionDir);
             newManager.newSession({ parentSession: currentSessionFile });
             newSessionFile = newManager.getSessionFile() as string;
+            persistDeferredSessionFile(newManager);
           } else {
             // Fork after some history: copy path up to (but not including) the fork point
             const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
             const forkedPath = sourceManager.createBranchedSession(entry.parentId);
             if (!forkedPath) throw new Error("Failed to create forked session");
             newSessionFile = forkedPath;
+            persistDeferredSessionFile(sourceManager);
           }
 
           const newSessionId = SessionManager.open(newSessionFile, sessionDir).getSessionId();

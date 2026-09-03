@@ -36,6 +36,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { validatePiAiOAuthModules } from "./desktop-bundle-validation.mjs";
 
 const DESKTOP_NODE_VERSION = "22.19.0";
 
@@ -133,6 +134,18 @@ function copyStandaloneServer() {
   const themeCanary = join(piSdk, "dist", "modes", "interactive", "theme", "dark.json");
   if (!existsSync(themeCanary)) {
     fail(`standalone output is missing ${themeCanary} — check outputFileTracingIncludes`);
+  }
+
+  // Validate against the source installation layout, not just copies that
+  // happened to reach the bundle. Otherwise a complete top-level pi-ai could
+  // hide a wholly missing nested runtime (the openai-codex desktop regression).
+  try {
+    validatePiAiOAuthModules({
+      sourceNodeModulesDir: join(repoRoot, "node_modules"),
+      bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
+    });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
   console.log(`build-desktop-server: server bundle ready (${formatMiB(dirSize(serverResourceDir))})`);
 }

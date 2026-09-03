@@ -23,6 +23,10 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": [
       "./node_modules/@earendil-works/pi-coding-agent/dist/**/*",
+      // pi-ai intentionally hides OAuth/Bedrock flow imports behind variable
+      // specifiers. npm currently installs this runtime as a nested dependency
+      // of pi-coding-agent, so the top-level pi-ai include below is not enough.
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/**/*",
       "./node_modules/@earendil-works/pi-agent-core/dist/**/*",
       "./node_modules/@earendil-works/pi-ai/dist/**/*",
       "./node_modules/@earendil-works/pi-tui/dist/**/*",

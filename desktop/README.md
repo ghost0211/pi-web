@@ -116,6 +116,11 @@ separate work item.
   in Tauri CLI 2.11 (tauri-apps/tauri#15342). If you upgrade the CLI and
   resources go missing, verify the install directory contains `server/` and
   `node/` next to the exe.
+- **OAuth reports `Cannot find module .../pi-ai/dist/auth/oauth/*.js`** — the
+  standalone trace omitted a variable dynamic import. `next.config.ts` must
+  include both top-level and `pi-coding-agent`-nested `pi-ai/dist` trees;
+  `build-desktop-server.mjs` validates every installed OAuth runtime before an
+  installer can be produced.
 - **SmartScreen warning on first install** — expected until the installer is
   code-signed.
 - **Firewall prompt** — none should appear; the sidecar binds `127.0.0.1`

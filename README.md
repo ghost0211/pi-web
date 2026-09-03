@@ -71,6 +71,7 @@ Command-line flags override environment variables:
 | `PI_WEB_PASSWORD` | Enable HTTP Basic Auth (username: `pi`) | Disabled |
 | `PI_WEB_ALLOWED_HOSTS` | Comma-separated list of allowed hostnames/proxies | Unset |
 | `PI_CODING_AGENT_DIR` | Custom Pi agent configuration directory | `~/.pi/agent` |
+| `PI_WEB_SESSION_IDLE_TIMEOUT_MS` | Idle session teardown delay in ms (`0` disables) | `600000` (10 min) |
 
 ### Remote LAN / Server Deployment
 

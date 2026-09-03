@@ -147,6 +147,21 @@ export interface RpcSessionStartOptions {
 const CODING_TOOL_NAMES = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 const THINKING_LEVEL_NAMES = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * Idle AgentSession wrappers are destroyed after this timeout. Configurable via
+ * `PI_WEB_SESSION_IDLE_TIMEOUT_MS` (milliseconds; `0` disables idle reaping) so
+ * long-running or listener-style sessions are not torn down mid-task (#629).
+ */
+export function resolveSessionIdleTimeoutMs(): number {
+  const raw = process.env.PI_WEB_SESSION_IDLE_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
+  return Math.floor(parsed);
+}
+
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
   constructor() {
@@ -437,6 +452,8 @@ export class AgentSessionWrapper {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (!this._alive) return;
     if (!this.isRunning()) this.forceShutdownOnIdle = false;
+    const idleTimeoutMs = resolveSessionIdleTimeoutMs();
+    if (idleTimeoutMs === 0) return;
     this.idleTimer = setTimeout(() => {
       if (this.isRunning() && !this.forceShutdownOnIdle) {
         this.resetIdleTimer();
@@ -445,7 +462,7 @@ export class AgentSessionWrapper {
       void this.shutdown().catch((error) => {
         console.error("[pi-web] failed to shut down idle session:", error instanceof Error ? error.message : error);
       });
-    }, 10 * 60 * 1000);
+    }, idleTimeoutMs);
   }
 
   private persistBashOnlySession(): void {

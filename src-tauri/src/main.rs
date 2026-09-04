@@ -23,6 +23,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -408,12 +409,36 @@ fn kill_server(app: &AppHandle) {
     let _ = child.wait();
 }
 
+fn is_external_browser_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+}
+
+fn open_in_system_browser(url: &Url) {
+    if let Err(error) = open::that_detached(url.as_str()) {
+        eprintln!("failed to open external URL in the system browser: {error}");
+    }
+}
+
 fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> WebviewWindow {
     WebviewWindowBuilder::new(app, "main", url)
         .title("Pi Web Desktop")
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
         .visible(visible)
+        .on_navigation(|url| {
+            if is_external_browser_url(url) {
+                open_in_system_browser(url);
+                return false;
+            }
+            true
+        })
+        .on_new_window(|url, _features| {
+            if matches!(url.scheme(), "http" | "https") {
+                open_in_system_browser(&url);
+            }
+            NewWindowResponse::Deny
+        })
         .build()
         .expect("failed to create the main window")
 }

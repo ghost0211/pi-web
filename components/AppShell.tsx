@@ -2,13 +2,12 @@
 
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
-import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
-import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
 import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
@@ -23,6 +22,7 @@ import { useAudio } from "@/hooks/useAudio";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
+
 import {
   claimExtensionAttentionNotification,
   shouldShowBrowserNotification,
@@ -56,6 +56,9 @@ import type { ToolEntry } from "@/lib/tool-presets";
 import { getSessionFamily } from "@/lib/session-family";
 import { getRecentProjects } from "@/lib/project-groups";
 import { getLastSettingsSection, type SettingsSection } from "@/lib/settings-navigation";
+
+const FileViewer = dynamic(() => import("./FileViewer").then((module) => module.FileViewer));
+const SettingsPanel = dynamic(() => import("./SettingsPanel").then((module) => module.SettingsPanel));
 
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
@@ -930,17 +933,13 @@ export function AppShell() {
   }, [handleOpenFile, selectedSession?.id]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
-    setFileTabs((prev) => {
-      const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0) setRightPanelOpen(false);
-      return next;
-    });
-    setActiveFileTabId((cur) => {
-      if (cur !== tabId) return cur;
-      const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
-    });
-  }, [fileTabs]);
+    const remaining = fileTabs.filter((tab) => tab.id !== tabId);
+    setFileTabs(remaining);
+    if (remaining.length === 0) setRightPanelOpen(false);
+    if (activeFileTabId === tabId) {
+      setActiveFileTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+    }
+  }, [activeFileTabId, fileTabs]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;

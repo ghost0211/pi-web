@@ -44,6 +44,7 @@ export const zhTWLocale: LocalePlugin = {
     "settings.projectTrustDescription": "開啟未信任本機目錄時的擴充功能載入與權限策略。",
     "settings.trustPrompt": "每次詢問",
     "settings.trustAuto": "自動信任",
+    "settings.trustNever": "永不信任",
     "settings.tabDesktop": "桌面端",
     "settings.closeBehavior": "關閉行為",
     "settings.closeBehaviorDescription": "選擇關閉 Pi Web Desktop 視窗時的行為。最小化到系統匣時，agent 工作階段會在背景繼續執行；可透過系統匣選單完全結束。",

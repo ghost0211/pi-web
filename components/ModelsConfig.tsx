@@ -1949,30 +1949,24 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
   }, [config.providers]);
 
   const deleteProvider = useCallback((name: string) => {
+    const remaining = Object.keys(config.providers ?? {}).filter((providerName) => providerName !== name);
     setConfig((prev) => {
       const providers = { ...(prev.providers ?? {}) };
       delete providers[name];
       return { ...prev, providers };
     });
-    setConfig((prev) => {
-      const remaining = Object.keys(prev.providers ?? {});
-      setSelection(remaining.length > 0 ? { type: "provider", name: remaining[0] } : null);
-      return prev;
-    });
-  }, []);
+    setSelection(remaining.length > 0 ? { type: "provider", name: remaining[0] } : null);
+  }, [config.providers]);
 
   const addModel = useCallback((providerName: string) => {
+    const index = config.providers?.[providerName]?.models?.length ?? 0;
     setConfig((prev) => {
       const provider = prev.providers?.[providerName] ?? {};
       const models = [...(provider.models ?? []), { id: "" }];
       return { ...prev, providers: { ...(prev.providers ?? {}), [providerName]: { ...provider, models } } };
     });
-    setConfig((prev) => {
-      const idx = (prev.providers?.[providerName]?.models?.length ?? 1) - 1;
-      setSelection({ type: "model", providerName, index: idx });
-      return prev;
-    });
-  }, []);
+    setSelection({ type: "model", providerName, index });
+  }, [config.providers]);
 
   const addDiscoveredModels = useCallback((providerName: string, discovered: DiscoveredModel[]) => {
     setConfig((prev) => {

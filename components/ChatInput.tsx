@@ -182,8 +182,8 @@ export function isExactSlashCommand(message: string, command: SlashCommandPalett
   return command.source === "builtin" && message.trim() === `/${command.name}`;
 }
 
-export function canClearBuiltinCommandInput(message: string, imageCount: number, submittedMessage: string): boolean {
-  return imageCount === 0 && message.trim() === submittedMessage;
+export function canClearBuiltinCommandInput(message: string, attachmentCount: number, submittedMessage: string): boolean {
+  return attachmentCount === 0 && message.trim() === submittedMessage;
 }
 
 const SLASH_SOURCES: SlashCommandSource[] = ["builtin", "extension", "prompt", "skill"];
@@ -1148,12 +1148,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, []);
 
   const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {
-    if (attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || !msg.startsWith("/") || !onBuiltinCommand) return false;
+    const attachmentCount = attachedImagesRef.current.length
+      + attachedTextFilesRef.current.length
+      + attachedBinaryFilesRef.current.length;
+    if (attachmentCount || !msg.startsWith("/") || !onBuiltinCommand) return false;
     const result = await onBuiltinCommand(msg);
     if (!result.handled) return false;
-    if (!result.error && canClearBuiltinCommandInput(valueRef.current, attachedImagesRef.current.length, msg)) clearInput();
+    const currentAttachmentCount = attachedImagesRef.current.length
+      + attachedTextFilesRef.current.length
+      + attachedBinaryFilesRef.current.length;
+    if (!result.error && canClearBuiltinCommandInput(valueRef.current, currentAttachmentCount, msg)) clearInput();
     return true;
-  }, [attachedImages.length, clearInput, onBuiltinCommand]);
+  }, [clearInput, onBuiltinCommand]);
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();

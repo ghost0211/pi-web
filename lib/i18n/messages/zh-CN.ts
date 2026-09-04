@@ -44,6 +44,7 @@ export const zhCNLocale: LocalePlugin = {
     "settings.projectTrustDescription": "打开未信任本地目录时的扩展加载与权限策略。",
     "settings.trustPrompt": "每次询问",
     "settings.trustAuto": "自动信任",
+    "settings.trustNever": "永不信任",
     "settings.tabDesktop": "桌面端",
     "settings.closeBehavior": "关闭行为",
     "settings.closeBehaviorDescription": "选择关闭 Pi Web Desktop 窗口时的行为。最小化到系统托盘时，agent 会话会在后台继续运行；可通过托盘菜单彻底退出。",

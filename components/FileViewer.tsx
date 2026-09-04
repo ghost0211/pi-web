@@ -1433,7 +1433,7 @@ function TextFileViewer({
         ) : isHtml && effectiveDisplayMode === "preview" ? (
           <iframe
             srcDoc={content}
-            sandbox="allow-scripts"
+                sandbox=""
             style={{ width: "100%", height: "100%", border: "none", background: "var(--bg)" }}
              title={t("i18n.htmlPreview")}
           />

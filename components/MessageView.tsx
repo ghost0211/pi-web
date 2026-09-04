@@ -12,7 +12,6 @@ import { isEditToolName } from "@/lib/tool-names";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { skillExpansionToCommand } from "@/lib/slash-display";
-import type { SubagentToolDetails } from "@/lib/subagent-extension";
 import type {
   AgentMessage,
   UserMessage,
@@ -995,12 +994,6 @@ function ThinkingBlock({ block, isStreaming, duration, sessionId, entryId, block
       )}
     </div>
   );
-}
-
-function isSubagentToolDetails(value: unknown): value is SubagentToolDetails {
-  if (!value || typeof value !== "object") return false;
-  const details = value as Partial<SubagentToolDetails>;
-  return details.kind === "pi-web-subagent" && typeof details.sessionId === "string";
 }
 
 function resolveSubagentSessionId(block: ToolCallContent, result?: ToolResultMessage): string | null {

@@ -36,7 +36,7 @@ if (launchOptions.help) {
   process.exit(0);
 }
 
-const { port, hostname, openBrowser } = launchOptions;
+const { port, hostname, openBrowser, unsafeNoAuth } = launchOptions;
 
 const pkgDir = path.join(__dirname, "..");
 const nextDir = path.join(pkgDir, ".next");
@@ -69,10 +69,15 @@ if (!loopbackHostnames.has(hostname)) {
     console.warn(
       `Warning: pi-web is listening on ${hostname} with Basic Auth over HTTP. Use HTTPS or a trusted VPN to protect the password in transit.`,
     );
-  } else {
+  } else if (unsafeNoAuth) {
     console.warn(
-      `Warning: pi-web is listening on ${hostname} without authentication. Only use this on a trusted network.`,
+      `Warning: pi-web is listening on ${hostname} without authentication because --unsafe-no-auth was explicitly enabled. Only use this on a trusted network.`,
     );
+  } else {
+    console.error(
+      `Refusing to listen on ${hostname} without authentication. Set PI_WEB_PASSWORD or explicitly pass --unsafe-no-auth.`,
+    );
+    process.exit(1);
   }
 }
 

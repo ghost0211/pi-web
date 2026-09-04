@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useReducer } from "react";
+import { useRouter } from "next/navigation";
 import type {
   AgentMessage,
   BlockingExtensionUiRequest,
@@ -269,8 +270,9 @@ type SlashCommandsResponse = {
 };
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
+  const router = useRouter();
   const {
-    session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked,
+    session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
   } = opts;
 
@@ -342,6 +344,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const contextUsageRef = useRef<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const displayModelRef = useRef<{ provider: string; modelId: string } | null>(null);
   const modelListRef = useRef<ModelEntry[]>([]);
+  const estimateContextAfterMessageRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
   const lastUserMsgRef = useRef<HTMLDivElement | null>(null);
@@ -423,6 +426,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [displayModel, modelList, contextUsage?.contextWindow]);
 
   const composerDraftKey = session?.id ?? newSessionDraftKey ?? undefined;
+
+  useEffect(() => {
+    if (!estimateContextAfterMessageRef.current) return;
+    estimateContextAfterMessageRef.current = false;
+    const windowSize = resolveModelContextWindow(
+      displayModel,
+      modelList,
+      contextUsageRef.current?.contextWindow,
+    );
+    const computed = calculateActiveContextTokens(messages, windowSize);
+    if (computed.tokens > 0) setContextUsage(computed);
+  }, [displayModel, messages, modelList]);
 
   const resolveComposerDraftKey = useCallback((key: string | undefined) => {
     if (!key) return undefined;
@@ -1240,20 +1255,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           });
         } else if (completed) {
           const normalized = normalizeToolCalls(completed);
-          setMessages((prev) => {
-            const next = [...prev, normalized];
-            const latestUsage = contextUsageRef.current;
-            const windowSize = resolveModelContextWindow(
-              displayModelRef.current,
-              modelListRef.current,
-              latestUsage?.contextWindow,
-            );
-            const computed = calculateActiveContextTokens(next, windowSize);
-            if (computed.tokens > 0) {
-              setContextUsage(computed);
-            }
-            return next;
-          });
+          estimateContextAfterMessageRef.current = true;
+          setMessages((prev) => [...prev, normalized]);
         }
         dispatch({ type: "end" });
         setAgentPhase({ kind: "waiting_model" });
@@ -1765,10 +1768,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const tempId = typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
             : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-          if (opts.onNewSession && targetCwd) {
-            opts.onNewSession(tempId, targetCwd);
-          } else if (typeof window !== "undefined") {
-            window.location.href = "/";
+          if (onNewSession && targetCwd) {
+            onNewSession(tempId, targetCwd);
+          } else {
+            router.push("/");
           }
           return complete({ handled: true, message: "Started a fresh session" });
         }
@@ -1811,7 +1814,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (commandName === "compact") setIsCompacting(false);
     }
-  }, [activeLeafId, addNotice, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, promoteNewSession, onSessionForked, onSessionStatsPanelOpen]);
+  }, [activeLeafId, addNotice, ensureNewSession, isCompacting, loadModels, loadSession, loadSlashCommands, loadTools, newSessionCwd, onNewSession, onSessionForked, onSessionStatsPanelOpen, promoteNewSession, router, session?.cwd]);
 
   // Let AgentSession.prompt decide atomically whether to queue against the
   // current run or start a new turn if it settled while the request was in

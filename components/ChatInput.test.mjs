@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 
@@ -12,6 +13,7 @@ const { ChatInput, ContextUsageRing, ModelErrorBanner, ModelScopeWarningBanner, 
 const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store.ts");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
+const source = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
 
 test("renders the upstream model error", () => {
   const html = renderToStaticMarkup(
@@ -253,10 +255,17 @@ test("recognizes exact slash commands for one-Enter submission", () => {
   assert.equal(isExactSlashCommand("/copy", { ...builtin, source: "extension" }), false);
 });
 
-test("clears a completed built-in only while its submitted input is unchanged", () => {
+test("clears a completed built-in only while its input and all attachments are unchanged", () => {
   assert.equal(canClearBuiltinCommandInput("/copy", 0, "/copy"), true);
   assert.equal(canClearBuiltinCommandInput("new follow-up", 0, "/copy"), false);
   assert.equal(canClearBuiltinCommandInput("/copy", 1, "/copy"), false);
+  const commandSource = source.slice(
+    source.indexOf("  const runBuiltinCommand"),
+    source.indexOf("  const handleSend"),
+  );
+  assert.match(commandSource, /attachedImagesRef\.current\.length/);
+  assert.match(commandSource, /attachedTextFilesRef\.current\.length/);
+  assert.match(commandSource, /attachedBinaryFilesRef\.current\.length/);
 });
 
 test("keeps only read-only built-ins available while a run is active", () => {

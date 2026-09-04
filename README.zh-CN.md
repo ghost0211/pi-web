@@ -68,17 +68,21 @@ npm run dev
 | `--port <端口>`、`-p` 或 `PORT` | 服务监听端口 | `30141` |
 | `--hostname <主机>`、`-H` 或 `PI_WEB_HOSTNAME` | 绑定的主机地址 | `127.0.0.1` |
 | `--no-open` 或 `PI_WEB_NO_OPEN=1` | 启动后不自动打开浏览器 | `false` |
+| `--unsafe-no-auth` 或 `PI_WEB_UNSAFE_NO_AUTH=1` | 显式允许未经认证的非本机 HTTP 访问 | `false` |
 | `PI_WEB_PASSWORD` | 启用 HTTP Basic Auth 认证（用户名固定为 `pi`） | 未启用 |
 | `PI_WEB_ALLOWED_HOSTS` | 允许的主机名/反向代理白名单（逗号分隔） | 未设置 |
+| `PI_WEB_ALLOWED_DEV_ORIGINS` | 允许访问 Next.js 开发服务器的额外主机名/IP | 未设置 |
 | `PI_CODING_AGENT_DIR` | 自定义 Pi Agent 配置数据目录 | `~/.pi/agent` |
 
 ### 局域网 / 远程服务器部署
 
-如需监听 `0.0.0.0` 供局域网其他设备访问，建议设置访问密码：
+监听非本机地址时，默认必须设置访问密码：
 
 ```bash
 PI_WEB_PASSWORD='设置你的强密码' pi-web -H 0.0.0.0 -p 30141 --no-open
 ```
+
+普通 HTTP 下的 Basic Auth 不会加密密码，请配合 HTTPS 或可信 VPN 使用。仅在隔离且可信的网络中，才应通过 `--unsafe-no-auth` 显式绕过启动检查。
 
 ### 代理设置
 

@@ -44,6 +44,7 @@ export const enLocale: LocalePlugin = {
     "settings.projectTrustDescription": "Security policy for loading workspace extensions and tools.",
     "settings.trustPrompt": "Always Ask",
     "settings.trustAuto": "Auto Trust",
+    "settings.trustNever": "Never Trust",
     "settings.tabDesktop": "Desktop",
     "settings.closeBehavior": "Close Behavior",
     "settings.closeBehaviorDescription": "Choose what happens when you close the Pi Web Desktop window. When minimized to the tray, agent sessions keep running in the background; quit from the tray menu.",

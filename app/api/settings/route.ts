@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { parseGeneralSettingsPatch, readGeneralSettings, updateGeneralSettings } from "@/lib/general-settings";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
 export const dynamic = "force-dynamic";
@@ -10,41 +10,11 @@ function getSettingsPath(): string {
   return join(getAgentDir(), "settings.json");
 }
 
-function readSettings(): Record<string, unknown> {
-  const path = getSettingsPath();
-  if (!existsSync(path)) return {};
-  try {
-    const raw = readFileSync(path, "utf8");
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-function writeSettings(settings: Record<string, unknown>): void {
-  const path = getSettingsPath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
-}
-
 export async function GET() {
   try {
-    const settings = readSettings();
-    return NextResponse.json({
-      theme: (settings.theme as string) || "auto",
-      defaultThinkingLevel: (settings.defaultThinkingLevel as string) || "auto",
-      compactionEnabled: settings.compactionEnabled !== false,
-      retryEnabled: settings.retryEnabled !== false,
-      quietStartup: Boolean(settings.quietStartup),
-      hideThinkingBlock: Boolean(settings.hideThinkingBlock),
-      defaultProjectTrust: (settings.defaultProjectTrust as string) || "prompt",
-      enableSkillCommands: settings.enableSkillCommands !== false,
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 },
-    );
+    return NextResponse.json(await readGeneralSettings(getSettingsPath()));
+  } catch {
+    return NextResponse.json({ error: "Failed to read settings." }, { status: 500 });
   }
 }
 
@@ -56,31 +26,27 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
   }
 
+  let body: unknown;
   try {
-    const body = await req.json() as Record<string, unknown>;
-    const current = readSettings();
-    const allowedKeys = [
-      "defaultThinkingLevel",
-      "compactionEnabled",
-      "retryEnabled",
-      "quietStartup",
-      "hideThinkingBlock",
-      "defaultProjectTrust",
-      "enableSkillCommands",
-    ];
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-    for (const key of allowedKeys) {
-      if (body[key] !== undefined) {
-        current[key] = body[key];
-      }
-    }
-
-    writeSettings(current);
-    return NextResponse.json({ success: true, settings: current });
+  let patch;
+  try {
+    patch = parseGeneralSettingsPatch(body);
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 },
+      { error: error instanceof Error ? error.message : "Invalid settings" },
+      { status: 400 },
     );
+  }
+
+  try {
+    const settings = await updateGeneralSettings(getSettingsPath(), patch);
+    return NextResponse.json({ success: true, settings });
+  } catch {
+    return NextResponse.json({ error: "Failed to save settings." }, { status: 500 });
   }
 }

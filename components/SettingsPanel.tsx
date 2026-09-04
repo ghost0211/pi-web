@@ -426,16 +426,18 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
             <section className="settings-general-section">
               <h3 className="settings-general-heading">{t("settings.projectTrust")}</h3>
               <p className="settings-general-description">{t("settings.projectTrustDescription")}</p>
-              <div className="settings-theme-options is-compact">
+              <div role="radiogroup" aria-label={t("settings.projectTrust")} className="settings-theme-options is-compact">
                 {[
                   { id: "prompt", label: t("settings.trustPrompt") },
                   { id: "auto", label: t("settings.trustAuto") },
+                  { id: "never", label: t("settings.trustNever") },
                 ].map((opt) => {
                   const selected = (generalSettings?.defaultProjectTrust ?? "prompt") === opt.id;
                   return (
                     <button
                       key={opt.id}
                       type="button"
+                      role="radio"
                       className="settings-theme-option"
                       aria-checked={selected}
                       onClick={() => void updateSetting("defaultProjectTrust", opt.id)}

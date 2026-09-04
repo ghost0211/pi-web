@@ -68,18 +68,22 @@ Command-line flags override environment variables:
 | `--port <port>`, `-p`, or `PORT` | Server listening port | `30141` |
 | `--hostname <host>`, `-H`, or `PI_WEB_HOSTNAME` | Hostname to bind | `127.0.0.1` |
 | `--no-open` or `PI_WEB_NO_OPEN=1` | Disable automatic browser opening | `false` |
+| `--unsafe-no-auth` or `PI_WEB_UNSAFE_NO_AUTH=1` | Explicitly allow unauthenticated non-loopback HTTP | `false` |
 | `PI_WEB_PASSWORD` | Enable HTTP Basic Auth (username: `pi`) | Disabled |
 | `PI_WEB_ALLOWED_HOSTS` | Comma-separated list of allowed hostnames/proxies | Unset |
+| `PI_WEB_ALLOWED_DEV_ORIGINS` | Extra hostnames/IPs allowed to access the Next.js dev server | Unset |
 | `PI_CODING_AGENT_DIR` | Custom Pi agent configuration directory | `~/.pi/agent` |
 | `PI_WEB_SESSION_IDLE_TIMEOUT_MS` | Idle session teardown delay in ms (`0` disables) | `600000` (10 min) |
 
 ### Remote LAN / Server Deployment
 
-When binding to `0.0.0.0` or exposing on a local network, enable password authentication:
+Binding to a non-loopback address requires password authentication by default:
 
 ```bash
 PI_WEB_PASSWORD='your-secure-password' pi-web -H 0.0.0.0 -p 30141 --no-open
 ```
+
+Basic Auth over plain HTTP does not encrypt the password. Put Pi Web behind HTTPS or use a trusted VPN. For an isolated trusted network only, `--unsafe-no-auth` explicitly bypasses the startup check.
 
 ### HTTP / HTTPS Proxy
 

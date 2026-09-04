@@ -243,6 +243,19 @@ test("built-in clone switches to the independent child session", () => {
   assert.match(builtinSource, /onSessionForked\?\.\(result\.newSessionId\)/);
 });
 
+test("built-in new uses the latest workspace and navigation callback", () => {
+  const builtinSource = source.slice(
+    source.indexOf("  const handleBuiltinSlashCommand"),
+    source.indexOf("  // Let AgentSession.prompt decide atomically"),
+  );
+
+  assert.match(builtinSource, /const targetCwd = session\?\.cwd \?\? newSessionCwd \?\? ""/);
+  assert.match(builtinSource, /if \(onNewSession && targetCwd\)/);
+  assert.match(builtinSource, /onNewSession\(tempId, targetCwd\)/);
+  assert.match(builtinSource, /newSessionCwd[\s\S]*onNewSession[\s\S]*session\?\.cwd/);
+  assert.doesNotMatch(builtinSource, /opts\.onNewSession/);
+});
+
 test("post-accept prompt errors do not duplicate the user submission", () => {
   const promptErrorSource = source.slice(
     source.indexOf('case "prompt_error"'),
@@ -467,15 +480,16 @@ test("session reload context estimates use authoritative model metadata", () => 
     source.indexOf("  const loadSession = useCallback"),
     source.indexOf("  const loadContext = useCallback"),
   );
-  const messageEndSource = source.slice(
-    source.indexOf('      case "message_end"'),
-    source.indexOf('      case "tool_execution_start"'),
+  const contextEstimateSource = source.slice(
+    source.indexOf("  useEffect(() => {\n    if (!estimateContextAfterMessageRef.current) return;"),
+    source.indexOf("  const resolveComposerDraftKey"),
   );
 
   assert.match(source, /type ModelEntry = \{[^}]*contextWindow\?: number/);
   assert.match(loadSessionSource, /resolveModelContextWindow\(\s*d\.context\.model,\s*modelListRef\.current/);
   assert.match(loadSessionSource, /calculateActiveContextTokens\(d\.context\.messages, windowSize\)/);
-  assert.match(messageEndSource, /resolveModelContextWindow\(\s*displayModelRef\.current,\s*modelListRef\.current/);
+  assert.match(contextEstimateSource, /resolveModelContextWindow\(\s*displayModel,\s*modelList/);
+  assert.match(contextEstimateSource, /calculateActiveContextTokens\(messages, windowSize\)/);
   assert.doesNotMatch(loadSessionSource, /inferModelContextWindow/);
 });
 

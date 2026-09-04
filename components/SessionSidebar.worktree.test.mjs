@@ -13,3 +13,12 @@ test("uses the server-resolved current worktree identity", () => {
   assert.match(source, /if \(currentWorktreePath === path\) setSelectedCwd\(worktreeState\.projectRoot\)/);
   assert.doesNotMatch(source, /const isCurrent = wt\.path === selectedCwd/);
 });
+
+test("renders worktree switching, creation, removal, and dirty confirmation", () => {
+  assert.match(source, /showWorktreeSwitcher && worktreeState/);
+  assert.match(source, /setSelectedCwd\(worktree\.path\)/);
+  assert.match(source, /handleCreateWorktree\(\)/);
+  assert.match(source, /handleRemoveWorktree\(worktree\.path, false\)/);
+  assert.match(source, /handleRemoveWorktree\(worktree\.path, true\)/);
+  assert.match(source, /wtConfirmRemove === worktree\.path/);
+});

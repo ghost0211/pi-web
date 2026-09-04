@@ -9,6 +9,7 @@ const CLI_OPTIONS = {
   port: { type: "string", short: "p" },
   hostname: { type: "string", short: "H" },
   "no-open": { type: "boolean" },
+  "unsafe-no-auth": { type: "boolean" },
   help: { type: "boolean", short: "h" },
 };
 
@@ -38,6 +39,7 @@ Options:
   -p, --port <port>          Server port (default: 30141, or PORT)
   -H, --hostname <host>      Bind hostname (default: 127.0.0.1, or PI_WEB_HOSTNAME)
       --no-open              Do not open a browser automatically
+      --unsafe-no-auth       Allow non-loopback HTTP without authentication
   -h, --help                 Show this help message and exit
 
 Environment:
@@ -45,6 +47,7 @@ Environment:
   PI_WEB_HOSTNAME            Default hostname when --hostname is omitted
   PI_WEB_NO_OPEN             Set to 1/true/yes/on to disable browser open
   PI_WEB_PASSWORD            Enable HTTP Basic Auth (username is always "pi")
+  PI_WEB_UNSAFE_NO_AUTH      Set to 1/true/yes/on to allow unauthenticated remote access
   PI_WEB_ALLOWED_HOSTS       Extra exact proxy/custom hostnames, comma-separated
 `;
 }
@@ -81,6 +84,7 @@ function parseLaunchOptions(args = process.argv.slice(2), env = process.env) {
     port: normalizePort(values.port ?? env.PORT ?? "30141"),
     hostname: values.hostname ?? env.PI_WEB_HOSTNAME ?? "127.0.0.1",
     openBrowser: !values["no-open"] && !isEnabled(env.PI_WEB_NO_OPEN),
+    unsafeNoAuth: Boolean(values["unsafe-no-auth"]) || isEnabled(env.PI_WEB_UNSAFE_NO_AUTH),
   };
 }
 

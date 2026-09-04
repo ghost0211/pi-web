@@ -11,6 +11,13 @@ try {
   piVersion = (JSON.parse(readFileSync(piPkgPath, "utf8")) as { version: string }).version;
 } catch { /* package not found, use default */ }
 
+const allowedDevOrigins = [
+  "127.0.0.1",
+  ...(process.env.PI_WEB_ALLOWED_DEV_ORIGINS?.split(",") ?? []),
+]
+  .map((origin) => origin.trim())
+  .filter((origin) => origin && !/[\s/@\\]/.test(origin));
+
 const nextConfig: NextConfig = {
   outputFileTracingRoot: configDir,
   // Only the desktop (Tauri) build needs the self-contained standalone server;
@@ -41,33 +48,9 @@ const nextConfig: NextConfig = {
     "@earendil-works/pi-ai",
     "@earendil-works/pi-tui",
   ],
-  // Next 16 blocks cross-origin access to dev resources by default. Allow the
-  // loopback and the RFC1918 LAN ranges so the dev server stays reachable
-  // from other machines on the same LAN.
-  allowedDevOrigins: [
-    "127.0.0.1",
-    // Tailscale address used to reach this headless development server.
-    "100.123.204.99",
-    "10.*.*.*",
-    // 172.16.0.0/12
-    "172.16.*.*",
-    "172.17.*.*",
-    "172.18.*.*",
-    "172.19.*.*",
-    "172.20.*.*",
-    "172.21.*.*",
-    "172.22.*.*",
-    "172.23.*.*",
-    "172.24.*.*",
-    "172.25.*.*",
-    "172.26.*.*",
-    "172.27.*.*",
-    "172.28.*.*",
-    "172.29.*.*",
-    "172.30.*.*",
-    "172.31.*.*",
-    "192.168.*.*",
-  ],
+  // Next 16 blocks cross-origin development requests by default. Keep the
+  // default narrow and require operators to opt additional hosts in.
+  allowedDevOrigins,
   async headers() {
     return [
       {

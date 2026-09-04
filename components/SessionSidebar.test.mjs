@@ -98,8 +98,16 @@ test("does not expose disk-backed actions for transient sessions", () => {
 });
 
 test("hides subagent rows and aggregates their state into the main session row", () => {
-  assert.match(source, /const sessionFamilies = listSessionFamilies\(filteredSessions\)/);
+  assert.match(source, /const projectFamilies = listSessionFamilies\(projectSessions\)/);
   assert.match(source, /familySessions\.some\(\(session\) => session\.id === selectedSessionId\)/);
   assert.match(source, /familySessions\.some\(\(session\) => runningSessionIds\.has\(session\.id\)\)/);
   assert.doesNotMatch(source, /function SessionTreeItem/);
+});
+
+test("mounts the file explorer and wires its interactive controls", () => {
+  assert.match(source, /import \{ FileExplorer, type FileExplorerHandle \} from "\.\/FileExplorer"/);
+  assert.match(source, /<FileExplorer/);
+  assert.match(source, /fileExplorerRef\.current\?\.openUploadPicker\(\)/);
+  assert.match(source, /onOpenFile=\{onOpenFile \?\? \(\(\) => \{\}\)\}/);
+  assert.match(source, /onAtMentions=\{onAtMentions\}/);
 });

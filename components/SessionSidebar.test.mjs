@@ -104,10 +104,8 @@ test("hides subagent rows and aggregates their state into the main session row",
   assert.doesNotMatch(source, /function SessionTreeItem/);
 });
 
-test("mounts the file explorer and wires its interactive controls", () => {
-  assert.match(source, /import \{ FileExplorer, type FileExplorerHandle \} from "\.\/FileExplorer"/);
-  assert.match(source, /<FileExplorer/);
-  assert.match(source, /fileExplorerRef\.current\?\.openUploadPicker\(\)/);
-  assert.match(source, /onOpenFile=\{onOpenFile \?\? \(\(\) => \{\}\)\}/);
-  assert.match(source, /onAtMentions=\{onAtMentions\}/);
+test("keeps the file explorer hidden from the sidebar", () => {
+  assert.doesNotMatch(source, /from "\.\/FileExplorer"/);
+  assert.doesNotMatch(source, /<FileExplorer/);
+  assert.doesNotMatch(source, /t\("files\.explorer"\)/);
 });

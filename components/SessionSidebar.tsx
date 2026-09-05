@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
-import { listSessionFamilies } from "@/lib/session-family";
+import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
@@ -15,6 +15,73 @@ import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { isDesktopApp } from "@/lib/desktop";
 import type { RunningTaskPhase } from "./RunningTasksPanel";
+
+// Fixed row heights for the sidebar list. Every row renders at exactly its
+// declared height, so the list can be windowed (only the visible slice is
+// mounted) over a flat model of project headers, session rows and
+// expand/empty rows.
+const SESSION_LIST_ITEM_HEIGHT = 34;
+const PROJECT_HEADER_HEIGHT = 34;
+const PROJECT_EMPTY_HEIGHT = 28;
+const SHOW_MORE_HEIGHT = 33;
+const PROJECT_TRAILING_HEIGHT = 4;
+const VIRTUAL_OVERSCAN_PX = SESSION_LIST_ITEM_HEIGHT * 8;
+
+export interface SidebarVirtualRow {
+  key: string;
+  top: number;
+  height: number;
+}
+
+/**
+ * Windowed rendering over rows with mixed heights: binary-search the first
+ * row intersecting [scrollTop - overscan, scrollTop + viewport + overscan],
+ * mount that slice, and keep the pinned (focused) row mounted so scrolling
+ * cannot discard an inline rename.
+ */
+export function getVisibleRowIndices(
+  rows: readonly SidebarVirtualRow[],
+  scrollTop: number,
+  viewportHeight: number,
+  pinnedKey?: string | null,
+): number[] {
+  if (rows.length === 0) return [];
+  const totalHeight = rows[rows.length - 1].top + rows[rows.length - 1].height;
+  const clampedScrollTop = Math.min(scrollTop, Math.max(0, totalHeight - (viewportHeight || 600)));
+  const lower = Math.max(0, clampedScrollTop - VIRTUAL_OVERSCAN_PX);
+  const upper = clampedScrollTop + (viewportHeight || 600) + VIRTUAL_OVERSCAN_PX;
+  let lo = 0;
+  let hi = rows.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (rows[mid].top + rows[mid].height <= lower) lo = mid + 1;
+    else hi = mid;
+  }
+  const start = lo;
+  const indices: number[] = [];
+  let pinnedIndex = -1;
+  for (let i = start; i < rows.length; i++) {
+    if (rows[i].top >= upper) break;
+    if (pinnedKey && rows[i].key === pinnedKey) pinnedIndex = indices.length;
+    indices.push(i);
+  }
+  if (pinnedKey && pinnedIndex === -1) {
+    const pinned = rows.findIndex((row) => row.key === pinnedKey);
+    if (pinned >= 0) {
+      const position = indices.findIndex((i) => i > pinned);
+      if (position === -1) indices.push(pinned);
+      else indices.splice(position, 0, pinned);
+    }
+  }
+  return indices;
+}
+
+type SidebarRow = SidebarVirtualRow & (
+  | { kind: "project"; project: { key: string; root: string }; isCollapsed: boolean }
+  | { kind: "session"; family: SessionFamily; projectKey: string }
+  | { kind: "empty" }
+  | { kind: "more"; projectKey: string; expanded: boolean }
+);
 
 declare global {
   interface Window {
@@ -298,6 +365,31 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // running state; late /api/sessions responses must not overwrite it.
   const runningPollAuthoritativeRef = useRef(false);
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Virtualized session list: only the visible window of rows is mounted.
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const [listViewportH, setListViewportH] = useState(0);
+  const [listScrollTop, setListScrollTop] = useState(0);
+  const [focusedRowKey, setFocusedRowKey] = useState<string | null>(null);
+  const listScrollRafRef = useRef<number | null>(null);
+  const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const top = e.currentTarget.scrollTop;
+    if (listScrollRafRef.current != null) return;
+    listScrollRafRef.current = requestAnimationFrame(() => {
+      listScrollRafRef.current = null;
+      setListScrollTop(top);
+    });
+  }, []);
+  useLayoutEffect(() => {
+    const el = listScrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setListViewportH(entry.contentRect.height);
+    });
+    ro.observe(el);
+    setListViewportH(el.clientHeight);
+    return () => ro.disconnect();
+  }, []);
 
   const loadSessions = useCallback(async (showLoading = false, force = false): Promise<SessionInfo[]> => {
     try {
@@ -953,6 +1045,55 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       : null);
 
+  // Flat row model for the windowed list: project headers, session rows and
+  // expand/empty rows laid out with cumulative tops (see #626; adapted to the
+  // fork's project-grouped sidebar).
+  const sidebarRows = useMemo(() => {
+    const rows: SidebarRow[] = [];
+    let top = 0;
+    const q = sessionSearch.trim().toLowerCase();
+    for (const project of allProjects) {
+      const isCollapsed = collapsedProjects.has(project.key);
+      const projectSessions = sessionsByProject.get(project.key) ?? [];
+      const projectFamilies = listSessionFamilies(projectSessions);
+      const visibleProjectFamilies = q
+        ? projectFamilies.filter((family) => {
+            const familySessions = [family.root, ...family.subagents];
+            return familySessions.some((s) => {
+              const name = (s.name ?? "").toLowerCase();
+              const firstMsg = (s.firstMessage ?? "").toLowerCase();
+              const id = s.id.toLowerCase();
+              return name.includes(q) || firstMsg.includes(q) || id.includes(q);
+            });
+          }).filter((family) => !hiddenSessions.has(family.root.id))
+        : projectFamilies.filter((family) => !hiddenSessions.has(family.root.id));
+      if (q && visibleProjectFamilies.length === 0) continue;
+      rows.push({ kind: "project", key: `project:${project.key}`, top, height: PROJECT_HEADER_HEIGHT, project, isCollapsed });
+      top += PROJECT_HEADER_HEIGHT;
+      if (!isCollapsed) {
+        if (visibleProjectFamilies.length === 0) {
+          rows.push({ kind: "empty", key: `empty:${project.key}`, top, height: PROJECT_EMPTY_HEIGHT });
+          top += PROJECT_EMPTY_HEIGHT;
+        } else {
+          const expanded = q !== "" || expandedProjectSessions.has(project.key);
+          const shown = expanded ? visibleProjectFamilies : visibleProjectFamilies.slice(0, 6);
+          for (const family of shown) {
+            rows.push({ kind: "session", key: `session:${family.root.id}`, top, height: SESSION_LIST_ITEM_HEIGHT, family, projectKey: project.key });
+            top += SESSION_LIST_ITEM_HEIGHT;
+          }
+          if (!q && visibleProjectFamilies.length > 6) {
+            rows.push({ kind: "more", key: `more:${project.key}`, top, height: SHOW_MORE_HEIGHT, projectKey: project.key, expanded });
+            top += SHOW_MORE_HEIGHT;
+          }
+        }
+      }
+      top += PROJECT_TRAILING_HEIGHT;
+    }
+    return { rows, totalHeight: top };
+  }, [allProjects, collapsedProjects, sessionsByProject, sessionSearch, hiddenSessions, expandedProjectSessions]);
+
+  const visibleRowIndices = getVisibleRowIndices(sidebarRows.rows, listScrollTop, listViewportH, focusedRowKey);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       {customPathOpen && (
@@ -1354,7 +1495,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
 
       {/* Project & Session list */}
-      <div style={{ flex: "1 1 auto", overflowY: "auto", padding: "0 0 4px", minHeight: 80 }}>
+      <div
+        ref={listScrollRef}
+        onScroll={handleListScroll}
+        style={{ flex: "1 1 auto", overflowY: "auto", padding: "0 0 4px", minHeight: 80 }}
+      >
         {(() => {
           const allProjectsCollapsed = allProjects.length > 0 && allProjects.every((p) => collapsedProjects.has(p.key));
           const handleToggleCollapseAll = () => {
@@ -1512,407 +1657,391 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {t("sidebar.noSessions")}
           </div>
         )}
-        {allProjects.map((project) => {
-          const isCollapsed = collapsedProjects.has(project.key);
-          const projectSessions = sessionsByProject.get(project.key) ?? [];
-          const projectFamilies = listSessionFamilies(projectSessions);
-
-          const visibleProjectFamilies = sessionSearch.trim()
-            ? projectFamilies.filter((family) => {
-                const q = sessionSearch.trim().toLowerCase();
-                const familySessions = [family.root, ...family.subagents];
-                return familySessions.some((s) => {
-                  const name = (s.name ?? "").toLowerCase();
-                  const firstMsg = (s.firstMessage ?? "").toLowerCase();
-                  const id = s.id.toLowerCase();
-                  return name.includes(q) || firstMsg.includes(q) || id.includes(q);
-                });
-              })
-              .filter((family) => !hiddenSessions.has(family.root.id))
-            : projectFamilies.filter((family) => !hiddenSessions.has(family.root.id));
-
-          if (sessionSearch.trim() && visibleProjectFamilies.length === 0) {
-            return null;
-          }
-
-          return (
-            <div
-              key={project.key}
-              style={{
-                marginBottom: 4,
-              }}
-            >
-              {/* Project Header Row */}
-              <div style={{ position: "relative" }}>
-                <div
-                  onClick={() => {
-                    toggleProjectCollapse(project.key);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "6px 8px",
-                    margin: "1px 8px",
-                    borderRadius: 7,
-                    background: "transparent",
-                    cursor: "pointer",
-                    userSelect: "none",
-                    transition: "background 0.12s",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--bg-hover)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "transparent";
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
-                    <svg
-                      width="10"
-                      height="10"
-                      viewBox="0 0 10 10"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      style={{
-                        color: "var(--text-dim)",
-                        transform: isCollapsed ? "rotate(-90deg)" : "none",
-                        transition: "transform 0.15s ease",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <polyline points="2 3.5 5 6.5 8 3.5" />
-                    </svg>
-                    {isCollapsed ? (
-                      <svg
-                        width="13"
-                        height="13"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        style={{ flexShrink: 0, color: "var(--text-muted)" }}
+        {sidebarRows.rows.length > 0 && (
+          <div style={{ position: "relative", height: sidebarRows.totalHeight }}>
+            {visibleRowIndices.map((rowIndex) => {
+              const row = sidebarRows.rows[rowIndex];
+              if (row.kind === "project") {
+                const project = row.project;
+                const isCollapsed = row.isCollapsed;
+                return (
+                  <div key={row.key} style={{ position: "absolute", top: row.top, left: 0, right: 0, height: row.height }}>
+                    {/* Project Header Row */}
+                    <div style={{ position: "relative", height: PROJECT_HEADER_HEIGHT - 2 }}>
+                      <div
+                        onClick={() => {
+                          toggleProjectCollapse(project.key);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "6px 8px",
+                          margin: "1px 8px",
+                          borderRadius: 7,
+                          background: "transparent",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          transition: "background 0.12s",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "var(--bg-hover)";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
                       >
-                        <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
-                      </svg>
-                    ) : (
-                      <svg
-                        width="13"
-                        height="13"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        style={{ flexShrink: 0, color: "var(--text-muted)" }}
-                      >
-                        <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
-                      </svg>
-                    )}
-                    <span
-                      title={project.root}
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 500,
-                        color: "var(--text-muted)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {getFileName(project.root) || displayCwd(project.root, homeDir)}
-                    </span>
-                  </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+                          <svg
+                            width="10"
+                            height="10"
+                            viewBox="0 0 10 10"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            style={{
+                              color: "var(--text-dim)",
+                              transform: isCollapsed ? "rotate(-90deg)" : "none",
+                              transition: "transform 0.15s ease",
+                              flexShrink: 0,
+                            }}
+                          >
+                            <polyline points="2 3.5 5 6.5 8 3.5" />
+                          </svg>
+                          {isCollapsed ? (
+                            <svg
+                              width="13"
+                              height="13"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              style={{ flexShrink: 0, color: "var(--text-muted)" }}
+                            >
+                              <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+                            </svg>
+                          ) : (
+                            <svg
+                              width="13"
+                              height="13"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              style={{ flexShrink: 0, color: "var(--text-muted)" }}
+                            >
+                              <path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2" />
+                            </svg>
+                          )}
+                          <span
+                            title={project.root}
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 500,
+                              color: "var(--text-muted)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {getFileName(project.root) || displayCwd(project.root, homeDir)}
+                          </span>
+                        </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                    {showProjectActivity(projectActivity.get(project.key), t)}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startNewSessionForCwd(project.root);
-                      }}
-                      title={t("sidebar.newInProject") || t("sidebar.new")}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 22,
-                        height: 22,
-                        padding: 0,
-                        background: "none",
-                        border: "none",
-                        borderRadius: 4,
-                        color: "var(--text-dim)",
-                        cursor: "pointer",
-                        transition: "color 0.12s, background 0.12s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = "var(--accent)";
-                        e.currentTarget.style.background = "var(--bg-selected)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = "var(--text-dim)";
-                        e.currentTarget.style.background = "none";
-                      }}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                        <line x1="6" y1="1" x2="6" y2="11" />
-                        <line x1="1" y1="6" x2="11" y2="6" />
-                      </svg>
-                    </button>
+                        <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                          {showProjectActivity(projectActivity.get(project.key), t)}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              startNewSessionForCwd(project.root);
+                            }}
+                            title={t("sidebar.newInProject") || t("sidebar.new")}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: 22,
+                              height: 22,
+                              padding: 0,
+                              background: "none",
+                              border: "none",
+                              borderRadius: 4,
+                              color: "var(--text-dim)",
+                              cursor: "pointer",
+                              transition: "color 0.12s, background 0.12s",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.color = "var(--accent)";
+                              e.currentTarget.style.background = "var(--bg-selected)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.color = "var(--text-dim)";
+                              e.currentTarget.style.background = "none";
+                            }}
+                          >
+                            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                              <line x1="6" y1="1" x2="6" y2="11" />
+                              <line x1="1" y1="6" x2="11" y2="6" />
+                            </svg>
+                          </button>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenProjectMenuKey(openProjectMenuKey === project.key ? null : project.key);
-                      }}
-                      title={t("sidebar.projectOptions")}
-                      aria-label={t("sidebar.projectOptions")}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 22,
-                        height: 22,
-                        padding: 0,
-                        background: openProjectMenuKey === project.key ? "var(--bg-hover)" : "none",
-                        border: "none",
-                        borderRadius: 4,
-                        color: openProjectMenuKey === project.key ? "var(--text)" : "var(--text-dim)",
-                        cursor: "pointer",
-                        transition: "color 0.12s, background 0.12s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = "var(--text)";
-                        e.currentTarget.style.background = "var(--bg-hover)";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (openProjectMenuKey !== project.key) {
-                          e.currentTarget.style.color = "var(--text-dim)";
-                          e.currentTarget.style.background = "none";
-                        }
-                      }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-                        <circle cx="3" cy="8" r="1.5" />
-                        <circle cx="8" cy="8" r="1.5" />
-                        <circle cx="13" cy="8" r="1.5" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenProjectMenuKey(openProjectMenuKey === project.key ? null : project.key);
+                            }}
+                            title={t("sidebar.projectOptions")}
+                            aria-label={t("sidebar.projectOptions")}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: 22,
+                              height: 22,
+                              padding: 0,
+                              background: openProjectMenuKey === project.key ? "var(--bg-hover)" : "none",
+                              border: "none",
+                              borderRadius: 4,
+                              color: openProjectMenuKey === project.key ? "var(--text)" : "var(--text-dim)",
+                              cursor: "pointer",
+                              transition: "color 0.12s, background 0.12s",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.color = "var(--text)";
+                              e.currentTarget.style.background = "var(--bg-hover)";
+                            }}
+                            onMouseLeave={(e) => {
+                              if (openProjectMenuKey !== project.key) {
+                                e.currentTarget.style.color = "var(--text-dim)";
+                                e.currentTarget.style.background = "none";
+                              }
+                            }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                              <circle cx="3" cy="8" r="1.5" />
+                              <circle cx="8" cy="8" r="1.5" />
+                              <circle cx="13" cy="8" r="1.5" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
 
-                {/* Project Options Dropdown Menu */}
-                {openProjectMenuKey === project.key && (
-                  <div
-                    ref={projectMenuRef}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      position: "absolute",
-                      top: "calc(100% + 2px)",
-                      right: 12,
-                      zIndex: 80,
-                      minWidth: 152,
-                      padding: 4,
-                      background: "var(--bg-panel)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      boxShadow: "0 8px 24px rgba(0, 0, 0, 0.24)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 2,
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenProjectMenuKey(null);
-                        startNewSessionForCwd(project.root);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        width: "100%",
-                        padding: "6px 10px",
-                        background: "none",
-                        border: "none",
-                        borderRadius: 6,
-                        color: "var(--text)",
-                        fontSize: 12,
-                        textAlign: "left",
-                        cursor: "pointer",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="12" y1="5" x2="12" y2="19" />
-                        <line x1="5" y1="12" x2="19" y2="12" />
-                      </svg>
-                      <span>{t("sidebar.newSessionHere")}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleCopyProjectPath(project.root);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        width: "100%",
-                        padding: "6px 10px",
-                        background: "none",
-                        border: "none",
-                        borderRadius: 6,
-                        color: "var(--text)",
-                        fontSize: 12,
-                        textAlign: "left",
-                        cursor: "pointer",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                      </svg>
-                      <span>{t("sidebar.copyPath")}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        handleRemoveProject(project.key, project.root);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        width: "100%",
-                        padding: "6px 10px",
-                        background: "none",
-                        border: "none",
-                        borderRadius: 6,
-                        color: "var(--text)",
-                        fontSize: 12,
-                        textAlign: "left",
-                        cursor: "pointer",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-                        <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-                        <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-                        <line x1="2" y1="2" x2="22" y2="22" />
-                      </svg>
-                      <span>{t("sidebar.hideProject")}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handlePermanentlyRemoveProject(project.key);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        width: "100%",
-                        padding: "6px 10px",
-                        background: "none",
-                        border: "none",
-                        borderRadius: 6,
-                        color: "#ef4444",
-                        fontSize: 12,
-                        textAlign: "left",
-                        cursor: "pointer",
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)"; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                        <path d="M10 11v6M14 11v6" />
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                      </svg>
-                      <span>{t("sidebar.removeProjectPermanently")}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Sessions List under this Project */}
-              {!isCollapsed && (
-                <div style={{ marginTop: 2 }}>
-                  {visibleProjectFamilies.length === 0 ? (
-                    <div style={{ padding: "6px 28px", fontSize: 11, color: "var(--text-dim)" }}>
-                      {t("sidebar.noSessions")}
-                    </div>
-                  ) : (
-                    <>
-                    {(sessionSearch.trim() || expandedProjectSessions.has(project.key)
-                      ? visibleProjectFamilies
-                      : visibleProjectFamilies.slice(0, 6)
-                    ).map((family) => {
-                      const familySessions = [family.root, ...family.subagents];
-                      const displaySession = family.latestModified === family.root.modified
-                        ? family.root
-                        : { ...family.root, modified: family.latestModified };
-                      return (
-                        <SessionItem
-                          key={family.root.id}
-                          session={displaySession}
-                          isSelected={familySessions.some((session) => session.id === selectedSessionId)}
-                          isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
-                          isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
-                          onClick={() => handleSelectSessionFromList(family.root)}
-                          onRenamed={loadSessions}
-                          onHide={(id) => {
-                            handleHideSession(id, project.key);
-                            loadSessions();
+                      {/* Project Options Dropdown Menu */}
+                      {openProjectMenuKey === project.key && (
+                        <div
+                          ref={projectMenuRef}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: "absolute",
+                            top: "calc(100% + 2px)",
+                            right: 12,
+                            zIndex: 80,
+                            minWidth: 152,
+                            padding: 4,
+                            background: "var(--bg-panel)",
+                            border: "1px solid var(--border)",
+                            borderRadius: 8,
+                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.24)",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
                           }}
-                        />
-                      );
-                    })}
-                    {!sessionSearch.trim() && visibleProjectFamilies.length > 6 && (
-                      <button
-                        type="button"
-                        className="kimi-show-more"
-                        onClick={() => setExpandedProjectSessions((current) => {
-                          const next = new Set(current);
-                          if (next.has(project.key)) next.delete(project.key);
-                          else next.add(project.key);
-                          return next;
-                        })}
-                      >
-                        <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expandedProjectSessions.has(project.key) ? "rotate(180deg)" : undefined }}>
-                          <polyline points="2 3.5 5 6.5 8 3.5" />
-                        </svg>
-                        <span>{expandedProjectSessions.has(project.key) ? t("sidebar.showLess") : t("sidebar.showMore")}</span>
-                      </button>
-                    )}
-                    </>
-                  )}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenProjectMenuKey(null);
+                              startNewSessionForCwd(project.root);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              width: "100%",
+                              padding: "6px 10px",
+                              background: "none",
+                              border: "none",
+                              borderRadius: 6,
+                              color: "var(--text)",
+                              fontSize: 12,
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="12" y1="5" x2="12" y2="19" />
+                              <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                            <span>{t("sidebar.newSessionHere")}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleCopyProjectPath(project.root);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              width: "100%",
+                              padding: "6px 10px",
+                              background: "none",
+                              border: "none",
+                              borderRadius: 6,
+                              color: "var(--text)",
+                              fontSize: 12,
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                            <span>{t("sidebar.copyPath")}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleRemoveProject(project.key, project.root);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              width: "100%",
+                              padding: "6px 10px",
+                              background: "none",
+                              border: "none",
+                              borderRadius: 6,
+                              color: "var(--text)",
+                              fontSize: 12,
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+                              <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+                              <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+                              <line x1="2" y1="2" x2="22" y2="22" />
+                            </svg>
+                            <span>{t("sidebar.hideProject")}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handlePermanentlyRemoveProject(project.key);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              width: "100%",
+                              padding: "6px 10px",
+                              background: "none",
+                              border: "none",
+                              borderRadius: 6,
+                              color: "#ef4444",
+                              fontSize: 12,
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                              <path d="M10 11v6M14 11v6" />
+                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                            </svg>
+                            <span>{t("sidebar.removeProjectPermanently")}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              if (row.kind === "empty") {
+                return (
+                  <div
+                    key={row.key}
+                    style={{ position: "absolute", top: row.top, left: 0, right: 0, height: row.height, display: "flex", alignItems: "center", padding: "0 28px", fontSize: 11, color: "var(--text-dim)" }}
+                  >
+                    {t("sidebar.noSessions")}
+                  </div>
+                );
+              }
+              if (row.kind === "more") {
+                return (
+                  <div key={row.key} style={{ position: "absolute", top: row.top, left: 0, right: 0, height: row.height }}>
+                    <button
+                      type="button"
+                      className="kimi-show-more"
+                      onClick={() => setExpandedProjectSessions((current) => {
+                        const next = new Set(current);
+                        if (next.has(row.projectKey)) next.delete(row.projectKey);
+                        else next.add(row.projectKey);
+                        return next;
+                      })}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ transform: row.expanded ? "rotate(180deg)" : undefined }}>
+                        <polyline points="2 3.5 5 6.5 8 3.5" />
+                      </svg>
+                      <span>{row.expanded ? t("sidebar.showLess") : t("sidebar.showMore")}</span>
+                    </button>
+                  </div>
+                );
+              }
+              const family = row.family;
+              const familySessions = [family.root, ...family.subagents];
+              const displaySession = family.latestModified === family.root.modified
+                ? family.root
+                : { ...family.root, modified: family.latestModified };
+              // Blur bubbles after the input's save handler before unpinning the row.
+              return (
+                <div
+                  key={row.key}
+                  onFocus={() => setFocusedRowKey(row.key)}
+                  onBlur={() => setFocusedRowKey(null)}
+                  style={{ position: "absolute", top: row.top, left: 0, right: 0, height: row.height }}
+                >
+                  <SessionItem
+                    session={displaySession}
+                    isSelected={familySessions.some((session) => session.id === selectedSessionId)}
+                    isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
+                    isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
+                    onClick={() => handleSelectSessionFromList(family.root)}
+                    onRenamed={loadSessions}
+                    onHide={(id) => {
+                      handleHideSession(id, row.projectKey);
+                      loadSessions();
+                    }}
+                  />
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        )}      </div>
 
     </div>
   );
@@ -2140,8 +2269,6 @@ function SessionItem({
   }, [onRenamed, session.cwd, session.id, session.name, session.path]);
 
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
-  const ITEM_HEIGHT = 34;
-
   return (
     <div
       className="session-row"
@@ -2150,7 +2277,7 @@ function SessionItem({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{
-        height: ITEM_HEIGHT,
+        height: SESSION_LIST_ITEM_HEIGHT,
         display: "flex",
         alignItems: "center",
         margin: "1px 8px",

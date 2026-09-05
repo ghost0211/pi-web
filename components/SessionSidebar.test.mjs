@@ -1,9 +1,52 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createJiti } from "jiti";
+
+const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
+const { getVisibleRowIndices } = await jiti.import("./SessionSidebar.tsx");
 
 const source = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
 const sessionItemSource = source.slice(source.indexOf("function SessionItem("));
+
+function rowsOfHeights(count, height) {
+  return Array.from({ length: count }, (_, i) => ({ key: `r${i}`, top: i * height, height }));
+}
+
+test("windowing mounts the visible slice and pins the focused row", () => {
+  for (const [scrollTop, pinned] of [[0, "r1999"], [10000, "r0"]]) {
+    const rows = rowsOfHeights(2000, 34);
+    const indices = getVisibleRowIndices(rows, scrollTop, 335, pinned);
+    const firstVisible = Math.floor(scrollTop / 34);
+    const lastVisible = Math.ceil((scrollTop + 335) / 34) - 1;
+    for (let index = firstVisible; index <= lastVisible; index++) assert.ok(indices.includes(index));
+    assert.ok(indices.includes(Number(pinned.slice(1))));
+    assert.equal(new Set(indices).size, indices.length);
+    assert.deepEqual(indices, [...indices].sort((a, b) => a - b));
+    // Overscan keeps the window bounded even with a pinned out-of-view row.
+    assert.ok(indices.length < 40);
+  }
+  // Mixed heights: every row intersecting the viewport is mounted.
+  const mixed = [];
+  let top = 0;
+  for (let i = 0; i < 500; i++) {
+    const height = i % 3 === 0 ? 34 : 33;
+    mixed.push({ key: `m${i}`, top, height });
+    top += height;
+  }
+  const indices = getVisibleRowIndices(mixed, 2000, 335, null);
+  for (let i = 0; i < mixed.length; i++) {
+    const row = mixed[i];
+    if (row.top + row.height > 2000 && row.top < 2000 + 335) assert.ok(indices.includes(i), `row ${i}`);
+  }
+});
+
+test("row windows stay valid after the list shrinks and before the viewport is measured", () => {
+  assert.deepEqual(getVisibleRowIndices(rowsOfHeights(5, 34), 80000, 335, "r1999"), [0, 1, 2, 3, 4]);
+  assert.deepEqual(getVisibleRowIndices([], 80000, 335, "r1999"), []);
+  // viewport 0 falls back to a 600px guess
+  assert.ok(getVisibleRowIndices(rowsOfHeights(2000, 34), 0, 0).length > 0);
+});
 
 test("only Shift+click bypasses session hide confirmation", () => {
   assert.match(

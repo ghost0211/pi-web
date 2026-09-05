@@ -579,6 +579,8 @@ export const zhTWLocale: LocalePlugin = {
     "chat.commandSettings": "開啟設定中心",
     "chat.commandHelp": "檢視可用指令列表",
     "chat.compacted": "已壓縮",
+    "chat.imageNotSupportedTitle": "圖片可能無法傳送",
+    "chat.imageNotSupportedBody": "目前選擇的模型（{model}）不支援圖片輸入，附加的圖片可能會被忽略。",
     "chat.tokensSaved": "已節省 {saved}",
     "i18n.close": "關閉",
     "i18n.copy": "複製",

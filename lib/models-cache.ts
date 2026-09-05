@@ -4,6 +4,8 @@ export interface ModelListEntry {
   provider: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Input modalities (e.g. ["text", "image"]); undefined = unknown. */
+  input?: string[];
 }
 
 export interface ModelsData {

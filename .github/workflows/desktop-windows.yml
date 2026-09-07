@@ -15,12 +15,12 @@ permissions:
   contents: read
 
 jobs:
-  # The web test suite is Linux-validated; several pre-existing tests encode
-  # POSIX assumptions (CRLF source markers, PATH vs Path casing). Run
-  # verification where it is green and keep the Windows job focused on the
-  # platform-specific installer build.
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +36,7 @@ jobs:
         run: npm test
 
       - name: Typecheck web app
-        run: node_modules/.bin/tsc --noEmit
+        run: node node_modules/typescript/bin/tsc --noEmit
 
       - name: Lint web app
         run: npm run lint -- --max-warnings=0

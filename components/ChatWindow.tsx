@@ -5,7 +5,9 @@ import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecuti
 import { normalizeCustomPanelLines } from "@/lib/ansi";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
-import { extractTurnWrittenFiles, type WrittenFile } from "@/lib/turn-written-files";
+import type { WrittenFile } from "@/lib/turn-written-files";
+import { buildTurnOutcome } from "@/lib/turn-outcome";
+import { TurnOutcomeCard } from "./TurnOutcomeCard";
 import { getFileName } from "@/lib/file-paths";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -890,23 +892,18 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                 }
 
                 if (finalAnswerMessage) {
-                  // Each tool call is stored as its own assistant entry, so the
-                  // final answer alone carries no record of what the turn wrote.
-                  // Gather the turn's assistant blocks and derive the file list
-                  // from the write/edit calls among them.
-                  const turnContent: AssistantContentBlock[] = [];
-                  for (let i = userIdx + 1; i <= finalAssistantIdx; i++) {
-                    const m = messages[i];
-                    if (m?.role === "assistant") {
-                      for (const b of (m as AssistantMessage).content ?? []) turnContent.push(b);
-                    }
-                  }
-                  const writtenFiles = extractTurnWrittenFiles(turnContent, toolResultsMap, messageCwd);
-                  rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage, writtenFiles }));
+                  rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage }));
                 }
                 for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
                   rendered.push(renderMessage(renderIdx));
                 }
+                rendered.push(
+                  <TurnOutcomeCard
+                    key={`outcome-${entryIds[userIdx] ?? userIdx}`}
+                    outcome={buildTurnOutcome(messages.slice(userIdx + 1, endIdx), messageCwd)}
+                    onOpenFile={onOpenFile}
+                  />,
+                );
                 idx = endIdx;
               }
               const { startIndex } = getVisibleRenderWindow(rendered.length, visibleCount);

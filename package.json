@@ -1,6 +1,6 @@
 {
   "name": "@agegr/pi-web",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "Web UI for the pi coding agent",
   "homepage": "https://github.com/ghost0211/pi-web#readme",
   "repository": {
@@ -39,7 +39,7 @@
     "desktop:server": "node scripts/build-desktop-server.mjs",
     "desktop:build": "tauri build",
     "desktop:icons": "tauri icon public/icons/icon-512.png -o src-tauri/icons",
-    "test": "node --experimental-strip-types --test \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
+    "test": "node --experimental-strip-types --test --test-concurrency=4 \"*.test.mjs\" \"app/**/*.test.mjs\" \"components/**/*.test.mjs\" \"hooks/**/*.test.mjs\" \"lib/**/*.test.mjs\" \"public/**/*.test.mjs\"",
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {

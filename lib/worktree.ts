@@ -62,7 +62,9 @@ async function git(cwd: string, args: string[]): Promise<string> {
 
 function realPathOrSelf(filePath: string): string {
   try {
-    return realpathSync(filePath);
+    // Use the native resolver on Windows so short-name/junction aliases are
+    // expanded the same way as paths returned by Git for Windows.
+    return realpathSync.native(filePath);
   } catch {
     return filePath;
   }
@@ -102,7 +104,9 @@ export async function resolveProject(cwd: string): Promise<ProjectInfo> {
     const [commonDirRaw, gitDirRaw, toplevelRaw, ref] = out.split("\n").map((l) => l.trim());
     // Only the first three lines are paths — `ref` is a branch name and must
     // keep its forward slashes (`feature/foo`).
-    const [commonDir, gitDir, toplevel] = [commonDirRaw, gitDirRaw, toplevelRaw].map(toNativePath);
+    const [commonDir, gitDir, toplevel] = [commonDirRaw, gitDirRaw, toplevelRaw]
+      .map(toNativePath)
+      .map(realPathOrSelf);
     // git prints resolved (symlink-free) paths; normalize cwd the same way
     const realCwd = realPathOrSelf(cwd);
     // For a linked worktree, --git-dir differs from --git-common-dir.

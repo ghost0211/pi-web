@@ -61,9 +61,11 @@ test("selectTopLevelBranches returns children of the first branching node", () =
   assert.deepEqual(selectTopLevelBranches([root]).map((n) => n.entry.id), ["u2", "u2b"]);
 });
 
-test("selectTopLevelBranches returns empty for a linear session", () => {
+test("selectTopLevelBranches falls back to the root for a linear session", () => {
   const root = node(msg("u1", "user", "第一问"), [node(msg("a1", "assistant", "答"))]);
-  assert.deepEqual(selectTopLevelBranches([root]), []);
+  // Linear sessions keep the panel reachable (bookmarks work there too), so
+  // the root row is shown instead of an empty list.
+  assert.deepEqual(selectTopLevelBranches([root]).map((n) => n.entry.id), ["u1"]);
 });
 
 test("hasSessionBranches distinguishes linear sessions from branched sessions", () => {

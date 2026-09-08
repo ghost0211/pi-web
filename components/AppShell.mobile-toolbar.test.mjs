@@ -47,10 +47,11 @@ test("opens subagents in the right panel while keeping the main session in the c
   assert.match(source, /runningSessionIds=\{runningSessionIds\}/);
 });
 
-test("only renders branch toolbar controls for sessions with branches", () => {
-  assert.match(source, /const sessionHasBranches = hasSessionBranches\(branchTree\)/);
-  assert.match(source, /\{sessionHasBranches && \(mobile \? \(/);
-  assert.match(source, /\{isMobile && sessionHasBranches && \(/);
+test("renders branch toolbar controls whenever a session tree exists", () => {
+  // The branch panel is reachable for any session with a tree: branched
+  // sessions get navigation, linear sessions get search and bookmarks.
+  assert.match(source, /\{branchTree\.length > 0 && \(mobile \? \(/);
+  assert.match(source, /\{isMobile && branchTree\.length > 0 && \(/);
   assert.match(source, /panel === "branches" \? null : panel/);
 });
 

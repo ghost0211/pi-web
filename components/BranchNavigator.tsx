@@ -77,12 +77,13 @@ export function compressChain(node: SessionTreeNode): {
 
 // Top-level rows of the panel: with multiple roots (a branch was started from
 // the very first message) the roots themselves are the branches; otherwise the
-// children of the first branching node.
+// children of the first branching node. Linear sessions (no branching) fall
+// back to their root so the panel stays reachable for bookmarking.
 export function selectTopLevelBranches(tree: SessionTreeNode[]): SessionTreeNode[] {
   if (tree.length > 1) return tree;
   if (tree.length === 0) return [];
   const first = compressChain(tree[0]).node;
-  return first.children.length > 1 ? first.children : [];
+  return first.children.length > 1 ? first.children : [tree[0]];
 }
 
 function getLabel(entry: SessionEntry): string {
@@ -570,7 +571,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, onSetLabel, 
 
   const noBranchReason = !hasSession
     ? t("i18n.noActiveSession")
-    : !hasSessionBranches(tree)
+    : tree.length === 0
       ? t("i18n.noBranches")
       : null;
 

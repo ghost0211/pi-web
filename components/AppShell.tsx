@@ -9,7 +9,7 @@ import { ChatWindow } from "./ChatWindow";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
-import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
+import { BranchNavigator } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
@@ -221,7 +221,6 @@ export function AppShell() {
   const [branchActiveLeafId, setBranchActiveLeafId] = useState<string | null>(null);
   const branchLeafChangeFnRef = useRef<((leafId: string | null) => void) | null>(null);
   const branchSetLabelFnRef = useRef<((entryId: string, label: string | null) => void) | null>(null);
-  const sessionHasBranches = hasSessionBranches(branchTree);
 
   const handleBranchDataChange = useCallback((tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, onSetEntryLabel?: (entryId: string, label: string | null) => void) => {
     setBranchTree(tree);
@@ -311,11 +310,13 @@ export function AppShell() {
   const [activeTopPanel, setActiveTopPanel] = useState<"agents" | "branches" | "system" | "tools" | "session" | "language" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
+  // Close the branches panel when there is no session tree at all (e.g. a
+  // fresh session). Linear sessions keep the panel: bookmarking works there.
   useEffect(() => {
-    if (!sessionHasBranches) {
+    if (branchTree.length === 0) {
       setActiveTopPanel((panel) => panel === "branches" ? null : panel);
     }
-  }, [sessionHasBranches]);
+  }, [branchTree]);
 
   useEffect(() => {
     if (!hasSubagentSessions) {
@@ -1559,7 +1560,7 @@ export function AppShell() {
             </span>
           </button>
         )}
-        {sessionHasBranches && (mobile ? (
+        {branchTree.length > 0 && (mobile ? (
           <button
             type="button"
             onClick={() => toggleTopPanel("branches", true)}
@@ -2290,7 +2291,7 @@ export function AppShell() {
               )}
             </>
           )}
-          {isMobile && sessionHasBranches && (
+          {isMobile && branchTree.length > 0 && (
             <BranchNavigator
               tree={branchTree}
               activeLeafId={branchActiveLeafId}

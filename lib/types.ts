@@ -346,6 +346,9 @@ export interface SessionInfo {
   /** True while the runtime session exists only in memory and its JSONL file
    *  has not been created yet. Disk-backed actions must wait until this clears. */
   transient?: boolean;
+  /** True for sessions created with SessionManager.inMemory: they never touch
+   *  disk and exist only while their live runtime wrapper survives. */
+  ephemeral?: boolean;
 }
 
 export interface SessionHistory {

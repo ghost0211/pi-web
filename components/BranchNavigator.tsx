@@ -8,6 +8,8 @@ interface Props {
   tree: SessionTreeNode[];
   activeLeafId: string | null;
   onLeafChange: (leafId: string | null) => void;
+  /** Set/clear a bookmark label on an entry (pi `/tree` labels). */
+  onSetLabel?: (entryId: string, label: string | null) => void;
   /** When true, renders as a compact inline button for embedding in a top bar */
   inline?: boolean;
   /** When inline, use this ref's bounding rect to size/position the dropdown */
@@ -49,7 +51,9 @@ function isMessageEntry(entry: SessionEntry): boolean {
 }
 
 // Compress a visible linear chain into the first branching/leaf node.
-// Server-side compressed IDs also count as skipped nodes.
+// Server-side compressed IDs also count as skipped nodes. Bookmarked (labeled)
+// nodes are never compressed away: they stay visible as their own row so the
+// navigator can surface and target them.
 // branchPreview is the bounded preview of the first message on the source
 // chain. labelEntry keeps unprojected/test shapes working as a fallback.
 export function compressChain(node: SessionTreeNode): {
@@ -62,7 +66,7 @@ export function compressChain(node: SessionTreeNode): {
   let branchPreview = current.branchPreview;
   let labelEntry: SessionEntry | null = isMessageEntry(current.entry) ? current.entry : null;
   let skipped = current.compressedEntryIds?.length ?? 0;
-  while (current.children.length === 1) {
+  while (current.children.length === 1 && current.label === undefined) {
     current = current.children[0];
     branchPreview ??= current.branchPreview;
     if (!labelEntry && isMessageEntry(current.entry)) labelEntry = current.entry;
@@ -115,6 +119,148 @@ export function hasSessionBranches(nodes: SessionTreeNode[]): boolean {
   return false;
 }
 
+interface FlatBranchRow {
+  node: SessionTreeNode;
+  depth: number;
+  text: string;
+  bookmark?: string;
+  role: "user" | "assistant" | null;
+}
+
+/** Flatten the visible (compressed) tree into rows, mirroring TreeNodeView. */
+function flattenBranchRows(nodes: SessionTreeNode[]): FlatBranchRow[] {
+  const rows: FlatBranchRow[] = [];
+  const stack = nodes.map((node) => ({ node, depth: 0 })).reverse();
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop()!;
+    const { node: rep, branchPreview, labelEntry } = compressChain(node);
+    const role = branchPreview
+      ? branchPreview.role ?? null
+      : isMessageEntry(labelEntry)
+        ? ((labelEntry as { message: { role: string } }).message.role as "user" | "assistant")
+        : null;
+    rows.push({
+      node: rep,
+      depth,
+      text: branchPreview?.text ?? getLabel(labelEntry),
+      bookmark: rep.label,
+      role,
+    });
+    for (let i = rep.children.length - 1; i >= 0; i--) {
+      stack.push({ node: rep.children[i], depth: depth + 1 });
+    }
+  }
+  return rows;
+}
+
+interface LabelEditState {
+  entryId: string;
+  value: string;
+}
+
+function BookmarkBadge({ text }: { text: string }) {
+  return (
+    <span
+      title={text}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 9,
+        fontFamily: "var(--font-mono)",
+        color: "var(--accent)",
+        background: "color-mix(in srgb, var(--accent) 10%, transparent)",
+        border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+        borderRadius: 3,
+        padding: "0 4px",
+        marginLeft: 5,
+        flexShrink: 0,
+        lineHeight: "15px",
+        maxWidth: 140,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+      </svg>
+      {text}
+    </span>
+  );
+}
+
+function LabelEditRow({
+  entryId,
+  edit,
+  onChange,
+  onSetLabel,
+  indent,
+}: {
+  entryId: string;
+  edit: LabelEditState;
+  onChange: (state: LabelEditState | null) => void;
+  onSetLabel: (entryId: string, label: string | null) => void;
+  indent: number;
+}) {
+  const { t } = useI18n();
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+  const commit = () => {
+    const value = edit.value.trim();
+    onSetLabel(entryId, value ? value : null);
+    onChange(null);
+  };
+  return (
+    <div
+      style={{ display: "flex", alignItems: "center", gap: 4, height: 28, paddingLeft: indent, paddingRight: 4 }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <input
+        ref={inputRef}
+        value={edit.value}
+        placeholder={t("i18n.labelPlaceholder")}
+        onChange={(event) => onChange({ entryId, value: event.target.value })}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            onChange(null);
+          }
+        }}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+          padding: "2px 6px",
+          background: "var(--bg)",
+          border: "1px solid var(--accent)",
+          borderRadius: 4,
+          color: "var(--text)",
+          outline: "none",
+        }}
+      />
+      <button
+        type="button"
+        onClick={commit}
+        style={{
+          flexShrink: 0, padding: "2px 7px", fontSize: 10, borderRadius: 4,
+          border: "1px solid var(--border)", background: "var(--bg-hover)",
+          color: "var(--text)", cursor: "pointer",
+        }}
+      >
+        {t("i18n.saveLabel")}
+      </button>
+    </div>
+  );
+}
+
 interface TreeNodeProps {
   node: SessionTreeNode;
   activePathIds: Set<string>;
@@ -122,9 +268,13 @@ interface TreeNodeProps {
   isLast: boolean;
   parentLines: boolean[]; // whether ancestor at each depth has more siblings after
   onSelect: (id: string) => void;
+  onSetLabel?: (entryId: string, label: string | null) => void;
+  labelEdit: LabelEditState | null;
+  onLabelEditChange: (state: LabelEditState | null) => void;
 }
 
-function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelect }: TreeNodeProps) {
+function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelect, onSetLabel, labelEdit, onLabelEditChange }: TreeNodeProps) {
+  const { t } = useI18n();
   const { node: rep, skipped, branchPreview, labelEntry } = compressChain(node);
   const isActive = activePathIds.has(rep.entry.id);
   const isOnPath = activePathIds.has(node.entry.id) || activePathIds.has(rep.entry.id);
@@ -134,11 +284,13 @@ function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelec
     : isMessageEntry(labelEntry)
       ? (labelEntry as { message: { role: string } }).message.role
       : null;
+  const editing = labelEdit?.entryId === rep.entry.id;
 
   return (
     <div>
       {/* This node row */}
       <div
+        className="branch-tree-row"
         style={{
           display: "flex",
           alignItems: "center",
@@ -235,7 +387,53 @@ function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelec
         }}>
           {label}
         </span>
+
+        {/* Bookmark badge */}
+        {rep.label && <BookmarkBadge text={rep.label} />}
+
+        {/* Bookmark toggle (revealed on row hover via CSS) */}
+        {onSetLabel && !editing && (
+          <button
+            type="button"
+            className="branch-bookmark-button"
+            title={rep.label ? t("i18n.editLabel") : t("i18n.addLabel")}
+            aria-label={rep.label ? t("i18n.editLabel") : t("i18n.addLabel")}
+            onClick={(event) => {
+              event.stopPropagation();
+              onLabelEditChange({ entryId: rep.entry.id, value: rep.label ?? "" });
+            }}
+            style={{
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 18,
+              height: 18,
+              padding: 0,
+              marginLeft: 4,
+              background: "none",
+              border: "none",
+              borderRadius: 3,
+              color: rep.label ? "var(--accent)" : "var(--text-dim)",
+              cursor: "pointer",
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill={rep.label ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+        )}
       </div>
+
+      {editing && onSetLabel && (
+        <LabelEditRow
+          entryId={rep.entry.id}
+          edit={labelEdit}
+          onChange={onLabelEditChange}
+          onSetLabel={onSetLabel}
+          indent={(parentLines.length + 1) * 16 + 13}
+        />
+      )}
 
       {/* Children */}
       {rep.children.map((child, idx) => (
@@ -247,18 +445,96 @@ function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelec
           isLast={idx === rep.children.length - 1}
           parentLines={[...parentLines, !isLast]}
           onSelect={onSelect}
+          onSetLabel={onSetLabel}
+          labelEdit={labelEdit}
+          onLabelEditChange={onLabelEditChange}
         />
       ))}
     </div>
   );
 }
 
-export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, compact, hideInlineButton }: Props) {
+function BranchPanelToolbar({
+  search,
+  onSearchChange,
+  labeledOnly,
+  onToggleLabeledOnly,
+  labeledCount,
+}: {
+  search: string;
+  onSearchChange: (value: string) => void;
+  labeledOnly: boolean;
+  onToggleLabeledOnly: () => void;
+  labeledCount: number;
+}) {
+  const { t } = useI18n();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 12px 6px" }}>
+      <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+        <svg
+          width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          style={{ position: "absolute", left: 7, top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", pointerEvents: "none" }}
+        >
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+        <input
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder={t("i18n.searchBranches")}
+          style={{
+            width: "100%",
+            height: 24,
+            fontSize: 11,
+            padding: "0 8px 0 22px",
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: 5,
+            color: "var(--text)",
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+      </div>
+      <button
+        type="button"
+        onClick={onToggleLabeledOnly}
+        title={t("i18n.labeledOnly")}
+        aria-pressed={labeledOnly}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          height: 24,
+          padding: "0 8px",
+          flexShrink: 0,
+          fontSize: 10,
+          fontFamily: "var(--font-mono)",
+          background: labeledOnly ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "var(--bg)",
+          border: `1px solid ${labeledOnly ? "color-mix(in srgb, var(--accent) 40%, transparent)" : "var(--border)"}`,
+          borderRadius: 5,
+          color: labeledOnly ? "var(--accent)" : "var(--text-muted)",
+          cursor: "pointer",
+        }}
+      >
+        <svg width="9" height="9" viewBox="0 0 24 24" fill={labeledOnly ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+        {labeledCount}
+      </button>
+    </div>
+  );
+}
+
+export function BranchNavigator({ tree, activeLeafId, onLeafChange, onSetLabel, inline, containerRef, open: openProp, onToggle, hasSession, compact, hideInlineButton }: Props) {
   const { t } = useI18n();
   const [openInternal, setOpenInternal] = useState(false);
   const open = openProp !== undefined ? openProp : openInternal;
   const btnRef = useRef<HTMLButtonElement>(null);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [search, setSearch] = useState("");
+  const [labeledOnly, setLabeledOnly] = useState(false);
+  const [labelEdit, setLabelEdit] = useState<LabelEditState | null>(null);
 
   useEffect(() => {
     if (!open || !inline) return;
@@ -283,6 +559,15 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
     onLeafChange(id);
   }, [onLeafChange]);
 
+  // Reset transient panel state whenever the dropdown closes.
+  useEffect(() => {
+    if (!open) {
+      setSearch("");
+      setLabeledOnly(false);
+      setLabelEdit(null);
+    }
+  }, [open]);
+
   const noBranchReason = !hasSession
     ? t("i18n.noActiveSession")
     : !hasSessionBranches(tree)
@@ -291,6 +576,143 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
 
   const topLevel = selectTopLevelBranches(tree);
   const hasContent = !noBranchReason && topLevel.length > 0;
+
+  const flatRows = useMemo(() => flattenBranchRows(topLevel), [topLevel]);
+  const labeledCount = useMemo(() => flatRows.filter((row) => row.bookmark).length, [flatRows]);
+  const query = search.trim().toLowerCase();
+  const filtering = query.length > 0 || labeledOnly;
+  const filteredRows = useMemo(() => {
+    if (!filtering) return [];
+    return flatRows.filter((row) => {
+      if (labeledOnly && !row.bookmark) return false;
+      if (!query) return true;
+      return row.text.toLowerCase().includes(query) || (row.bookmark ?? "").toLowerCase().includes(query);
+    });
+  }, [flatRows, filtering, labeledOnly, query]);
+
+  const treeList = (
+    <>
+      {topLevel.map((child, idx) => (
+        <TreeNodeView
+          key={child.entry.id}
+          node={child}
+          activePathIds={activePathIds}
+          depth={0}
+          isLast={idx === topLevel.length - 1}
+          parentLines={[]}
+          onSelect={handleSelect}
+          onSetLabel={onSetLabel}
+          labelEdit={labelEdit}
+          onLabelEditChange={setLabelEdit}
+        />
+      ))}
+    </>
+  );
+
+  const filteredList = filteredRows.length === 0 ? (
+    <div style={{ padding: "8px 2px", fontSize: 12, color: "var(--text-dim)", fontStyle: "italic" }}>
+      {labeledOnly && !query ? t("i18n.noLabels") : t("i18n.noBranches")}
+    </div>
+  ) : (
+    <>
+      {filteredRows.map((row) => {
+        const isActive = activePathIds.has(row.node.entry.id);
+        const editing = labelEdit?.entryId === row.node.entry.id;
+        return (
+          <div key={row.node.entry.id}>
+            <div
+              className="branch-tree-row"
+              style={{ display: "flex", alignItems: "center", height: 24, cursor: "pointer", paddingLeft: Math.min(row.depth, 12) * 12 }}
+              onClick={() => handleSelect(row.node.entry.id)}
+            >
+              <div style={{
+                width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
+                background: isActive ? "var(--accent)" : "var(--border)",
+                border: isActive ? "none" : "1px solid var(--text-dim)",
+                marginRight: 6,
+              }} />
+              {row.role && (
+                <span style={{
+                  fontSize: 9, fontFamily: "var(--font-mono)",
+                  color: row.role === "user" ? "var(--accent)" : "var(--text-dim)",
+                  background: row.role === "user" ? "rgba(37,99,235,0.08)" : "var(--bg-hover)",
+                  border: `1px solid ${row.role === "user" ? "rgba(37,99,235,0.2)" : "var(--border)"}`,
+                  borderRadius: 3, padding: "0 4px", marginRight: 5, flexShrink: 0, lineHeight: "16px",
+                }}>
+                  {row.role === "user" ? "U" : "A"}
+                </span>
+              )}
+              <span style={{
+                fontSize: 11,
+                color: isActive ? "var(--text)" : "var(--text-dim)",
+                fontWeight: isActive ? 500 : 400,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                flex: 1, minWidth: 0,
+              }}>
+                {row.text}
+              </span>
+              {row.bookmark && <BookmarkBadge text={row.bookmark} />}
+              {onSetLabel && !editing && (
+                <button
+                  type="button"
+                  className="branch-bookmark-button"
+                  title={row.bookmark ? t("i18n.editLabel") : t("i18n.addLabel")}
+                  aria-label={row.bookmark ? t("i18n.editLabel") : t("i18n.addLabel")}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setLabelEdit({ entryId: row.node.entry.id, value: row.bookmark ?? "" });
+                  }}
+                  style={{
+                    flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 18, height: 18, padding: 0, marginLeft: 4,
+                    background: "none", border: "none", borderRadius: 3,
+                    color: row.bookmark ? "var(--accent)" : "var(--text-dim)", cursor: "pointer",
+                  }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill={row.bookmark ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            {editing && onSetLabel && (
+              <LabelEditRow
+                entryId={row.node.entry.id}
+                edit={labelEdit}
+                onChange={setLabelEdit}
+                onSetLabel={onSetLabel}
+                indent={Math.min(row.depth, 12) * 12 + 13}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+
+  const panelBody = hasContent ? (
+    <>
+      <style>{`
+        .branch-tree-row .branch-bookmark-button { opacity: 0; transition: opacity 0.12s; }
+        .branch-tree-row:hover .branch-bookmark-button,
+        .branch-tree-row:focus-within .branch-bookmark-button { opacity: 1; }
+      `}</style>
+      <BranchPanelToolbar
+        search={search}
+        onSearchChange={setSearch}
+        labeledOnly={labeledOnly}
+        onToggleLabeledOnly={() => setLabeledOnly((value) => !value)}
+        labeledCount={labeledCount}
+      />
+      <div style={{ padding: "0 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
+        {filtering ? filteredList : treeList}
+      </div>
+    </>
+  ) : (
+    <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
+      {noBranchReason ?? t("i18n.noBranches")}
+    </div>
+  );
 
   const branchIcon = (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: hasContent ? "var(--accent)" : "var(--text-dim)", flexShrink: 0 }}>
@@ -349,25 +771,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
             borderBottom: "1px solid var(--border)",
             zIndex: 500,
           }}>
-            {hasContent ? (
-              <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
-                {topLevel.map((child, idx) => (
-                  <TreeNodeView
-                    key={child.entry.id}
-                    node={child}
-                    activePathIds={activePathIds}
-                    depth={0}
-                    isLast={idx === topLevel.length - 1}
-                    parentLines={[]}
-                    onSelect={handleSelect}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                {noBranchReason}
-              </div>
-            )}
+            {panelBody}
           </div>
         )}
       </div>
@@ -410,25 +814,7 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
           boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
           zIndex: 100,
         }}>
-          {hasContent ? (
-            <div style={{ padding: "4px 12px 8px 12px", maxHeight: 260, overflowY: "auto" }}>
-              {topLevel.map((child, idx) => (
-                <TreeNodeView
-                  key={child.entry.id}
-                  node={child}
-                  activePathIds={activePathIds}
-                  depth={0}
-                  isLast={idx === topLevel.length - 1}
-                  parentLines={[]}
-                  onSelect={handleSelect}
-                />
-              ))}
-            </div>
-          ) : (
-            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-              {noBranchReason ?? t("i18n.noBranches")}
-            </div>
-          )}
+          {panelBody}
         </div>
       )}
     </div>

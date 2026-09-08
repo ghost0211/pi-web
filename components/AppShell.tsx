@@ -53,6 +53,7 @@ import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { FileViewerState } from "@/lib/file-viewer-state";
 import type { ToolEntry } from "@/lib/tool-presets";
+import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
 import { getSessionFamily } from "@/lib/session-family";
 import { getRecentProjects } from "@/lib/project-groups";
 import { getLastSettingsSection, type SettingsSection } from "@/lib/settings-navigation";
@@ -219,22 +220,30 @@ export function AppShell() {
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
   const [branchActiveLeafId, setBranchActiveLeafId] = useState<string | null>(null);
   const branchLeafChangeFnRef = useRef<((leafId: string | null) => void) | null>(null);
+  const branchSetLabelFnRef = useRef<((entryId: string, label: string | null) => void) | null>(null);
   const sessionHasBranches = hasSessionBranches(branchTree);
 
-  const handleBranchDataChange = useCallback((tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => {
+  const handleBranchDataChange = useCallback((tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, onSetEntryLabel?: (entryId: string, label: string | null) => void) => {
     setBranchTree(tree);
     setBranchActiveLeafId(activeLeafId);
     branchLeafChangeFnRef.current = onLeafChange;
+    branchSetLabelFnRef.current = onSetEntryLabel ?? null;
   }, []);
 
   const handleBranchLeafChange = useCallback((leafId: string | null) => {
     branchLeafChangeFnRef.current?.(leafId);
   }, []);
 
+  const handleBranchSetLabel = useCallback((entryId: string, label: string | null) => {
+    branchSetLabelFnRef.current?.(entryId, label);
+  }, []);
+
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
+  const [customSystemPrompt, setCustomSystemPrompt] = useState<SessionSystemPromptCustomization | null>(null);
   const [systemTools, setSystemTools] = useState<ToolEntry[] | null>(null);
   const [systemInfoLoading, setSystemInfoLoading] = useState(false);
   const systemInfoLoaderRef = useRef<(() => Promise<void>) | null>(null);
+  const [systemPromptSaver, setSystemPromptSaver] = useState<((custom: SessionSystemPromptCustomization | null) => Promise<void>) | null>(null);
   const systemInfoLoadIdRef = useRef(0);
   const systemBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -252,6 +261,19 @@ export function AppShell() {
     systemInfoLoaderRef.current = loader;
     setSystemInfoLoading(false);
   }, []);
+
+  const handleCustomSystemPromptChange = useCallback((custom: SessionSystemPromptCustomization | null) => {
+    setCustomSystemPrompt(custom);
+  }, []);
+
+  const handleSystemPromptSaverChange = useCallback((saver: ((custom: SessionSystemPromptCustomization | null) => Promise<void>) | null) => {
+    setSystemPromptSaver(() => saver);
+  }, []);
+
+  const handleSaveSystemPrompt = useCallback(async (custom: SessionSystemPromptCustomization | null) => {
+    if (!systemPromptSaver) throw new Error("No active session");
+    await systemPromptSaver(custom);
+  }, [systemPromptSaver]);
 
   // Session stats (tokens + cost) — populated by ChatWindow, displayed in top bar
   const [sessionStats, setSessionStats] = useState<SessionStatsInfo | null>(null);
@@ -599,6 +621,7 @@ export function AppShell() {
     setBranchTree([]);
     setBranchActiveLeafId(null);
     setSystemPrompt(null);
+      setCustomSystemPrompt(null);
     setSystemTools(null);
     setSystemInfoLoading(false);
     setActiveTopPanel(null);
@@ -637,6 +660,7 @@ export function AppShell() {
     setBranchActiveLeafId(null);
     branchLeafChangeFnRef.current = null;
     setSystemPrompt(null);
+      setCustomSystemPrompt(null);
     setSystemTools(null);
     setSystemInfoLoading(false);
     setInitialSessionRestored(true);
@@ -665,6 +689,7 @@ export function AppShell() {
     setBranchTree([]);
     setBranchActiveLeafId(null);
     setSystemPrompt(null);
+      setCustomSystemPrompt(null);
     setSystemTools(null);
     setSystemInfoLoading(false);
     setActiveTopPanel(null);
@@ -900,6 +925,7 @@ export function AppShell() {
       setBranchTree([]);
       setBranchActiveLeafId(null);
       setSystemPrompt(null);
+      setCustomSystemPrompt(null);
       setSystemTools(null);
       setSystemInfoLoading(false);
       setActiveTopPanel(null);
@@ -948,6 +974,34 @@ export function AppShell() {
       "_blank",
       "noopener,noreferrer",
     );
+  }, [selectedSession]);
+
+  // Export menu (desktop top bar): open the HTML view, or download HTML/JSONL.
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handleOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [exportMenuOpen]);
+  const handleExportDownload = useCallback((format: "html" | "jsonl") => {
+    if (!selectedSession) return;
+    // The export route already sends Content-Disposition: attachment for
+    // non-inline requests, so a plain anchor navigation triggers a download.
+    const anchor = document.createElement("a");
+    anchor.href = format === "jsonl"
+      ? `/api/sessions/${encodeURIComponent(selectedSession.id)}/export?format=jsonl`
+      : `/api/sessions/${encodeURIComponent(selectedSession.id)}/export`;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setExportMenuOpen(false);
   }, [selectedSession]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
@@ -1259,15 +1313,24 @@ export function AppShell() {
     if (!mobile && !showChat) return null;
     return (
       <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
+        <div
+          ref={exportMenuRef}
+          style={{ position: "relative", display: "flex", alignItems: "stretch", height: "100%" }}
+        >
         <button
           type="button"
           onClick={() => {
-            handleViewFullHistory();
-            if (mobile && isNarrowMobile) setMobileToolbarMoreOpen(true);
+            if (mobile) {
+              handleViewFullHistory();
+              if (isNarrowMobile) setMobileToolbarMoreOpen(true);
+            } else {
+              setExportMenuOpen((open) => !open);
+            }
           }}
           disabled={!selectedSession}
           title={selectedSession ? translate("history.full") : translate("history.unsaved")}
           aria-label={translate("history.full")}
+          aria-expanded={!mobile ? exportMenuOpen : undefined}
           style={{
             display: "flex",
             alignItems: "center",
@@ -1276,9 +1339,9 @@ export function AppShell() {
             width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined,
             height: "100%",
             padding: mobile ? 0 : "0 12px",
-            background: "none",
+            background: !mobile && exportMenuOpen ? "var(--bg-selected)" : "none",
             border: "none",
-            borderTop: "2px solid transparent",
+            borderTop: !mobile && exportMenuOpen ? "2px solid var(--accent)" : "2px solid transparent",
             borderRight: "1px solid var(--border)",
             color: selectedSession ? "var(--text-muted)" : "var(--text-dim)",
             cursor: selectedSession ? "pointer" : "not-allowed",
@@ -1295,7 +1358,7 @@ export function AppShell() {
           }}
           onMouseLeave={(event) => {
             event.currentTarget.style.color = selectedSession ? "var(--text-muted)" : "var(--text-dim)";
-            event.currentTarget.style.background = "none";
+            event.currentTarget.style.background = !mobile && exportMenuOpen ? "var(--bg-selected)" : "none";
           }}
           data-mobile-toolbar-action={mobile ? "history" : undefined}
         >
@@ -1319,7 +1382,66 @@ export function AppShell() {
             <path d="M12 7v5l3 2" />
           </svg>
           {!mobile && <span>{translate("history.label")}</span>}
+          {!mobile && (
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: exportMenuOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+              <polyline points="2 3.5 5 6.5 8 3.5" />
+            </svg>
+          )}
         </button>
+        {!mobile && exportMenuOpen && selectedSession && (
+          <div
+            role="menu"
+            style={{
+              position: "fixed",
+              top: topBarRef.current ? topBarRef.current.getBoundingClientRect().bottom : 40,
+              left: exportMenuRef.current ? exportMenuRef.current.getBoundingClientRect().left : 0,
+              zIndex: 500,
+              minWidth: 190,
+              background: "var(--bg-panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+              padding: 4,
+            }}
+          >
+            {([
+              { key: "open", label: translate("history.openHtml"), action: () => { handleViewFullHistory(); setExportMenuOpen(false); } },
+              { key: "html", label: translate("history.downloadHtml"), action: () => handleExportDownload("html") },
+              { key: "jsonl", label: translate("history.downloadJsonl"), action: () => handleExportDownload("jsonl") },
+            ] as const).map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="menuitem"
+                onClick={item.action}
+                disabled={selectedSession.transient}
+                title={selectedSession.transient ? translate("history.unsaved") : item.label}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  width: "100%",
+                  padding: "7px 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: "transparent",
+                  color: selectedSession.transient ? "var(--text-dim)" : "var(--text)",
+                  cursor: selectedSession.transient ? "not-allowed" : "pointer",
+                  fontSize: 12,
+                  textAlign: "left",
+                }}
+                onMouseEnter={(event) => {
+                  if (!selectedSession.transient) event.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(event) => {
+                  event.currentTarget.style.background = "transparent";
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
+        </div>
         {(() => {
           // 上下文压缩后当前消息可能不再包含 user 消息，需同时参考会话文件的消息总数。
           const hasMessages = Boolean(
@@ -1468,6 +1590,7 @@ export function AppShell() {
             tree={branchTree}
             activeLeafId={branchActiveLeafId}
             onLeafChange={handleBranchLeafChange}
+            onSetLabel={handleBranchSetLabel}
             inline
             containerRef={topBarRef}
             open={activeTopPanel === "branches"}
@@ -2172,6 +2295,7 @@ export function AppShell() {
               tree={branchTree}
               activeLeafId={branchActiveLeafId}
               onLeafChange={handleBranchLeafChange}
+              onSetLabel={handleBranchSetLabel}
               inline
               compact
               containerRef={topBarRef}
@@ -2250,6 +2374,8 @@ export function AppShell() {
                 <SystemPromptPanel
                   loading={systemInfoLoading}
                   prompt={systemPrompt}
+                  custom={customSystemPrompt}
+                  onSave={systemPromptSaver ? handleSaveSystemPrompt : undefined}
                   translate={translate}
                 />
               )}
@@ -2491,6 +2617,8 @@ export function AppShell() {
               chatInputRef={chatInputRef}
               onBranchDataChange={handleBranchDataChange}
               onSystemPromptChange={handleSystemPromptChange}
+              onCustomSystemPromptChange={handleCustomSystemPromptChange}
+              onSystemPromptSaverChange={handleSystemPromptSaverChange}
               onSystemToolsChange={handleSystemToolsChange}
               onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
               onSessionStatsChange={handleSessionStatsChange}

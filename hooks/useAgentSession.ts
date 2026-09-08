@@ -18,9 +18,10 @@ import { isBlockingExtensionUiRequest } from "@/lib/browser-notifications";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { isPromptRejectedError, sendAgentCommand } from "@/lib/agent-client";
 import { clearDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-store";
-import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-preset-preference";
-import { getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
+import { getPreferredToolSelection, setPreferredToolSelection } from "@/lib/tool-preset-preference";
+import { getToolNamesForPreset, matchToolPresetOrCustom, PRESET_DEFAULT, type ToolEntry, type ToolPreset, type ToolPresetSelection } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { calculateActiveContextTokens } from "@/lib/context-tokens";
 import { resolveModelContextWindow } from "@/lib/context-window";
@@ -69,6 +70,7 @@ interface LastAssistantTextResponse {
 type AgentStateResponse = {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   systemPrompt?: string;
+  customSystemPrompt?: SessionSystemPromptCustomization | null;
   thinkingLevel?: string;
   isStreaming?: boolean;
   isPromptRunning?: boolean;
@@ -150,13 +152,16 @@ export interface UseAgentSessionOptions {
   onNewSession?: (sessionId: string, cwd: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
-  onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
+  onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, onSetEntryLabel: (entryId: string, label: string | null) => void) => void;
   onSystemPromptChange?: (prompt: string | null) => void;
+  onCustomSystemPromptChange?: (custom: SessionSystemPromptCustomization | null) => void;
+  /** Registers an action that sets/clears the session system prompt override. */
+  onSystemPromptSaverChange?: (saver: ((custom: SessionSystemPromptCustomization | null) => Promise<void>) | null) => void;
   onSystemToolsChange?: (tools: ToolEntry[] | null) => void;
   /** Registers an action that lazily starts the session and loads its prompt and tools. */
   onSystemInfoLoaderChange?: (loader: (() => Promise<void>) | null) => void;
   onSessionStatsPanelOpen?: () => void;
-  setToolPreset?: (preset: ToolPreset) => void;
+  setToolPreset?: (preset: ToolPresetSelection) => void;
 }
 
 export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -273,7 +278,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const router = useRouter();
   const {
     session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession,
-    modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
+    modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
   } = opts;
 
   const isNew = session === null && newSessionCwd !== null;
@@ -301,11 +306,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelThinkingLevelPins, setModelThinkingLevelPins] = useState<Record<string, string>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
-  const [toolPreset, setToolPreset] = useState<ToolPreset>("default");
+  const [toolPreset, setToolPreset] = useState<ToolPresetSelection>("default");
+  // Builtin tool names backing the "custom" selection; defaults to the
+  // standard set so opening the picker for the first time shows those checked.
+  const [customToolNames, setCustomToolNames] = useState<string[]>([...PRESET_DEFAULT]);
+  // New sessions only: create an in-memory (ephemeral) session that never
+  // writes a JSONL file. Read via ref inside ensureNewSession.
+  const [ephemeral, setEphemeralState] = useState(false);
+  const ephemeralRef = useRef(false);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
+  const [customSystemPrompt, setCustomSystemPrompt] = useState<SessionSystemPromptCustomization | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
@@ -324,6 +337,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
+  // Latest queue snapshot for handleAbort: pi's Escape aborts the run and
+  // restores queued steering/follow-up messages back into the editor.
+  const queuedMessagesRef = useRef<QueuedMessages>({ steering: [], followUp: [] });
+  useEffect(() => {
+    queuedMessagesRef.current = queuedMessages;
+  }, [queuedMessages]);
 
   const eventConnectionRef = useRef<AgentEventConnection | null>(null);
   const eventStreamGraceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -394,7 +413,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   useLayoutEffect(() => {
     if (!existingSessionId && (!isNew || sessionIdRef.current)) return;
-    setToolPresetState(getPreferredToolPreset());
+    const preferred = getPreferredToolSelection();
+    setToolPresetState(preferred.preset);
+    if (preferred.customNames.length > 0) setCustomToolNames(preferred.customNames);
   }, [existingSessionId, isNew, setToolPresetState]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -523,7 +544,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setHistoryCursor(persistedHistory.oldestEntryId);
       setHasEarlierMessages(persistedHistory.hasMore);
       setFirstEntryParentId(persistedHistory.firstEntryParentId ?? null);
-      setToolPresetState(d.toolNames !== undefined ? getPresetFromToolNames(d.toolNames) : "default");
+      if (d.toolNames !== undefined) {
+        const matched = matchToolPresetOrCustom(d.toolNames);
+        setToolPresetState(matched);
+        if (matched === "custom") setCustomToolNames(d.toolNames);
+      } else {
+        setToolPresetState("default");
+      }
       setCurrentModelOverride((current) => modelSwitchPendingRef.current ? current : null);
       setError(null);
       if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
@@ -553,6 +580,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (liveState) {
           if (liveState.contextUsage?.tokens !== null && liveState.contextUsage?.tokens !== undefined) setContextUsage(liveState.contextUsage);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
+          if (liveState.customSystemPrompt !== undefined) setCustomSystemPrompt(liveState.customSystemPrompt ?? null);
           if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
@@ -622,8 +650,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       const tools = await sendAgentCommand<ToolEntry[]>(sid, { type: "get_tools" });
       if (!tools || !sessionHookMountedRef.current || sessionIdRef.current !== sid) return null;
-      const { getPresetFromTools } = await import("@/lib/tool-presets");
-      setToolPresetState(getPresetFromTools(tools));
+      const { matchToolPresetOrCustom: matchPreset } = await import("@/lib/tool-presets");
+      const activeBuiltinNames = tools.filter((tool) => tool.active).map((tool) => tool.name);
+      const matched = matchPreset(activeBuiltinNames);
+      setToolPresetState(matched);
+      if (matched === "custom") setCustomToolNames(activeBuiltinNames);
       onSystemToolsChange?.(tools);
       return tools;
     } catch (e) {
@@ -668,7 +699,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const selectedModel = newSessionModelOverrideRef.current;
       const selectedThinkingLevel = thinkingLevelOverrideRef.current;
       if (selectedModel) setPendingModel(selectedModel);
-      const toolNames = getToolNamesForPreset(toolPreset);
+      const toolNames = toolPreset === "custom" ? customToolNames : getToolNamesForPreset(toolPreset);
       const res = await fetch("/api/agent/new", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -680,6 +711,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           ...(selectedThinkingLevel
             ? { thinkingLevel: selectedThinkingLevel }
             : {}),
+          ...(ephemeralRef.current ? { ephemeral: true } : {}),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -709,7 +741,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [isNew, newSessionCwd, toolPreset]);
+  }, [isNew, newSessionCwd, toolPreset, customToolNames]);
 
   // Opening the System or Tools panel may initialize an otherwise dormant
   // session. This is deliberately a non-prompt command: it creates no message
@@ -724,7 +756,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     ]);
     if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
     setSystemPrompt(state.systemPrompt ?? "");
+    if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
   }, [ensureNewSession, loadTools]);
+
+  // Set or clear the per-session system prompt override (append/replace),
+  // persisted in the session file by the server, then refresh the displayed
+  // prompt so the panel shows the composed result.
+  const handleSetSystemPrompt = useCallback(async (custom: SessionSystemPromptCustomization | null) => {
+    const sid = sessionIdRef.current;
+    if (!sid) throw new Error("No active session");
+    const result = await sendAgentCommand(sid, custom
+      ? { type: "set_system_prompt", mode: custom.mode, text: custom.text }
+      : { type: "set_system_prompt", mode: "clear" }) as { customSystemPrompt?: SessionSystemPromptCustomization | null } | undefined;
+    if (result && "customSystemPrompt" in result) {
+      setCustomSystemPrompt(result.customSystemPrompt ?? null);
+    }
+    await loadSystemInfo();
+  }, [loadSystemInfo]);
 
   const loadSlashCommands = useCallback(async () => {
     const sid = sessionIdRef.current ?? await ensureNewSession();
@@ -1067,6 +1115,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (state) {
         if (state.contextUsage?.tokens !== null && state.contextUsage?.tokens !== undefined) setContextUsage(state.contextUsage);
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
+        if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
         if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
         if (state.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
       }
@@ -1140,6 +1189,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .then((d: { state?: AgentStateResponse }) => {
               if (d.state?.contextUsage?.tokens !== null && d.state?.contextUsage?.tokens !== undefined) setContextUsage(d.state.contextUsage);
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
+        if (d.state?.customSystemPrompt !== undefined) setCustomSystemPrompt(d.state.customSystemPrompt ?? null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
               // Aborted turns can leave messages queued in pi (delivered with the
@@ -1512,12 +1562,32 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       return;
     }
+    const queuedBefore = queuedMessagesRef.current;
     try {
       await sendAgentCommand(sid, { type: "abort" });
     } catch (e) {
       console.error("Failed to abort:", e);
+      return;
     }
-  }, []);
+    // Match pi's Escape: aborting clears the queued steering/follow-up
+    // messages and restores them into the editor instead of silently
+    // delivering them to the next turn.
+    if (queuedBefore.steering.length + queuedBefore.followUp.length === 0) return;
+    let texts: string[] = [];
+    try {
+      const result = await sendAgentCommand<{ steering?: string[]; followUp?: string[] }>(sid, { type: "clear_queue" });
+      texts = [...(result?.steering ?? []), ...(result?.followUp ?? [])];
+    } catch {
+      // Network hiccup — fall back to the pre-abort snapshot below.
+    }
+    if (texts.length === 0) {
+      texts = [...queuedBefore.steering, ...queuedBefore.followUp];
+    }
+    setQueuedMessages({ steering: [], followUp: [] });
+    if (texts.length > 0) {
+      opts.chatInputRef?.current?.prependText(texts.join("\n\n"));
+    }
+  }, [opts.chatInputRef]);
 
   const handleFork = useCallback(async (entryId: string) => {
     if (bashRunningRef.current) return;
@@ -1559,6 +1629,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(() => {});
     }
   }, [loadContext]);
+
+  // Bookmark an entry in the branch tree (pi `/tree` label). Persists through
+  // the session file and refreshes the displayed tree.
+  const handleSetEntryLabel = useCallback(async (entryId: string, label: string | null) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, { type: "set_label", targetId: entryId, ...(label ? { label } : {}) });
+      await loadSession(sid);
+    } catch (e) {
+      console.error("Failed to set entry label:", e);
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [addNotice, loadSession]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
     const modelKey = `${provider}:${modelId}`;
@@ -1911,10 +1995,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isNew]);
 
-  const handleToolPresetChange = useCallback(async (preset: ToolPreset) => {
-    const toolNames = getToolNamesForPreset(preset);
-    setPreferredToolPreset(preset);
-    setToolPresetState(preset);
+  // Shared set_tools flow for preset and custom selections. The server may
+  // rebuild the session when crossing the chat-only boundary; in that case the
+  // returned session id replaces the current one.
+  const applyToolSelection = useCallback(async (toolNames: string[]) => {
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
     if (!sid) return;
     try {
@@ -1934,11 +2018,33 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       ]);
       if (sessionHookMountedRef.current && sessionIdRef.current === activeSessionId) {
         setSystemPrompt(state.systemPrompt ?? "");
+        if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
       }
     } catch (e) {
       console.error("Failed to set tools:", e);
     }
-  }, [cancelEventStreamGrace, closeEvents, loadTools, setToolPresetState]);
+  }, [cancelEventStreamGrace, closeEvents, loadTools]);
+
+  const handleToolPresetChange = useCallback(async (preset: ToolPreset) => {
+    const toolNames = getToolNamesForPreset(preset);
+    setPreferredToolSelection(preset);
+    setToolPresetState(preset);
+    await applyToolSelection(toolNames);
+  }, [applyToolSelection, setToolPresetState]);
+
+  // Arbitrary builtin-tool combination from the custom picker (pi --tools).
+  const setEphemeral = useCallback((value: boolean) => {
+    ephemeralRef.current = value;
+    setEphemeralState(value);
+  }, []);
+
+  const handleCustomToolsChange = useCallback(async (names: string[]) => {
+    const deduped = [...new Set(names)];
+    setCustomToolNames(deduped);
+    setToolPresetState("custom");
+    setPreferredToolSelection("custom", deduped);
+    await applyToolSelection(deduped);
+  }, [applyToolSelection, setToolPresetState]);
 
   const scrollUserMsgToTop = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -2014,6 +2120,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           if (agentState.state.contextUsage?.tokens !== null && agentState.state.contextUsage?.tokens !== undefined) setContextUsage(agentState.state.contextUsage);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
+          if (agentState.state.customSystemPrompt !== undefined) setCustomSystemPrompt(agentState.state.customSystemPrompt ?? null);
           if (agentState.state.thinkingLevel !== undefined) setThinkingLevel((agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto");
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
           if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
@@ -2047,14 +2154,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [systemPrompt, onSystemPromptChange]);
 
   useEffect(() => {
+    onCustomSystemPromptChange?.(customSystemPrompt);
+  }, [customSystemPrompt, onCustomSystemPromptChange]);
+
+  useEffect(() => {
+    onSystemPromptSaverChange?.(handleSetSystemPrompt);
+    return () => onSystemPromptSaverChange?.(null);
+  }, [handleSetSystemPrompt, onSystemPromptSaverChange]);
+
+  useEffect(() => {
     onSystemInfoLoaderChange?.(loadSystemInfo);
     return () => onSystemInfoLoaderChange?.(null);
   }, [loadSystemInfo, onSystemInfoLoaderChange]);
 
   useEffect(() => {
     if (!onBranchDataChange) return;
-    onBranchDataChange(data?.tree ?? [], activeLeafId, handleLeafChange);
-  }, [data?.tree, activeLeafId, handleLeafChange, onBranchDataChange]);
+    onBranchDataChange(data?.tree ?? [], activeLeafId, handleLeafChange, handleSetEntryLabel);
+  }, [data?.tree, activeLeafId, handleLeafChange, handleSetEntryLabel, onBranchDataChange]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -2151,7 +2267,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
-    agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
+    agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -2169,7 +2285,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleRecallQueue,
     handleBuiltinSlashCommand,
     setNoticePaused: setPausedNoticeId,
-    handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages, loadContext,
+    handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages, loadContext,
     scrollToBottom, scrollUserMsgToTop,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,

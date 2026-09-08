@@ -243,7 +243,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const inline = new URL(req.url).searchParams.get("inline") === "1";
+  const searchParams = new URL(req.url).searchParams;
+  const inline = searchParams.get("inline") === "1";
+  const format = searchParams.get("format") === "jsonl" ? "jsonl" : "html";
 
   try {
     const filePath = await resolveSessionPath(id);
@@ -251,10 +253,25 @@ export async function GET(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
+    const sessionBase = basename(filePath, ".jsonl");
+
+    // Raw JSONL download — the canonical session file, suitable for
+    // re-importing via POST /api/sessions/import or pi's /import.
+    if (format === "jsonl") {
+      const content = readFileSync(filePath);
+      return new Response(new Uint8Array(content), {
+        headers: {
+          "Content-Type": "application/x-ndjson",
+          "Content-Disposition": getContentDisposition(`pi-session-${sessionBase}.jsonl`, false),
+          "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+
     const tempDir = join(tmpdir(), "pi-web-export");
     mkdirSync(tempDir, { recursive: true });
 
-    const sessionBase = basename(filePath, ".jsonl");
     const fileName = `pi-session-${sessionBase}.html`;
     const outputPath = join(tempDir, `${randomUUID()}.html`);
 

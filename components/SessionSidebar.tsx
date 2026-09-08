@@ -246,6 +246,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [listMenuOpen, setListMenuOpen] = useState(false);
   const listMenuRef = useRef<HTMLDivElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importBusy, setImportBusy] = useState(false);
 
   useEffect(() => {
     if (!listMenuOpen) return;
@@ -267,7 +269,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const runningPollAuthoritativeRef = useRef(false);
   const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadSessions = useCallback(async (showLoading = false, force = false) => {
+  const loadSessions = useCallback(async (showLoading = false, force = false): Promise<SessionInfo[]> => {
     try {
       if (showLoading) setLoading(true);
       const res = await fetch(force ? "/api/sessions?force=1" : "/api/sessions", {
@@ -306,8 +308,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
         sessionRefreshTimerRef.current = setTimeout(() => setSessionRefreshDone(false), 2000);
       }
+      return data.sessions;
     } catch (e) {
       setError(String(e));
+      return [];
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -830,6 +834,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     startNewSessionForCwd(selectedCwd);
   }, [selectedCwd, startNewSessionForCwd]);
 
+  // Import a pi session export (.jsonl) into the store, then open it.
+  const handleImportSessionFile = useCallback(async (file: File) => {
+    setImportBusy(true);
+    setError(null);
+    try {
+      const params = selectedCwd ? `?cwd=${encodeURIComponent(selectedCwd)}` : "";
+      const res = await fetch(`/api/sessions/import${params}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-ndjson" },
+        body: file,
+      });
+      const data = await res.json().catch(() => ({})) as { sessionId?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      await loadSessions(false, true).then((sessions) => {
+        const imported = sessions.find((session) => session.id === data.sessionId);
+        if (imported) onSelectSession(imported);
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImportBusy(false);
+    }
+  }, [selectedCwd, loadSessions, onSelectSession]);
+
   const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
 
   // Sessions of every worktree in the selected project are shown together
@@ -1033,6 +1061,52 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
               <line x1="12" y1="10" x2="12" y2="16" />
               <line x1="9" y1="13" x2="15" y2="13" />
+            </svg>
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".jsonl,application/x-ndjson,application/jsonl,text/plain"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void handleImportSessionFile(file);
+            }}
+          />
+          <button
+            onClick={() => importInputRef.current?.click()}
+            disabled={importBusy}
+            title={t("sidebar.importSession")}
+            aria-label={t("sidebar.importSession")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 34,
+              height: 34,
+              background: "transparent",
+              border: "none",
+              borderRadius: 7,
+              color: "var(--text-muted)",
+              cursor: importBusy ? "wait" : "pointer",
+              flexShrink: 0,
+              opacity: importBusy ? 0.5 : 1,
+              transition: "all 0.15s ease",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-hover)";
+              e.currentTarget.style.color = "var(--text)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--text-muted)";
+            }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
           </button>
         </div>

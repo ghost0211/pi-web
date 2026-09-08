@@ -132,13 +132,15 @@ test("fresh sessions use the preference while persisted and live sessions restor
 
   assert.match(
     preferenceSource,
-    /const existingSessionId = session\?\.id;[\s\S]*?useLayoutEffect\(\(\) => \{\s*if \(!existingSessionId && \(!isNew \|\| sessionIdRef\.current\)\) return;\s*setToolPresetState\(getPreferredToolPreset\(\)\)/,
+    /const existingSessionId = session\?\.id;[\s\S]*?useLayoutEffect\(\(\) => \{\s*if \(!existingSessionId && \(!isNew \|\| sessionIdRef\.current\)\) return;\s*const preferred = getPreferredToolSelection\(\);\s*setToolPresetState\(preferred\.preset\);\s*if \(preferred\.customNames\.length > 0\) setCustomToolNames\(preferred\.customNames\)/,
   );
   assert.match(source, /if \(agentState\?\.running\) \{\s*loadTools\(session\.id\)/);
-  assert.match(source, /d\.toolNames !== undefined \? getPresetFromToolNames\(d\.toolNames\) : "default"/);
-  assert.match(changeSource, /setPreferredToolPreset\(preset\)/);
-  assert.match(changeSource, /\(sid, \{ type: "set_tools", toolNames \}\)/);
-  assert.match(changeSource, /sessionIdRef\.current = activeSessionId/);
+  assert.match(source, /if \(d\.toolNames !== undefined\) \{\s*const matched = matchToolPresetOrCustom\(d\.toolNames\);\s*setToolPresetState\(matched\);\s*if \(matched === "custom"\) setCustomToolNames\(d\.toolNames\);\s*\} else \{\s*setToolPresetState\("default"\)/);
+  assert.match(changeSource, /setPreferredToolSelection\(preset\)/);
+  assert.match(changeSource, /applyToolSelection\(toolNames\)/);
+  // set_tools and the session rekey live in the shared applyToolSelection helper.
+  assert.match(source, /const applyToolSelection = useCallback[\s\S]*?\(sid, \{ type: "set_tools", toolNames \}\)/);
+  assert.match(source, /const applyToolSelection = useCallback[\s\S]*?sessionIdRef\.current = activeSessionId/);
   assert.doesNotMatch(loadToolsSource, /setPreferredToolPreset/);
 });
 

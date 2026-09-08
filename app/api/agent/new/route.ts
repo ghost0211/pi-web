@@ -5,6 +5,18 @@ import { randomUUID } from "crypto";
 import { allowFileRoot } from "@/lib/file-access";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
+import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
+
+function parseSystemPromptOptions(body: Record<string, unknown>): SessionSystemPromptCustomization | null {
+  const replaceText = typeof body.systemPrompt === "string" ? body.systemPrompt.trim() : "";
+  const appendText = typeof body.appendSystemPrompt === "string" ? body.appendSystemPrompt.trim() : "";
+  if (replaceText && appendText) {
+    throw new Error("systemPrompt and appendSystemPrompt cannot be combined");
+  }
+  if (replaceText) return { mode: "replace", text: body.systemPrompt as string };
+  if (appendText) return { mode: "append", text: body.appendSystemPrompt as string };
+  return null;
+}
 
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -46,10 +58,17 @@ export async function POST(req: Request) {
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
     const { provider, modelId, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: unknown; [key: string]: unknown };
+    // systemPrompt / appendSystemPrompt are startRpcSession options, not
+    // session commands — never forward them to the session runtime.
+    delete promptCommand.systemPrompt;
+    delete promptCommand.appendSystemPrompt;
+    const ephemeral = promptCommand.ephemeral === true;
+    delete promptCommand.ephemeral;
     if ((provider && !modelId) || (!provider && modelId)) {
       throw new Error("provider and modelId must be provided together");
     }
     const explicitThinkingLevel = parseThinkingLevel(thinkingLevel);
+    const systemPromptCustomization = parseSystemPromptOptions(command);
 
     // Must be unique per request: startRpcSession coalesces concurrent callers
     // that share a key onto one session. Date.now() (ms resolution) collides for
@@ -59,6 +78,8 @@ export async function POST(req: Request) {
       ...(toolNames ? { toolNames } : {}),
       ...(provider && modelId ? { initialModel: { provider, modelId } } : {}),
       ...(explicitThinkingLevel ? { thinkingLevel: explicitThinkingLevel } : {}),
+      ...(systemPromptCustomization ? { systemPrompt: systemPromptCustomization } : {}),
+      ...(ephemeral ? { ephemeral: true } : {}),
     });
 
     // Keep the files-route allowed-roots cache (see app/api/files/[...path]/route.ts)

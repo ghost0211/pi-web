@@ -20,6 +20,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
 import type { ToolEntry } from "@/lib/tool-presets";
 import {
   captureScrollDistance,
@@ -41,8 +42,10 @@ interface Props {
   onNewSession?: (sessionId: string, cwd: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
-  onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void) => void;
+  onBranchDataChange?: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, onSetEntryLabel?: (entryId: string, label: string | null) => void) => void;
   onSystemPromptChange?: (prompt: string | null) => void;
+  onCustomSystemPromptChange?: (custom: SessionSystemPromptCustomization | null) => void;
+  onSystemPromptSaverChange?: (saver: ((custom: SessionSystemPromptCustomization | null) => Promise<void>) | null) => void;
   onSystemToolsChange?: (tools: ToolEntry[] | null) => void;
   onSystemInfoLoaderChange?: (loader: (() => Promise<void>) | null) => void;
   onSessionStatsChange?: (stats: SessionStatsInfo | null) => void;
@@ -195,7 +198,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
+export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
@@ -236,7 +239,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
 
   const {
     loading, error, messages, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
-    agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, thinkingLevel,
+    agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -250,11 +253,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleThinkingLevelChange, loadSlashCommands, scrollUserMsgToTop,
+    handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, loadSlashCommands, scrollUserMsgToTop,
     loadContext, activeLeafId,
   } = useAgentSession({
     session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd: wrappedOnAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession,
-    modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
+    modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
   });
   const sessionBusy = agentRunning || bashRunning;
 
@@ -530,7 +533,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
       compactError={compactError}
       compactResult={compactResult}
       toolPreset={toolPreset}
+      customToolNames={customToolNames}
       onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
+      onCustomToolsChange={session || isNew ? handleCustomToolsChange : undefined}
+      ephemeral={ephemeral}
+      onEphemeralChange={isNew && !session ? setEphemeral : undefined}
       thinkingLevel={thinkingLevel}
       onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}

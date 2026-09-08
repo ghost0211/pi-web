@@ -36,7 +36,7 @@ import {
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
-import type { ToolPreset } from "@/lib/tool-presets";
+import { BUILTIN_SELECTABLE_TOOLS, getToolNamesForPreset, PRESET_DEFAULT, type ToolPreset, type ToolPresetSelection } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { calculateContextUsageDisplay, resolveModelContextWindow } from "@/lib/context-window";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
@@ -72,8 +72,15 @@ interface Props {
   isCompacting?: boolean;
   compactError?: string | null;
   compactResult?: CompactResultInfo | null;
-  toolPreset?: ToolPreset;
+  toolPreset?: ToolPresetSelection;
   onToolPresetChange?: (preset: ToolPreset) => void;
+  /** Builtin tool names active under the "custom" selection. */
+  customToolNames?: string[];
+  /** Apply an arbitrary builtin-tool combination (pi --tools equivalent). */
+  onCustomToolsChange?: (names: string[]) => void;
+  /** New sessions only: in-memory session that never writes a JSONL file. */
+  ephemeral?: boolean;
+  onEphemeralChange?: (value: boolean) => void;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   onThinkingLevelChange?: (level: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
   availableThinkingLevels?: string[] | null;
@@ -686,7 +693,7 @@ export function ContextUsageRing({
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching,
-  onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
+  onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange, customToolNames, onCustomToolsChange, ephemeral, onEphemeralChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
@@ -1472,7 +1479,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       const nativeEvent = e.nativeEvent;
-      const sendShortcut = e.key === "Enter" && !e.shiftKey && (!isMobile || e.ctrlKey || e.metaKey);
+      // Alt+Enter queues a follow-up while streaming (pi CLI parity); plain
+      // Enter stays the send/steer shortcut, so exclude Alt here.
+      const sendShortcut = e.key === "Enter" && !e.shiftKey && !e.altKey && (!isMobile || e.ctrlKey || e.metaKey);
       const recentlyComposed = Date.now() - lastCompositionEndAtRef.current < COMPOSITION_END_ENTER_GRACE_MS;
       const isComposing =
         isComposingRef.current ||
@@ -1481,6 +1490,28 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
       if (sendShortcut && (isComposing || recentlyComposed)) {
         if (recentlyComposed) e.preventDefault();
+        return;
+      }
+
+      // Alt+Enter — queue as follow-up after the agent finishes (CLI parity).
+      // With no run active it behaves like a normal send.
+      if (e.key === "Enter" && e.altKey && !isComposing) {
+        e.preventDefault();
+        if (isStreaming && (onSteer || onFollowUp)) {
+          sendQueued("followup");
+        } else {
+          handleSend();
+        }
+        return;
+      }
+
+      // Alt+Up — pull queued steering/follow-up messages back into the editor.
+      if (e.key === "ArrowUp" && e.altKey) {
+        const queuedCount = (queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0);
+        if (queuedCount > 0 && onRecallQueue) {
+          e.preventDefault();
+          onRecallQueue();
+        }
         return;
       }
 
@@ -1604,7 +1635,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }
       }
     },
-    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
+    [isMobile, isStreaming, onSteer, onFollowUp, onAbort, onRecallQueue, queuedMessages, slashMenuOpen, slashQuery, displayedSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
   );
 
   const handleInput = useCallback(() => {
@@ -1749,8 +1780,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (lvl === "auto" || !thinkingLevelMap) return lvl;
     return thinkingLevelMap[lvl] ?? lvl;
   })();
-  const rawToolPresetLabel = Object.entries(TOOL_PRESET_MAP).find(([, v]) => v === (toolPreset ?? "default"))?.[0] ?? "default";
-  const toolPresetLabel = rawToolPresetLabel === "chat-only" ? t("chat.chatOnly") : rawToolPresetLabel;
+  const rawToolPresetLabel = toolPreset === "custom"
+    ? null
+    : Object.entries(TOOL_PRESET_MAP).find(([, v]) => v === (toolPreset ?? "default"))?.[0] ?? "default";
+  const toolPresetLabel = toolPreset === "custom"
+    ? t("chat.customTools")
+    : rawToolPresetLabel === "chat-only" ? t("chat.chatOnly") : rawToolPresetLabel;
+  // Effective builtin selection driving the custom picker's checkboxes.
+  const effectiveBuiltinToolNames = React.useMemo(() => toolPreset === "custom"
+    ? (customToolNames ?? [...PRESET_DEFAULT])
+    : getToolNamesForPreset(toolPreset ?? "default"), [toolPreset, customToolNames]);
+  const [toolView, setToolView] = useState<"presets" | "custom">("presets");
+  useEffect(() => {
+    if (!toolDropdownOpen) setToolView("presets");
+  }, [toolDropdownOpen]);
+  const toggleCustomTool = useCallback((name: string) => {
+    const current = new Set(effectiveBuiltinToolNames);
+    if (current.has(name)) current.delete(name);
+    else current.add(name);
+    onCustomToolsChange?.(BUILTIN_SELECTABLE_TOOLS.filter((toolName) => current.has(toolName)));
+  }, [effectiveBuiltinToolNames, onCustomToolsChange]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -2482,6 +2531,54 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     overflow: "hidden",
                     minWidth: 150,
                   }}>
+                    {toolView === "custom" ? (
+                      <div style={{ minWidth: 210 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderBottom: "1px solid var(--border)" }}>
+                          <button
+                            type="button"
+                            onClick={() => setToolView("presets")}
+                            aria-label={t("chat.customToolsBack")}
+                            style={{ display: "flex", alignItems: "center", padding: 2, background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                          </button>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)" }}>{t("chat.customTools")}</span>
+                        </div>
+                        {BUILTIN_SELECTABLE_TOOLS.map((name) => {
+                          const checked = effectiveBuiltinToolNames.includes(name);
+                          return (
+                            <button
+                              key={name}
+                              type="button"
+                              role="checkbox"
+                              aria-checked={checked}
+                              onClick={() => toggleCustomTool(name)}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 8,
+                                width: "100%", padding: "6px 12px",
+                                background: "none", border: "none",
+                                color: checked ? "var(--text)" : "var(--text-muted)",
+                                cursor: "pointer", fontSize: 12, textAlign: "left",
+                                fontFamily: "var(--font-mono)",
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                            >
+                              {checked
+                                ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
+                                : <span style={{ width: 10, flexShrink: 0 }} />}
+                              <span style={{ flex: 1 }}>{name}</span>
+                            </button>
+                          );
+                        })}
+                        {effectiveBuiltinToolNames.length === 0 && (
+                          <div style={{ padding: "4px 12px 8px", fontSize: 10, color: "var(--text-dim)", lineHeight: 1.4 }}>
+                            {t("chat.customToolsNone")}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
                     {TOOL_PRESETS.map((lvl) => {
                       const preset = TOOL_PRESET_MAP[lvl];
                       const isActive = (toolPreset ?? "default") === preset;
@@ -2516,6 +2613,33 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                         </button>
                       );
                     })}
+                    {onCustomToolsChange && (
+                      <button
+                        type="button"
+                        onClick={() => setToolView("custom")}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          width: "100%", padding: "7px 12px",
+                          background: toolPreset === "custom" ? "var(--bg-selected)" : "none",
+                          border: "none",
+                          borderTop: "1px solid var(--border)",
+                          color: toolPreset === "custom" ? "var(--text)" : "var(--text-muted)",
+                          cursor: "pointer", fontSize: 12, textAlign: "left",
+                          fontWeight: toolPreset === "custom" ? 600 : 400,
+                          whiteSpace: "nowrap",
+                        }}
+                        onMouseEnter={(e) => { if (toolPreset !== "custom") e.currentTarget.style.background = "var(--bg-hover)"; }}
+                        onMouseLeave={(e) => { if (toolPreset !== "custom") e.currentTarget.style.background = "none"; }}
+                      >
+                        {toolPreset === "custom"
+                          ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
+                          : <span style={{ width: 10, flexShrink: 0 }} />}
+                        <span style={{ flex: 1 }}>{t("chat.customTools")}</span>
+                        <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{t("chat.customizeTools")}</span>
+                      </button>
+                    )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -2599,6 +2723,29 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               } : null),
             }}>
             <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={model} modelList={modelList} compactResult={compactResult} />
+            {!isMobile && !isStreaming && onEphemeralChange && (
+              <button
+                type="button"
+                onClick={() => onEphemeralChange(!ephemeral)}
+                title={t("chat.ephemeralHint")}
+                aria-pressed={ephemeral}
+                style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  padding: "3px 7px", borderRadius: 5,
+                  background: ephemeral ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "none",
+                  border: `1px solid ${ephemeral ? "color-mix(in srgb, var(--accent) 40%, transparent)" : "var(--border)"}`,
+                  color: ephemeral ? "var(--accent)" : "var(--text-dim)",
+                  cursor: "pointer", fontSize: 11,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                  <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+                {t("chat.ephemeral")}
+              </button>
+            )}
             {(modelOptions.length > 0 || model || modelError) && onModelChange && (
               <ModelSelector
                 options={modelOptions}
@@ -2818,7 +2965,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <button
                       type="button"
                       onClick={() => sendQueued("followup")}
-                      title="Queue this message after the agent finishes"
+                      title="Queue this message after the agent finishes (Alt+Enter)"
                       style={{
                         display: "flex", alignItems: "center", gap: 5,
                         padding: "0 9px", height: 32,

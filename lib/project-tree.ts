@@ -15,7 +15,44 @@ type ProjectableTreeNode<T> = {
   children: T[];
   compressedEntryIds?: string[];
   branchPreview?: BranchPreview;
+  /** Resolved bookmark text for this entry (pi `/tree` labels). */
+  label?: string;
 };
+
+/**
+ * Drop `type: "label"` bookkeeping entries from the navigation tree: they are
+ * markers on other entries (surfaced via node.label), not navigable points.
+ * Children of a removed label node are hoisted to its parent. Iterative
+ * post-order — a linear session degrades into a chain whose depth equals the
+ * entry count, so recursion would overflow the stack.
+ */
+export function stripLabelEntries<T extends ProjectableTreeNode<T>>(nodes: T[]): T[] {
+  // replacements.get(node) = the nodes that take this node's place in its
+  // parent's child list (itself with stripped children, or — for label
+  // entries — the stripped children directly).
+  const replacements = new Map<T, T[]>();
+  const stack: Array<{ node: T; visited: boolean }> = nodes.map((node) => ({ node, visited: false }));
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (!frame.visited) {
+      if (replacements.has(frame.node)) continue;
+      stack.push({ node: frame.node, visited: true });
+      for (const child of frame.node.children) {
+        if (!replacements.has(child)) stack.push({ node: child, visited: false });
+      }
+      continue;
+    }
+    const kids: T[] = [];
+    for (const child of frame.node.children) {
+      kids.push(...(replacements.get(child) ?? []));
+    }
+    replacements.set(
+      frame.node,
+      frame.node.entry.type === "label" ? kids : [{ ...frame.node, children: kids }],
+    );
+  }
+  return nodes.flatMap((node) => replacements.get(node) ?? []);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -90,7 +127,10 @@ export function projectTreeForResponse<T extends ProjectableTreeNode<T>>(
 
     if (
       roots.has(node) ||
-      node.children.length !== 1
+      node.children.length !== 1 ||
+      // Bookmarked entries stay visible even mid-chain so the BranchNavigator
+      // can jump to (and search for) them.
+      node.label !== undefined
     ) {
       keep.add(node);
     }

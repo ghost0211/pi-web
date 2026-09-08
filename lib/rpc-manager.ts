@@ -48,6 +48,11 @@ import {
   readSessionToolSelection,
   validateSessionToolSelection,
 } from "./session-tool-selection";
+import {
+  appendSessionSystemPrompt,
+  readSessionSystemPrompt,
+  type SessionSystemPromptCustomization,
+} from "./session-system-prompt";
 import { calculateActiveContextTokens } from "./context-tokens";
 
 // ============================================================================
@@ -114,7 +119,9 @@ type ExtensionCommandContextActionsLike = {
 
 type AgentSessionWrapperOptions = {
   exactSystemPrompt?: () => string;
+  customSystemPrompt?: SessionSystemPromptCustomization | null;
   chatOnly?: boolean;
+  ephemeral?: boolean;
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
 };
@@ -142,6 +149,14 @@ export interface RpcSessionStartOptions {
   initialModel?: { provider: string; modelId: string };
   allowInitialModelFallback?: boolean;
   thinkingLevel?: ThinkingLevel;
+  /**
+   * Per-session system prompt customization for NEW sessions. Ignored for
+   * subagent sessions and superseded by any customization persisted in an
+   * existing session file.
+   */
+  systemPrompt?: SessionSystemPromptCustomization | null;
+  /** New sessions only: keep the session in memory and never write JSONL. */
+  ephemeral?: boolean;
 }
 
 const CODING_TOOL_NAMES = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
@@ -252,7 +267,11 @@ export class AgentSessionWrapper {
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
   private readonly exactSystemPrompt?: () => string;
+  private customSystemPrompt: SessionSystemPromptCustomization | null;
+  private lastNaturalSystemPrompt: string | null = null;
+  private lastEffectiveSystemPrompt: string | null = null;
   private readonly chatOnly: boolean;
+  private readonly ephemeral: boolean;
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
   private readonly suppressCompletionNotifications: boolean;
   private unsubscribe: (() => void) | null = null;
@@ -268,11 +287,13 @@ export class AgentSessionWrapper {
     options: AgentSessionWrapperOptions = {},
   ) {
     this.exactSystemPrompt = options.exactSystemPrompt;
+    this.customSystemPrompt = options.customSystemPrompt ?? null;
     this.chatOnly = options.chatOnly ?? false;
+    this.ephemeral = options.ephemeral ?? false;
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
-    this.installExactSystemPromptContinuation();
-    this.applyExactSystemPrompt();
+    this.installSystemPromptContinuation();
+    this.applyEffectiveSystemPrompt();
   }
 
   get sessionId(): string {
@@ -305,6 +326,11 @@ export class AgentSessionWrapper {
 
   isChatOnly(): boolean {
     return this.chatOnly;
+  }
+
+  /** In-memory (ephemeral) sessions never write a JSONL file. */
+  isEphemeral(): boolean {
+    return this.ephemeral;
   }
 
   hasSuppressedCompletionNotifications(): boolean {
@@ -347,7 +373,7 @@ export class AgentSessionWrapper {
 
   private ensureExtensionsBound(): Promise<void> {
     if (this.extensionsBound) {
-      this.applyExactSystemPrompt();
+      this.applyEffectiveSystemPrompt();
       return Promise.resolve();
     }
     if (this.extensionBindingPromise) return this.extensionBindingPromise;
@@ -386,7 +412,7 @@ export class AgentSessionWrapper {
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
       this.extensionsBound = true;
-      this.applyExactSystemPrompt();
+      this.applyEffectiveSystemPrompt();
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
       this.extensionBindingError = err;
@@ -425,29 +451,83 @@ export class AgentSessionWrapper {
     }
   }
 
-  private applyExactSystemPrompt(): void {
-    if (!this.exactSystemPrompt || !this.inner.agent.state) return;
-    this.inner.agent.state.systemPrompt = this.exactSystemPrompt();
+  /**
+   * Effective system prompt precedence: exactSystemPrompt (chat-only mode)
+   * > custom replace > custom append > natural. The SDK recomputes the
+   * natural prompt into every prepared turn, so we never mutate its base —
+   * append composition stays idempotent across turns.
+   */
+  private computeEffectiveSystemPrompt(natural: string | undefined): string | undefined {
+    if (this.exactSystemPrompt) return this.exactSystemPrompt();
+    const custom = this.customSystemPrompt;
+    if (!custom) return natural;
+    if (custom.mode === "replace") return custom.text;
+    if (natural === undefined) return undefined;
+    return natural ? `${natural}\n\n${custom.text}` : custom.text;
   }
 
-  private installExactSystemPromptContinuation(): void {
-    if (!this.exactSystemPrompt) return;
-    const previous = this.inner.agent.prepareNextTurnWithContext;
-    this.inner.agent.prepareNextTurnWithContext = async (turn, signal) => {
+  private applyEffectiveSystemPrompt(): void {
+    const state = this.inner.agent?.state;
+    if (!state) return;
+    if (!this.exactSystemPrompt && !this.customSystemPrompt) return;
+    const current = state.systemPrompt;
+    // SDK rebuilds (e.g. setActiveToolsByName) overwrite state.systemPrompt
+    // with a fresh natural prompt. If state still holds our last effective
+    // value, keep the previously captured natural base instead.
+    if (current !== undefined && (this.lastEffectiveSystemPrompt === null || current !== this.lastEffectiveSystemPrompt)) {
+      this.lastNaturalSystemPrompt = current;
+    }
+    const effective = this.computeEffectiveSystemPrompt(this.lastNaturalSystemPrompt ?? current);
+    if (effective === undefined) return;
+    state.systemPrompt = effective;
+    this.lastEffectiveSystemPrompt = effective;
+  }
+
+  private installSystemPromptContinuation(): void {
+    // Always installed: even with no override active we capture the natural
+    // prompt each turn so a late-applied customization composes against a
+    // clean base.
+    const agent = this.inner.agent;
+    if (!agent) return;
+    const previous = agent.prepareNextTurnWithContext;
+    agent.prepareNextTurnWithContext = async (turn, signal) => {
       const prepared = await previous?.(turn, signal);
+      const natural = (prepared?.context ?? turn.context).systemPrompt;
+      this.lastNaturalSystemPrompt = natural;
+      const effective = this.computeEffectiveSystemPrompt(natural);
+      if (effective === undefined || effective === natural) return prepared;
       return {
         ...prepared,
         context: {
           ...(prepared?.context ?? turn.context),
-          systemPrompt: this.exactSystemPrompt!(),
+          systemPrompt: effective,
         },
       };
     };
   }
 
+  getCustomSystemPrompt(): SessionSystemPromptCustomization | null {
+    return this.customSystemPrompt;
+  }
+
+  /**
+   * Set/clear the per-session system prompt customization. Persists through a
+   * versioned custom entry once a session file exists; for deferred (not yet
+   * persisted) sessions the override lives in memory until the first flush —
+   * the entry is then written by the persist path below.
+   */
+  setCustomSystemPrompt(custom: SessionSystemPromptCustomization | null): void {
+    this.customSystemPrompt = custom;
+    if (this.inner.sessionFile) {
+      appendSessionSystemPrompt(this.inner.sessionManager, custom);
+    }
+    this.lastEffectiveSystemPrompt = null;
+    this.applyEffectiveSystemPrompt();
+  }
+
   setActiveToolSelection(toolNames: string[]): void {
     this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
-    this.applyExactSystemPrompt();
+    this.applyEffectiveSystemPrompt();
   }
 
   private emit(event: AgentEvent): void {
@@ -630,7 +710,7 @@ export class AgentSessionWrapper {
               // validation and extension preflight have accepted the submission.
               preflightResult: (success) => {
                 if (success) {
-                  this.applyExactSystemPrompt();
+                  this.applyEffectiveSystemPrompt();
                   acceptPreflight();
                 }
               },
@@ -838,6 +918,36 @@ export class AgentSessionWrapper {
         return null;
       }
 
+      case "set_system_prompt": {
+        const mode = command.mode as string | undefined;
+        if (mode === "clear") {
+          this.setCustomSystemPrompt(null);
+          return { customSystemPrompt: null };
+        }
+        if (mode !== "append" && mode !== "replace") {
+          throw new Error("mode must be 'append', 'replace', or 'clear'");
+        }
+        const text = typeof command.text === "string" ? command.text.trim() : "";
+        if (!text) throw new Error("text is required");
+        if (this.chatOnly) throw new Error("Chat-only sessions do not support system prompt overrides");
+        this.setCustomSystemPrompt({ mode, text });
+        return { customSystemPrompt: this.customSystemPrompt };
+      }
+
+      case "set_label": {
+        const targetId = command.targetId as string;
+        if (typeof targetId !== "string" || !targetId) {
+          throw new Error("targetId is required");
+        }
+        const rawLabel = command.label;
+        const label = typeof rawLabel === "string" && rawLabel.trim() ? rawLabel.trim() : undefined;
+        // appendLabelChange throws for unknown targets and persists immediately
+        // for flushed sessions, so the next session read picks the change up.
+        this.inner.sessionManager.appendLabelChange(targetId, label);
+        invalidateSessionListCache();
+        return { label: label ?? null };
+      }
+
       case "get_session_stats": {
         return {
           ...this.inner.getSessionStats(),
@@ -933,7 +1043,7 @@ export class AgentSessionWrapper {
         if (typeof this.inner.bindExtensions !== "function") {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
-        this.applyExactSystemPrompt();
+        this.applyEffectiveSystemPrompt();
         invalidateModelsCache();
         return { success: true };
       }
@@ -1608,7 +1718,7 @@ export class AgentSessionWrapper {
             this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
           },
         });
-        this.applyExactSystemPrompt();
+        this.applyEffectiveSystemPrompt();
       },
     };
   }
@@ -1780,6 +1890,8 @@ export async function setRpcSessionTools(
 
   const started = await startRpcSession(`__recreate__${randomUUID()}`, "", sessionCwd, {
     toolNames,
+    systemPrompt: existing.getCustomSystemPrompt(),
+    ephemeral: existing.isEphemeral(),
     ...(model ? { initialModel: { provider: model.provider, modelId: model.id } } : {}),
     allowInitialModelFallback: true,
     ...(currentThinkingLevel && THINKING_LEVEL_NAMES.has(currentThinkingLevel as ThinkingLevel)
@@ -1829,7 +1941,10 @@ export function getRpcSessionInfos(): SessionInfo[] {
 
     // An ensure_session call creates an idle, empty runtime while the composer
     // loads commands. Do not leak it into history before a prompt is accepted.
-    if (!persisted && (!session.isRunning() || !firstUserMessage)) continue;
+    // Ephemeral sessions are the exception: their in-memory copy is the only
+    // one, so they stay listed (even idle) for as long as the wrapper lives.
+    const ephemeral = typeof session.isEphemeral === "function" && session.isEphemeral();
+    if (!persisted && (!firstUserMessage || (!session.isRunning() && !ephemeral))) continue;
 
     const created = header?.timestamp
       ?? entries[0]?.timestamp
@@ -1861,6 +1976,7 @@ export function getRpcSessionInfos(): SessionInfo[] {
         },
       } : {}),
       transient: !persisted,
+      ...(ephemeral ? { ephemeral: true } : {}),
     });
   }
   return sessions;
@@ -1932,7 +2048,9 @@ export async function startRpcSession(
     sessionManager = SessionManager.open(sessionFile, undefined);
   } else {
     if (!cwd) throw new Error("cwd is required for a new session");
-    sessionManager = SessionManager.create(cwd, undefined);
+    sessionManager = options.ephemeral
+      ? SessionManager.inMemory(cwd)
+      : SessionManager.create(cwd, undefined);
   }
   const sessionCwd = sessionManager.getCwd();
   const subagentResources = sessionFile
@@ -1946,6 +2064,16 @@ export async function startRpcSession(
   const selectedToolNames = subagentResources?.tools ?? persistedToolNames ?? requestedToolNames;
   if (!subagentResources && persistedToolNames === undefined && requestedToolNames !== undefined) {
     appendSessionToolSelection(sessionManager, requestedToolNames);
+  }
+  // Per-session system prompt customization: the persisted entry wins over a
+  // startup request; subagent sessions are governed by their profile instead.
+  const persistedSystemPrompt = subagentResources
+    ? undefined
+    : readSessionSystemPrompt(sessionManager.getEntries() as unknown as SessionEntry[]);
+  const requestedSystemPrompt = subagentResources ? null : (options.systemPrompt ?? null);
+  const selectedSystemPrompt = persistedSystemPrompt ?? requestedSystemPrompt;
+  if (!subagentResources && persistedSystemPrompt === undefined && requestedSystemPrompt) {
+    appendSessionSystemPrompt(sessionManager, requestedSystemPrompt);
   }
   const subagentLoadsResources = Boolean(
     subagentResources?.loadExtensions || subagentResources?.loadSkills,
@@ -2083,7 +2211,9 @@ export async function startRpcSession(
       : undefined;
     const wrapper = new AgentSessionWrapper(inner, {
       exactSystemPrompt,
+      customSystemPrompt: chatOnly ? null : selectedSystemPrompt,
       chatOnly,
+      ephemeral: Boolean(options.ephemeral) && !sessionFile,
       onAgentRunComplete: (completedSessionId) => {
         void notifySessionComplete(completedSessionId).catch((error) => {
           console.error("[pi-web] failed to send completion push:", error instanceof Error ? error.message : error);

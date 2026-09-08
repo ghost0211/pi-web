@@ -14,7 +14,7 @@ import {
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
 import { getRpcSession } from "@/lib/rpc-manager";
-import { projectTreeForResponse } from "@/lib/project-tree";
+import { projectTreeForResponse, stripLabelEntries } from "@/lib/project-tree";
 import { computeSessionTotalActiveMs } from "@/lib/session-timing";
 import { computeSessionStats } from "@/lib/session-stats";
 import type { SessionEntry } from "@/lib/types";
@@ -38,7 +38,7 @@ export async function GET(
     const filePath = liveRpc?.sessionFile || sm.getSessionFile() || resolvedPath || "";
     const entries = sm.getEntries();
     const leafId = sm.getLeafId();
-    const tree = projectTreeForResponse(sm.getTree());
+    const tree = projectTreeForResponse(stripLabelEntries(sm.getTree()));
     const searchParams = new URL(req.url).searchParams;
     const deferThinking = searchParams.has("deferThinking");
     const deferToolResultImages = searchParams.has("deferMedia");
@@ -147,6 +147,14 @@ export async function DELETE(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
+      // Ephemeral sessions never touch disk; deleting one means shutting down
+      // its live in-memory runtime.
+      const live = getRpcSession(id);
+      if (live?.isAlive()) {
+        await live.shutdown();
+        invalidateSessionListCache();
+        return NextResponse.json({ ok: true });
+      }
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 

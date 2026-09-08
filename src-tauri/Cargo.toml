@@ -1,6 +1,6 @@
 [package]
 name = "pi-web-desktop"
-version = "0.9.9"
+version = "0.9.10"
 description = "Windows desktop client for pi-web"
 authors = ["pi-web contributors"]
 license = "MIT"

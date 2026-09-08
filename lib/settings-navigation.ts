@@ -6,10 +6,11 @@ export const SETTINGS_SECTION_VALUES = [
   "skills",
   "agents",
   "plugins",
+  "about",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTION_VALUES)[number];
-export type SettingsDetailSection = Exclude<SettingsSection, "general">;
+export type SettingsDetailSection = Exclude<SettingsSection, "general" | "about">;
 
 const STORAGE_KEY = "pi-web:settings-navigation";
 const PROJECT_SECTIONS = new Set<SettingsSection>(["skills", "agents", "plugins"]);

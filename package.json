@@ -1,6 +1,6 @@
 {
   "name": "@agegr/pi-web",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "description": "Web UI for the pi coding agent",
   "homepage": "https://github.com/ghost0211/pi-web#readme",
   "repository": {
@@ -83,6 +83,6 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "tailwindcss": "^4.2.2",
-    "typescript": "^5"
+    "typescript": "^5.9.2"
   }
 }

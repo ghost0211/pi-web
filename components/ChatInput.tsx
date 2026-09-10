@@ -741,6 +741,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const [atActiveIndex, setAtActiveIndex] = useState(0);
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const [historyActiveIndex, setHistoryActiveIndex] = useState(0);
+  const [builtinCommandPending, setBuiltinCommandPending] = useState(false);
+  const builtinCommandPendingRef = useRef(false);
   const [fileIndex, setFileIndex] = useState<{ cwd: string; entries: FileIndexEntry[]; truncated: boolean } | null>(null);
   const [fileIndexLoading, setFileIndexLoading] = useState(false);
   const [atServerResult, setAtServerResult] = useState<{ cwd: string; query: string; matches: FileIndexEntry[] } | null>(null);
@@ -1216,14 +1218,25 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       + attachedBinaryFilesRef.current.length
       + attachedLocalFilesRef.current.length;
     if (attachmentCount || !msg.startsWith("/") || !onBuiltinCommand) return false;
-    const result = await onBuiltinCommand(msg);
-    if (!result.handled) return false;
-    const currentAttachmentCount = attachedImagesRef.current.length
-      + attachedTextFilesRef.current.length
-      + attachedBinaryFilesRef.current.length
-      + attachedLocalFilesRef.current.length;
-    if (!result.error && canClearBuiltinCommandInput(valueRef.current, currentAttachmentCount, msg)) clearInput();
-    return true;
+    // Guard against double submission (Enter + click, key repeat): the
+    // command runs async, so a second invocation can slip through before the
+    // first one resolves.
+    if (builtinCommandPendingRef.current) return true;
+    builtinCommandPendingRef.current = true;
+    setBuiltinCommandPending(true);
+    try {
+      const result = await onBuiltinCommand(msg);
+      if (!result.handled) return false;
+      const currentAttachmentCount = attachedImagesRef.current.length
+        + attachedTextFilesRef.current.length
+        + attachedBinaryFilesRef.current.length
+        + attachedLocalFilesRef.current.length;
+      if (!result.error && canClearBuiltinCommandInput(valueRef.current, currentAttachmentCount, msg)) clearInput();
+      return true;
+    } finally {
+      builtinCommandPendingRef.current = false;
+      setBuiltinCommandPending(false);
+    }
   }, [clearInput, onBuiltinCommand]);
 
   const handleSend = useCallback(async () => {
@@ -1904,11 +1917,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [appendLocalFiles, onAudioUnlock]);
 
   return (
-    <div
+    <fieldset
+      disabled={builtinCommandPending}
+      aria-busy={builtinCommandPending}
       style={{
         flexShrink: 0,
+        minWidth: 0,
+        margin: 0,
+        border: 0,
         background: "transparent",
         padding: "0 16px 16px",
+        opacity: builtinCommandPending ? 0.5 : 1,
+        transition: "opacity 0.15s",
       }}
     >
       {/* Hidden file input */}
@@ -3159,6 +3179,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         </div>
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 });

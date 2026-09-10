@@ -1,10 +1,42 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { listenDesktopFileDrop } from "@/lib/desktop";
 
-export function useDragDrop(onDrop: (files: File[]) => void) {
+export function useDragDrop(
+  onDrop: (files: File[]) => void,
+  onDesktopPathDrop?: (paths: string[]) => void,
+) {
   const [isDragOver, setIsDragOver] = useState(false);
   const counterRef = useRef(0);
+  const desktopPathDropRef = useRef(onDesktopPathDrop);
+  desktopPathDropRef.current = onDesktopPathDrop;
+
+  useEffect(() => {
+    if (!onDesktopPathDrop) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listenDesktopFileDrop({
+      onEnter: () => {
+        counterRef.current = 0;
+        setIsDragOver(true);
+      },
+      onOver: () => setIsDragOver(true),
+      onLeave: () => setIsDragOver(false),
+      onDrop: (paths) => {
+        counterRef.current = 0;
+        setIsDragOver(false);
+        if (paths.length) desktopPathDropRef.current?.(paths);
+      },
+    }).then((cleanup) => {
+      if (disposed) cleanup?.();
+      else unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [onDesktopPathDrop]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer?.types?.length) return;

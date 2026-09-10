@@ -370,8 +370,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
   const onDrop = useCallback((files: File[]) => {
     chatInputRef?.current?.addFiles(files);
   }, [chatInputRef]);
+  const onDesktopPathDrop = useCallback((paths: string[]) => {
+    chatInputRef?.current?.addLocalFiles(paths);
+  }, [chatInputRef]);
 
-  const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
+  const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop, onDesktopPathDrop);
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
   // Stable Map identity: `messages` doesn't change during streaming updates

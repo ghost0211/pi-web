@@ -337,7 +337,9 @@ test("keeps a failed first submission recoverable across a composer remount", ()
     [image],
     undefined,
     undefined,
+    undefined,
     "",
+    [],
     [],
     [],
     [],
@@ -348,23 +350,33 @@ test("keeps a failed first submission recoverable across a composer remount", ()
     images: [image],
     textFiles: [],
     binaryFiles: [],
+    localFiles: [],
   });
   assert.deepEqual(
-    mergeRestoredSubmissionDraft("failed submission", [image], undefined, undefined, "new draft", [], [], []),
+    mergeRestoredSubmissionDraft("failed submission", [image], undefined, undefined, undefined, "new draft", [], [], [], []),
     {
       value: "failed submission\n\nnew draft",
       images: [image],
       textFiles: [],
       binaryFiles: [],
+      localFiles: [],
     },
   );
 });
 
 test("preserves duplicate image attachments when restoring a submission", () => {
   const image = { data: "AQID", mimeType: "image/png" };
-  const restored = mergeRestoredSubmissionDraft("", [image, image], undefined, undefined, "", [image], [], []);
+  const restored = mergeRestoredSubmissionDraft("", [image, image], undefined, undefined, undefined, "", [image], [], [], []);
 
   assert.deepEqual(restored.images, [image, image, image]);
+});
+
+test("preserves desktop attachment paths in drafts and deduplicates exact paths", () => {
+  const encrypted = { name: "稽核规则汇总-0903.xlsx", path: "C:\\Desktop\\稽核规则汇总-0903.xlsx" };
+  const notes = { name: "notes.txt", path: "C:\\Desktop\\notes.txt" };
+  const restored = mergeRestoredSubmissionDraft("", [], [], [], [encrypted], "", [], [], [], [encrypted, notes]);
+
+  assert.deepEqual(restored.localFiles, [encrypted, notes]);
 });
 
 test("moves a provisional new-session draft to the real session key", () => {
@@ -372,13 +384,14 @@ test("moves a provisional new-session draft to the real session key", () => {
   const sessionKey = "session-rekey-test";
   clearDraft(provisionalKey);
   clearDraft(sessionKey);
-  setDraft(provisionalKey, { value: "queued while preflight ran", images: [], textFiles: [], binaryFiles: [] });
+  setDraft(provisionalKey, { value: "queued while preflight ran", images: [], textFiles: [], binaryFiles: [], localFiles: [] });
 
   assert.deepEqual(rekeyDraft(provisionalKey, sessionKey), {
     value: "queued while preflight ran",
     images: [],
     textFiles: [],
     binaryFiles: [],
+    localFiles: [],
   });
   assert.equal(getDraft(provisionalKey), null);
   assert.deepEqual(getDraft(sessionKey), {
@@ -386,6 +399,7 @@ test("moves a provisional new-session draft to the real session key", () => {
     images: [],
     textFiles: [],
     binaryFiles: [],
+    localFiles: [],
   });
 
   clearDraft(sessionKey);
@@ -396,11 +410,11 @@ test("rekey keeps a synchronously restored draft when React state is still empty
   const sessionKey = "session-rekey-race";
   clearDraft(provisionalKey);
   clearDraft(sessionKey);
-  setDraft(provisionalKey, { value: "restored before state flush", images: [], textFiles: [], binaryFiles: [] });
+  setDraft(provisionalKey, { value: "restored before state flush", images: [], textFiles: [], binaryFiles: [], localFiles: [] });
 
   assert.deepEqual(
-    rekeyDraft(provisionalKey, sessionKey, { value: "", images: [], textFiles: [], binaryFiles: [] }),
-    { value: "restored before state flush", images: [], textFiles: [], binaryFiles: [] },
+    rekeyDraft(provisionalKey, sessionKey, { value: "", images: [], textFiles: [], binaryFiles: [], localFiles: [] }),
+    { value: "restored before state flush", images: [], textFiles: [], binaryFiles: [], localFiles: [] },
   );
   assert.equal(getDraft(provisionalKey), null);
   assert.deepEqual(getDraft(sessionKey), {
@@ -408,6 +422,7 @@ test("rekey keeps a synchronously restored draft when React state is still empty
     images: [],
     textFiles: [],
     binaryFiles: [],
+    localFiles: [],
   });
 
   clearDraft(sessionKey);

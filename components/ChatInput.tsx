@@ -23,11 +23,15 @@ import {
   MAX_ATTACHED_TEXT_FILES,
   MAX_ATTACHED_BINARY_FILE_BYTES,
   MAX_ATTACHED_BINARY_FILES,
+  MAX_ATTACHED_LOCAL_FILES,
   buildMessageWithTextAttachments,
   buildMessageWithBinaryAttachments,
+  buildMessageWithLocalFileAttachments,
   isLikelyTextFile,
+  localAttachmentName,
   type AttachedTextFile,
   type AttachedBinaryFile,
+  type AttachedLocalFile,
 } from "@/lib/file-attachments";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
@@ -40,6 +44,7 @@ import { BUILTIN_SELECTABLE_TOOLS, getToolNamesForPreset, PRESET_DEFAULT, type T
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import { calculateContextUsageDisplay, resolveModelContextWindow } from "@/lib/context-window";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
+import { pickDesktopAttachmentPaths } from "@/lib/desktop";
 
 export { filterModelOptions } from "./ModelSelector";
 
@@ -107,6 +112,7 @@ export interface ChatInputHandle {
   replaceMessage: (message: UserMessage) => void;
   prependText: (text: string) => void;
   addFiles: (files: File[]) => void;
+  addLocalFiles: (paths: string[]) => void;
   rekeyDraft: (previousKey: string, nextKey: string) => void;
   restoreSubmission: (text: string, images?: ChatDraftImage[], targetDraftKey?: string) => void;
 }
@@ -720,8 +726,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     draftKey ? getDraft(draftKey)?.binaryFiles ?? [] : []
   ));
   const attachedBinaryFilesRef = useRef<AttachedBinaryFile[]>(attachedBinaryFiles);
+  const [attachedLocalFiles, setAttachedLocalFiles] = useState<AttachedLocalFile[]>(() => (
+    draftKey ? getDraft(draftKey)?.localFiles ?? [] : []
+  ));
+  const attachedLocalFilesRef = useRef<AttachedLocalFile[]>(attachedLocalFiles);
   const trimmedValue = value.trimStart();
-  const bashMode = attachedImages.length === 0 && attachedTextFiles.length === 0 && attachedBinaryFiles.length === 0 && trimmedValue.startsWith("!");
+  const bashMode = attachedImages.length === 0 && attachedTextFiles.length === 0 && attachedBinaryFiles.length === 0 && attachedLocalFiles.length === 0 && trimmedValue.startsWith("!");
   const bashExcluded = bashMode && trimmedValue.startsWith("!!");
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
@@ -832,8 +842,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         images: attachedImagesRef.current.map(imageToDraftImage),
         textFiles: attachedTextFilesRef.current,
         binaryFiles: attachedBinaryFilesRef.current,
+        localFiles: attachedLocalFilesRef.current,
       };
-      const moved = rekeyStoredDraft(previousKey, nextKey, currentDraft) ?? { value: "", images: [], textFiles: [], binaryFiles: [] };
+      const moved = rekeyStoredDraft(previousKey, nextKey, currentDraft) ?? { value: "", images: [], textFiles: [], binaryFiles: [], localFiles: [] };
       const unchanged = moved.value === currentDraft.value
         && moved.images.length === currentDraft.images.length
         && moved.images.every((image, index) => (
@@ -849,7 +860,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         && moved.binaryFiles.every((file, index) => (
           file.name === currentDraft.binaryFiles[index]?.name
           && file.size === currentDraft.binaryFiles[index]?.size
-        ));
+        ))
+        && moved.localFiles.length === currentDraft.localFiles.length
+        && moved.localFiles.every((file, index) => file.path === currentDraft.localFiles[index]?.path);
       draftKeyRef.current = nextKey;
       if (unchanged) return;
 
@@ -858,9 +871,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       attachedImagesRef.current = movedImages;
       attachedTextFilesRef.current = moved.textFiles;
       attachedBinaryFilesRef.current = moved.binaryFiles;
+      attachedLocalFilesRef.current = moved.localFiles;
       setValue(moved.value);
       setAttachedTextFiles(moved.textFiles);
       setAttachedBinaryFiles(moved.binaryFiles);
+      setAttachedLocalFiles(moved.localFiles);
       setAttachedImages((current) => {
         current.forEach(revokeImagePreview);
         return movedImages;
@@ -885,6 +900,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         images,
         undefined,
         undefined,
+        undefined,
         targetsCurrentComposer ? valueRef.current : (storedDraft?.value ?? ""),
         targetsCurrentComposer
           ? attachedImagesRef.current.map(imageToDraftImage)
@@ -895,6 +911,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         targetsCurrentComposer
           ? attachedBinaryFilesRef.current
           : (storedDraft?.binaryFiles ?? []),
+        targetsCurrentComposer
+          ? attachedLocalFilesRef.current
+          : (storedDraft?.localFiles ?? []),
       );
       // The first optimistic message switches ChatWindow out of its empty-state
       // layout and remounts this component. Persist synchronously so recovery is
@@ -967,7 +986,29 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     addFiles(files: File[]) {
       processFiles(files);
     },
+    addLocalFiles(paths: string[]) {
+      appendLocalFiles(paths);
+    },
   }));
+
+  const appendLocalFiles = useCallback((paths: string[]) => {
+    const files = paths
+      .map((path) => path.trim())
+      .filter(Boolean)
+      .map((path) => ({ path, name: localAttachmentName(path) }));
+    if (!files.length) return;
+    setAttachedLocalFiles((current) => {
+      const seen = new Set(current.map((file) => file.path));
+      const accepted = files.filter((file) => {
+        if (seen.has(file.path)) return false;
+        seen.add(file.path);
+        return true;
+      });
+      const next = [...current, ...accepted].slice(0, MAX_ATTACHED_LOCAL_FILES);
+      attachedLocalFilesRef.current = next;
+      return next;
+    });
+  }, []);
 
   const appendTextFiles = useCallback((files: AttachedTextFile[]) => {
     const remaining = Math.max(
@@ -1052,6 +1093,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     });
   }, []);
 
+  const removeLocalFile = useCallback((index: number) => {
+    setAttachedLocalFiles((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      attachedLocalFilesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const processFiles = useCallback((files: File[]) => {
     const imageFiles: File[] = [];
     const textFiles: File[] = [];
@@ -1092,6 +1141,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     setAttachedTextFiles([]);
     attachedBinaryFilesRef.current = [];
     setAttachedBinaryFiles([]);
+    attachedLocalFilesRef.current = [];
+    setAttachedLocalFiles([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -1104,8 +1155,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       images: attachedImages.map(imageToDraftImage),
       textFiles: attachedTextFiles,
       binaryFiles: attachedBinaryFiles,
+      localFiles: attachedLocalFiles,
     });
-  }, [attachedImages, attachedTextFiles, attachedBinaryFiles, draftKey, value]);
+  }, [attachedImages, attachedTextFiles, attachedBinaryFiles, attachedLocalFiles, draftKey, value]);
 
   useEffect(() => {
     const previousDraftKey = draftKeyRef.current;
@@ -1117,6 +1169,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         images: attachedImagesRef.current.map(imageToDraftImage),
         textFiles: attachedTextFilesRef.current,
         binaryFiles: attachedBinaryFilesRef.current,
+        localFiles: attachedLocalFilesRef.current,
       });
     }
 
@@ -1126,13 +1179,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const nextImages = draftImagesToAttachedImages(draft?.images);
     const nextTextFiles = draft?.textFiles ?? [];
     const nextBinaryFiles = draft?.binaryFiles ?? [];
+    const nextLocalFiles = draft?.localFiles ?? [];
     valueRef.current = nextValue;
     attachedImagesRef.current = nextImages;
     attachedTextFilesRef.current = nextTextFiles;
     attachedBinaryFilesRef.current = nextBinaryFiles;
+    attachedLocalFilesRef.current = nextLocalFiles;
     setValue(nextValue);
     setAttachedTextFiles(nextTextFiles);
     setAttachedBinaryFiles(nextBinaryFiles);
+    setAttachedLocalFiles(nextLocalFiles);
     setAtQuery(null);
     setHistoryMenuOpen(false);
     setAttachedImages((prev) => {
@@ -1157,20 +1213,22 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const runBuiltinCommand = useCallback(async (msg: string): Promise<boolean> => {
     const attachmentCount = attachedImagesRef.current.length
       + attachedTextFilesRef.current.length
-      + attachedBinaryFilesRef.current.length;
+      + attachedBinaryFilesRef.current.length
+      + attachedLocalFilesRef.current.length;
     if (attachmentCount || !msg.startsWith("/") || !onBuiltinCommand) return false;
     const result = await onBuiltinCommand(msg);
     if (!result.handled) return false;
     const currentAttachmentCount = attachedImagesRef.current.length
       + attachedTextFilesRef.current.length
-      + attachedBinaryFilesRef.current.length;
+      + attachedBinaryFilesRef.current.length
+      + attachedLocalFilesRef.current.length;
     if (!result.error && canClearBuiltinCommandInput(valueRef.current, currentAttachmentCount, msg)) clearInput();
     return true;
   }, [clearInput, onBuiltinCommand]);
 
   const handleSend = useCallback(async () => {
     const msg = value.trim();
-    if (!msg && !attachedImages.length && !attachedTextFiles.length && !attachedBinaryFiles.length) return;
+    if (!msg && !attachedImages.length && !attachedTextFiles.length && !attachedBinaryFiles.length && !attachedLocalFiles.length) return;
     onAudioUnlock?.();
     const builtinAllowed = !isStreaming || canRunBuiltinSlashCommandWhileStreaming(msg);
     if (builtinAllowed && await runBuiltinCommand(msg)) return;
@@ -1182,11 +1240,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const withText = attachedTextFiles.length
       ? buildMessageWithTextAttachments(msg, attachedTextFiles)
       : msg;
-    const finalMessage = attachedBinaryFiles.length
+    const withBinary = attachedBinaryFiles.length
       ? buildMessageWithBinaryAttachments(withText, attachedBinaryFiles)
       : withText;
+    const finalMessage = attachedLocalFiles.length
+      ? buildMessageWithLocalFileAttachments(withBinary, attachedLocalFiles)
+      : withBinary;
     onSend(finalMessage, attachedImages.length ? attachedImages : undefined);
-  }, [value, attachedImages, attachedTextFiles, attachedBinaryFiles, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
+  }, [value, attachedImages, attachedTextFiles, attachedBinaryFiles, attachedLocalFiles, isStreaming, runBuiltinCommand, onSend, clearInput, onAudioUnlock]);
 
   const slashQuery = value.startsWith("/") && !/\s/.test(value.slice(1))
     ? value.slice(1).toLowerCase()
@@ -1221,7 +1282,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? t(slashQuery ? "chat.match" : "chat.command")
     : t(slashQuery ? "chat.matches" : "chat.commands", { count: filteredSlashCommands.length });
   const hasInputText = Boolean(value.trim());
-  const canQueueStreamingMessage = hasInputText || attachedImages.length > 0 || attachedTextFiles.length > 0 || attachedBinaryFiles.length > 0;
+  const canQueueStreamingMessage = hasInputText || attachedImages.length > 0 || attachedTextFiles.length > 0 || attachedBinaryFiles.length > 0 || attachedLocalFiles.length > 0;
 
   // ── @ file autocomplete ──────────────────────────────────────────────────
   // Recomputed from the text before the caret on every change/caret move.
@@ -1407,13 +1468,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const sendQueued = useCallback((mode: "steer" | "followup") => {
     let msg = value.trim();
-    if (!msg && !attachedImages.length && !attachedTextFiles.length && !attachedBinaryFiles.length) return;
+    if (!msg && !attachedImages.length && !attachedTextFiles.length && !attachedBinaryFiles.length && !attachedLocalFiles.length) return;
     onAudioUnlock?.();
     if (attachedTextFiles.length) {
       msg = buildMessageWithTextAttachments(msg, attachedTextFiles);
     }
     if (attachedBinaryFiles.length) {
       msg = buildMessageWithBinaryAttachments(msg, attachedBinaryFiles);
+    }
+    if (attachedLocalFiles.length) {
+      msg = buildMessageWithLocalFileAttachments(msg, attachedLocalFiles);
     }
     if (!attachedImages.length && onBuiltinCommand && canRunBuiltinSlashCommandWhileStreaming(msg)) {
       void runBuiltinCommand(msg);
@@ -1431,7 +1495,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     } else if (mode === "followup" && onFollowUp) {
       onFollowUp(msg, attachedImages.length ? attachedImages : undefined);
     }
-  }, [value, attachedImages, attachedTextFiles, attachedBinaryFiles, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand]);
+  }, [value, attachedImages, attachedTextFiles, attachedBinaryFiles, attachedLocalFiles, onBuiltinCommand, onPromptWithStreamingBehavior, onSteer, onFollowUp, clearInput, onAudioUnlock, runBuiltinCommand]);
 
   const getNextSlashIndex = useCallback((direction: "up" | "down" | "left" | "right") => {
     const lastIndex = displayedSlashCommands.length - 1;
@@ -1825,7 +1889,19 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
 
-
+  const handleAttachFileClick = useCallback(async () => {
+    onAudioUnlock?.();
+    try {
+      const paths = await pickDesktopAttachmentPaths();
+      if (paths !== null) {
+        appendLocalFiles(paths);
+        return;
+      }
+    } catch {
+      // Fall through to the browser picker if the native dialog fails.
+    }
+    fileInputRef.current?.click();
+  }, [appendLocalFiles, onAudioUnlock]);
 
   return (
     <div
@@ -1964,6 +2040,34 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             }}
           >
             {compactError}
+          </div>
+        )}
+        {/* Desktop-native attachments retain their original path for encrypted Office readers. */}
+        {attachedLocalFiles.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
+            {attachedLocalFiles.map((file, i) => (
+              <div key={file.path} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 6, fontSize: 11, color: "var(--text-muted)", minWidth: 0 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, color: "var(--accent)" }}>
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }} title={file.path}>{file.name}</span>
+                <button
+                  onClick={() => removeLocalFile(i)}
+                  aria-label={t("i18n.remove")}
+                  style={{
+                    flexShrink: 0, width: 16, height: 16, borderRadius: "50%",
+                    background: "var(--bg)", border: "1px solid var(--border)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer", padding: 0, color: "var(--text-muted)",
+                  }}
+                >
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
+                  </svg>
+                </button>
+              </div>
+            ))}
           </div>
         )}
         {/* Binary file attachments (base64 blocks, decoded by the extension) */}
@@ -2482,14 +2586,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           {/* LEFT: Kimi-style quick controls */}
           <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handleAttachFileClick}
              title={t("chat.attachFile")}
               style={{
                 flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
                 width: 28, height: 28, padding: 0,
                 background: "transparent", border: "none",
                 borderRadius: 8,
-                color: (attachedImages.length || attachedTextFiles.length) ? "var(--accent)" : "var(--text-muted)",
+                color: (attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || attachedLocalFiles.length) ? "var(--accent)" : "var(--text-muted)",
                 cursor: "pointer",
                 opacity: 1,
                 transition: "all 0.12s ease",
@@ -2500,7 +2604,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = (attachedImages.length || attachedTextFiles.length) ? "var(--accent)" : "var(--text-muted)";
+                e.currentTarget.style.color = (attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || attachedLocalFiles.length) ? "var(--accent)" : "var(--text-muted)";
               }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
@@ -3022,11 +3126,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     padding: 0,
                     borderRadius: "50%",
                     border: "none",
-                    background: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "var(--accent)" : "color-mix(in srgb, var(--border) 75%, transparent)",
-                    color: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "#fff" : "var(--text-dim)",
-                    cursor: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "pointer" : "not-allowed",
+                    background: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || attachedLocalFiles.length) ? "var(--accent)" : "color-mix(in srgb, var(--border) 75%, transparent)",
+                    color: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || attachedLocalFiles.length) ? "#fff" : "var(--text-dim)",
+                    cursor: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || attachedLocalFiles.length) ? "pointer" : "not-allowed",
                     flexShrink: 0,
-                    boxShadow: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length) ? "0 2px 8px rgba(37,99,235,0.28)" : "none",
+                    boxShadow: (value.trim() || attachedImages.length || attachedTextFiles.length || attachedBinaryFiles.length || attachedLocalFiles.length) ? "0 2px 8px rgba(37,99,235,0.28)" : "none",
                     transition: "all 0.15s ease",
                   }}
                 >

@@ -27,6 +27,7 @@ use tauri::webview::NewWindowResponse;
 use tauri::{
     AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
+use tauri_plugin_dialog::DialogExt;
 
 /// Matches `npm run dev` (next dev -H 127.0.0.1 -p 30141).
 const DEV_SERVER_URL: &str = "http://127.0.0.1:30141/";
@@ -157,6 +158,18 @@ fn apply_close_behavior(app: &AppHandle, behavior: &str) {
             .set_checked(behavior == CLOSE_BEHAVIOR_TRAY);
     }
     persist_close_behavior(app);
+}
+
+#[tauri::command]
+fn pick_attachment_paths(app: AppHandle) -> Vec<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 #[tauri::command]
@@ -445,6 +458,7 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> Webview
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second launch acts as "restore from tray": focus the window.
             if let Some(window) = app.get_webview_window("main") {
@@ -455,7 +469,11 @@ fn main() {
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Mutex::new(DesktopServer { child: None }))
-        .invoke_handler(tauri::generate_handler![get_close_behavior, set_close_behavior])
+        .invoke_handler(tauri::generate_handler![
+            get_close_behavior,
+            set_close_behavior,
+            pick_attachment_paths,
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             handle.manage(DesktopSettings {

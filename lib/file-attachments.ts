@@ -14,6 +14,8 @@ export const MAX_ATTACHED_BINARY_FILE_BYTES = 2 * 1024 * 1024; // 2 MB
 export const MAX_ATTACHED_BINARY_BASE64_CHARS = Math.ceil(MAX_ATTACHED_BINARY_FILE_BYTES * 4 / 3) + 16;
 export const MAX_ATTACHED_TEXT_FILES = 5;
 export const MAX_ATTACHED_BINARY_FILES = 3;
+/** Desktop-native picks keep their absolute path so trusted Office readers can decrypt them. */
+export const MAX_ATTACHED_LOCAL_FILES = 10;
 
 export interface AttachedTextFile {
   /** Original file name, e.g. "schema.sql". */
@@ -35,6 +37,13 @@ export interface AttachedBinaryFile {
   mimeType?: string;
   /** Size in bytes of the original file. */
   size: number;
+}
+
+export interface AttachedLocalFile {
+  /** Original file name, derived from the native absolute path. */
+  name: string;
+  /** Absolute path supplied by the Tauri file picker or native drop event. */
+  path: string;
 }
 
 const TEXT_MIME_PREFIXES = ["text/", "application/json", "application/xml", "application/sql"];
@@ -104,6 +113,31 @@ export function encodeBinaryFileAttachment(file: AttachedBinaryFile): string {
 /** Build the message that appends binary attachment blocks after user text. */
 export function buildMessageWithBinaryAttachments(message: string, files: AttachedBinaryFile[]): string {
   const blocks = files.map(encodeBinaryFileAttachment).join("\n\n");
+  if (!message.trim()) return blocks;
+  return `${message.trim()}\n\n${blocks}`;
+}
+
+/** Browser-safe basename extraction for native Windows, macOS, and Linux paths. */
+export function localAttachmentName(filePath: string): string {
+  return filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+}
+
+/**
+ * Keep desktop-native files at their original path. This is important for
+ * enterprise transparent encryption: raw reads from WebView/Node can return
+ * ciphertext, while a trusted Office/COM-aware reader can decrypt the same
+ * path on demand.
+ */
+export function buildMessageWithLocalFileAttachments(message: string, files: AttachedLocalFile[]): string {
+  const blocks = files.map((file) => {
+    const safeName = file.name.replace(/[\n\r]/g, " ");
+    const safePath = file.path.replace(/[\n\r]/g, " ");
+    return [
+      `[Local file attachment: ${safeName}]`,
+      `Absolute path: ${safePath}`,
+      "Read the file from this path. For a transparent-encrypted Office document, use an Office/COM-aware reader such as read_office_file instead of a raw filesystem read.",
+    ].join("\n");
+  }).join("\n\n");
   if (!message.trim()) return blocks;
   return `${message.trim()}\n\n${blocks}`;
 }

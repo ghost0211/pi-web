@@ -361,6 +361,11 @@ export interface SessionHistory {
    *  target for the first user message, whose branch truncation point sits
    *  before any displayed entry. Null when the first entry has no parent. */
   firstEntryParentId?: string | null;
+  /**
+   * Latest plan/todo items extracted from the full active branch.
+   * Preserves task dock visibility even when older history is truncated by tail pagination.
+   */
+  latestPlan?: unknown[];
 }
 
 /** SDK-selected model context. Compaction may replace old messages with a summary. */

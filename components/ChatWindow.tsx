@@ -254,7 +254,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     handleRecallQueue,
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, loadSlashCommands, scrollUserMsgToTop,
-    loadContext, activeLeafId,
+    loadContext, activeLeafId, data,
   } = useAgentSession({
     session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd: wrappedOnAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession,
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
@@ -984,6 +984,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
           subagentSessions={subagentSessions}
           runningSessionIds={runningSessionIds}
           onOpenSession={onOpenSession}
+          fallbackPlan={data?.history?.latestPlan ?? data?.context?.latestPlan}
         />
         {chatInputElement}
         <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />

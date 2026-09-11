@@ -14,6 +14,7 @@ import { sessionPathKey } from "./session-path";
 import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "./tool-result-images";
 import { resolveProject, type ProjectInfo } from "./worktree";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
+import { PLAN_TOOL_NAMES, planItemsFromInput, type PlanItem } from "./plan-items";
 
 export { getAgentDir };
 
@@ -470,6 +471,7 @@ export function buildSessionHistory(
     oldestEntryId: sliced[0]?.id ?? null,
     hasMore: Boolean(tail && tail > 0 && sliced[0]?.parentId),
     firstEntryParentId,
+    latestPlan: findLatestActivePlan(entries, leafId ?? null),
   };
 }
 
@@ -516,6 +518,7 @@ export function buildSessionContext(
     oldestEntryId: sliced[0]?.id ?? null,
     hasMore,
     firstEntryParentId,
+    latestPlan: findLatestActivePlan(entries, leafId ?? null),
     ...getSessionSettings(entries, leafId),
   };
 }
@@ -550,6 +553,44 @@ export function sliceActiveBranch(
   }
   chain.reverse();
   return chain;
+}
+
+/**
+ * Walk backwards along the active branch from `leafId` to find the most recent
+ * plan / todolist items. This ensures the TaskDock displays the latest progress
+ * even when the toolCall was truncated by tail pagination.
+ */
+export function findLatestActivePlan(
+  entries: SessionEntry[],
+  leafId: string | null,
+): PlanItem[] | undefined {
+  if (entries.length === 0) return undefined;
+  const byId = new Map<string, SessionEntry>();
+  for (const e of entries) byId.set(e.id, e);
+
+  let current = leafId ? byId.get(leafId) : entries[entries.length - 1];
+  while (current) {
+    if (current.type === "message" && current.message && current.message.role === "assistant") {
+      const content = current.message.content;
+      if (Array.isArray(content)) {
+        // Iterate toolCalls in reverse within the message to get the latest
+        for (let i = content.length - 1; i >= 0; i -= 1) {
+          const block = content[i];
+          if (block && typeof block === "object") {
+            const raw = block as unknown as Record<string, unknown>;
+            const toolName = typeof raw.name === "string" ? raw.name : typeof raw.toolName === "string" ? raw.toolName : "";
+            if (PLAN_TOOL_NAMES.has(toolName.toLowerCase())) {
+              const input = (raw.arguments ?? raw.input) as Record<string, unknown> | undefined;
+              const items = planItemsFromInput(input);
+              if (items.length > 0) return items;
+            }
+          }
+        }
+      }
+    }
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return undefined;
 }
 function parseEntryTimestamp(timestamp: string): number | undefined {
   const parsed = Date.parse(timestamp);

@@ -9,6 +9,8 @@ import {
 } from "@/lib/subagent-dock";
 import type { AgentMessage, AssistantMessage, BashExecutionMessage, SessionInfo, ToolCallContent, ToolResultMessage } from "@/lib/types";
 
+import { PLAN_TOOL_NAMES, planItemsFromInput, type PlanItem } from "@/lib/plan-items";
+
 type DockKind = "bash" | "agent" | "progress";
 type DockFilter = "recent" | "running" | "done" | "all";
 
@@ -24,6 +26,8 @@ interface Props {
   subagentSessions?: readonly SessionInfo[];
   runningSessionIds?: ReadonlySet<string>;
   onOpenSession?: (sessionId: string) => void;
+  /** Fallback latest plan from full active branch when truncated by tail pagination */
+  fallbackPlan?: PlanItem[] | unknown[];
 }
 
 const EMPTY_SUBAGENT_SESSIONS: readonly SessionInfo[] = [];
@@ -58,11 +62,6 @@ const BASH_TOOL_NAMES = new Set([
 const AGENT_TOOL_NAMES = new Set([
   "agent", "subagent", "sub_agent", "run_subagent", "get_subagent_result", "steer_subagent", "spawn_agent", "call_agent", "delegate", "agentswarm", "agent_swarm",
 ]);
-const PLAN_TOOL_NAMES = new Set([
-  "todolist", "todo_list", "todo", "todos", "write_todos", "update_todos", "todo_write",
-  "plan", "update_plan", "write_plan", "task", "tasks", "tasklist", "task_list", "task_create", "task_update",
-  "creategoal", "create_goal", "updategoal", "update_goal", "goal", "set_goal",
-]);
 
 function textResult(message: ToolResultMessage | undefined): string {
   if (!message) return "";
@@ -94,46 +93,6 @@ function statusFromResult(result: ToolResultMessage | undefined, running: boolea
   if (running) return "running";
   if (!result) return "queued";
   return result.isError ? "failed" : "done";
-}
-
-function normalizePlanStatus(value: unknown): DockStatus {
-  const status = typeof value === "string" ? value.toLowerCase() : "queued";
-  if (["done", "completed", "complete", "success", "succeeded"].includes(status)) return "done";
-  if (["failed", "error", "cancelled", "canceled"].includes(status)) return "failed";
-  if (["in_progress", "in-progress", "running", "active"].includes(status)) return "running";
-  return "queued";
-}
-
-function planItemsFromInput(input: Record<string, unknown>): DockItem[] {
-  if (!input || typeof input !== "object") return [];
-  const candidates = [input.todos, input.plan, input.tasks, input.items, input.steps, input.goals];
-  const rows = candidates.find(Array.isArray);
-  if (Array.isArray(rows)) {
-    return rows.flatMap((row, index) => {
-      if (typeof row === "string") {
-        return [{ id: `plan-${index}`, title: row, status: "queued" as DockStatus }];
-      }
-      if (!row || typeof row !== "object") return [];
-      const item = row as Record<string, unknown>;
-      const title = compactText(item.title ?? item.task ?? item.step ?? item.content ?? item.name, `Task ${index + 1}`);
-      return [{
-        id: `plan-${index}-${title}`,
-        title,
-        detail: typeof item.description === "string" ? item.description : typeof item.detail === "string" ? item.detail : undefined,
-        status: normalizePlanStatus(item.status),
-      }];
-    });
-  }
-  if (typeof input.objective === "string" || typeof input.task === "string" || typeof input.content === "string") {
-    const title = compactText(input.objective ?? input.task ?? input.content, "Goal");
-    return [{
-      id: `plan-goal-${title}`,
-      title,
-      detail: typeof input.completionCriterion === "string" ? input.completionCriterion : undefined,
-      status: normalizePlanStatus(input.status),
-    }];
-  }
-  return [];
 }
 
 function StatusIcon({ status }: { status: DockStatus }) {
@@ -180,6 +139,7 @@ export function KimiTaskDock({
   subagentSessions = EMPTY_SUBAGENT_SESSIONS,
   runningSessionIds = EMPTY_RUNNING_SESSION_IDS,
   onOpenSession,
+  fallbackPlan,
 }: Props) {
   const { t } = useI18n();
   const [active, setActive] = useState<DockKind | null>(null);
@@ -246,12 +206,18 @@ export function KimiTaskDock({
       bash.push({ id: "pending-bash", title: pendingBash.command, status: "running" });
     }
 
+    // When progress is empty in the loaded messages page (due to tail pagination),
+    // fall back to the latestPlan resolved across the full active branch.
+    if (progress.length === 0 && Array.isArray(fallbackPlan) && fallbackPlan.length > 0) {
+      progress = fallbackPlan as DockItem[];
+    }
+
     return {
       bash,
       agent: mergeSubagentDockItems(agent, subagentSessions, runningSessionIds),
       progress,
     };
-  }, [agentRunning, messages, pendingBash, runningSessionIds, subagentSessions]);
+  }, [agentRunning, fallbackPlan, messages, pendingBash, runningSessionIds, subagentSessions]);
 
   useEffect(() => {
     if (!active) return;

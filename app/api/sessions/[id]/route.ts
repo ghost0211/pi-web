@@ -21,6 +21,7 @@ import { computeSessionStats } from "@/lib/session-stats";
 import type { SessionEntry } from "@/lib/types";
 import { readSubagentRun, readSubagentSessionResources, SUBAGENT_META_TYPE } from "@/lib/subagents";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
+import { jsonResponse } from "@/lib/json-response";
 
 export async function GET(
   req: Request,
@@ -115,20 +116,23 @@ export async function GET(
       transient: !filePath || !existsSync(filePath),
     }]))[0] : null;
 
-    return NextResponse.json({
-      sessionId: id,
-      filePath,
-      info,
-      leafId,
-      tree,
-      context,
-      history,
-      turnIndex,
-      stats,
-      totalActiveMs,
-      ...(toolNames !== undefined ? { toolNames } : {}),
-      ...(wrapperRebuilt ? { wrapperRebuilt: true } : {}),
-    });
+    return jsonResponse(
+      req,
+      {
+        sessionId: id,
+        filePath,
+        info,
+        leafId,
+        tree,
+        context,
+        history,
+        turnIndex,
+        stats,
+        totalActiveMs,
+        ...(toolNames !== undefined ? { toolNames } : {}),
+        ...(wrapperRebuilt ? { wrapperRebuilt: true } : {}),
+      },
+    );
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

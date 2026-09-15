@@ -94,6 +94,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
       `- **Application:** ${info.appName} v${info.appVersion} (${info.isDesktop ? "Desktop" : "Web"})`,
       `- **Pi Agent Embedded SDK:** ${info.piAgent.installedVersion ?? "unknown"}`,
       `- **Pi Agent Global CLI:** ${info.piAgent.cliVersion ?? "not installed"}`,
+      `- **Pi Agent Current Version:** ${info.piAgent.currentVersion ?? "unknown"}${info.piAgent.currentVersionSource ? ` (${info.piAgent.currentVersionSource})` : ""}`,
       `- **Pi Agent Latest Registry:** ${info.piAgent.latestVersion ?? "unknown"}`,
       `- **Node.js:** ${info.system.nodeVersion}`,
       `- **OS / Arch:** ${info.system.platform} (${info.system.arch})`,
@@ -205,10 +206,20 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                 </div>
 
                 <div className="about-property-item">
-                  <span className="about-property-label">{t("about.latestVersion")}</span>
+                  <span className="about-property-label">{t("about.currentVersion")}</span>
                   <div className="about-property-value-row">
-                    <code>{info?.piAgent.latestVersion ? `v${info.piAgent.latestVersion}` : "..."}</code>
-                    {info?.piAgent.latestVersion && (
+                    <code
+                      title={
+                        info?.piAgent.currentVersionSource === "cli"
+                          ? t("about.globalCli")
+                          : info?.piAgent.currentVersionSource === "sdk"
+                            ? t("about.embeddedKernel")
+                            : undefined
+                      }
+                    >
+                      {info?.piAgent.currentVersion ? `v${info.piAgent.currentVersion}` : "unknown"}
+                    </code>
+                    {info?.piAgent.latestVersion && info.piAgent.currentVersion && (
                       <span
                         className={`about-status-pill ${
                           info.piAgent.updateAvailable ? "is-update-available" : "is-up-to-date"
@@ -219,7 +230,19 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                           : t("about.statusUpToDate")}
                       </span>
                     )}
+                    {!info?.piAgent.latestVersion && info?.piAgent.error && (
+                      <span className="about-status-pill is-check-failed" title={info.piAgent.error}>
+                        {t("about.statusCheckFailed")}
+                      </span>
+                    )}
                   </div>
+                </div>
+
+                <div className="about-property-item">
+                  <span className="about-property-label">{t("about.latestVersion")}</span>
+                  <span className="about-property-value">
+                    <code>{info?.piAgent.latestVersion ? `v${info.piAgent.latestVersion}` : "unknown"}</code>
+                  </span>
                 </div>
               </div>
 

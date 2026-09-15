@@ -1761,6 +1761,12 @@
   color: #f59e0b;
 }
 
+.about-status-pill.is-check-failed {
+  background: rgba(107, 114, 128, 0.12);
+  border: 1px solid rgba(107, 114, 128, 0.3);
+  color: var(--text-muted);
+}
+
 .about-update-action-box {
   display: flex;
   align-items: center;

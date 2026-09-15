@@ -10,11 +10,22 @@ export interface GitRepoInfo {
   releasesUrl: string;
 }
 
+export type PiAgentVersionSource = "cli" | "sdk";
+
 export interface PiAgentVersionInfo {
   packageName: string;
   packageUrl: string;
   installedVersion: string | null;
   cliVersion: string | null;
+  /**
+   * Version the registry comparison actually ran against (`cliVersion ??
+   * installedVersion`). The UI labels this "current version" so it never shows
+   * the latest registry version paired with an "update available" pill for that
+   * same version.
+   */
+  currentVersion: string | null;
+  /** Which installation `currentVersion` came from. */
+  currentVersionSource: PiAgentVersionSource | null;
   latestVersion: string | null;
   updateAvailable: boolean;
   lastCheckedAt: number;
@@ -196,13 +207,21 @@ export async function getAboutInfo(forceCheck = false): Promise<AboutInfoRespons
 
   const { latestVersion, error: fetchError } = await fetchLatestPiAgentVersion(forceCheck);
 
-  // Check if update is available: compare latest against installed or CLI
+  // Check if update is available: compare latest against the CLI when present,
+  // otherwise the embedded SDK. The same resolved value is reported as the
+  // "current version" so the UI cannot label a registry version as current.
   let updateAvailable = false;
-  if (latestVersion) {
-    const compareVersion = cliVersion ?? installedVersion;
-    if (compareVersion) {
-      updateAvailable = isNewerStableVersion(latestVersion, compareVersion);
-    }
+  let currentVersion: string | null = null;
+  let currentVersionSource: PiAgentVersionSource | null = null;
+  if (cliVersion) {
+    currentVersion = cliVersion;
+    currentVersionSource = "cli";
+  } else if (installedVersion) {
+    currentVersion = installedVersion;
+    currentVersionSource = "sdk";
+  }
+  if (latestVersion && currentVersion) {
+    updateAvailable = isNewerStableVersion(latestVersion, currentVersion);
   }
 
   const gitRepo: GitRepoInfo = {
@@ -217,6 +236,8 @@ export async function getAboutInfo(forceCheck = false): Promise<AboutInfoRespons
     packageUrl: "https://www.npmjs.com/package/@earendil-works/pi-coding-agent",
     installedVersion,
     cliVersion,
+    currentVersion,
+    currentVersionSource,
     latestVersion,
     updateAvailable,
     lastCheckedAt: latestVersionCache?.timestamp ?? Date.now(),

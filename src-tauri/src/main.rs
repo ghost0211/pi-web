@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::webview::NewWindowResponse;
+use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{
     AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -33,6 +33,9 @@ use tauri_plugin_dialog::DialogExt;
 const DEV_SERVER_URL: &str = "http://127.0.0.1:30141/";
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(150);
+/// If the app UI never reports a finished page load, reveal the window anyway so
+/// a broken navigation shows the bundled loading page instead of nothing.
+const UI_SHOW_FALLBACK: Duration = Duration::from_secs(15);
 
 const CLOSE_BEHAVIOR_TRAY: &str = "minimize-to-tray";
 const CLOSE_BEHAVIOR_QUIT: &str = "quit";
@@ -517,9 +520,35 @@ fn kill_server(app: &AppHandle) {
     let _ = child.wait();
 }
 
+fn normalize_host(host: Option<&str>) -> String {
+    host.unwrap_or_default()
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase()
+}
+
+/// Hosts that belong to this machine: the loopback sidecar and Tauri's bundled
+/// custom-protocol origin (`tauri.localhost`; RFC 6761 reserves the whole
+/// `.localhost` TLD for loopback).
+fn is_local_host(host: Option<&str>) -> bool {
+    let host = normalize_host(host);
+    host == "localhost" || host.ends_with(".localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+/// The sidecar origin specifically. The bundled loading page lives on
+/// `tauri.localhost`, so it must never reveal the window.
+fn is_loopback_browser_url(url: &Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let host = normalize_host(url.host_str());
+    host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+/// Only real web pages are handed to the system browser. Treating the app's own
+/// origin as external pushes `http://tauri.localhost/` into the user's browser
+/// and cancels the bundled page it belongs to.
 fn is_external_browser_url(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https")
-        && !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+    matches!(url.scheme(), "http" | "https") && !is_local_host(url.host_str())
 }
 
 fn open_in_system_browser(url: &Url) {
@@ -534,6 +563,16 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> Webview
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
         .visible(visible)
+        // The window starts hidden on the bundled loading page; reveal it once
+        // the real UI has loaded, so that page is never what the user sees when
+        // launching the app.
+        .on_page_load(|window, payload| {
+            if payload.event() == PageLoadEvent::Finished && is_loopback_browser_url(payload.url())
+            {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        })
         .on_navigation(|url| {
             if is_external_browser_url(url) {
                 open_in_system_browser(url);
@@ -618,13 +657,24 @@ fn main() {
                                 let url = Url::parse(&format!("http://127.0.0.1:{port}/"))
                                     .expect("invalid loopback URL");
                                 let _ = window.navigate(url);
+                                // `on_page_load` reveals the window once the app UI
+                                // is up; this fallback keeps a page that never
+                                // finishes loading from leaving the app invisible.
+                                let fallback = window.clone();
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(UI_SHOW_FALLBACK);
+                                    if !fallback.is_visible().unwrap_or(false) {
+                                        let _ = fallback.show();
+                                        let _ = fallback.set_focus();
+                                    }
+                                });
                             } else {
                                 eprintln!("pi-web sidecar readiness check timed out");
+                                // On timeout keep the trusted bundled loading page
+                                // visible; never navigate to an unverified service.
+                                let _ = window.show();
+                                let _ = window.set_focus();
                             }
-                            // On timeout keep the trusted bundled loading page
-                            // visible; never navigate to an unverified service.
-                            let _ = window.show();
-                            let _ = window.set_focus();
                         });
                     }
                     Err(error) => {
@@ -642,4 +692,72 @@ fn main() {
                 kill_server(app);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_external_browser_url, is_loopback_browser_url};
+
+    fn parse(url: &str) -> tauri::Url {
+        tauri::Url::parse(url).expect("test URL must parse")
+    }
+
+    #[test]
+    fn the_app_origin_is_never_handed_to_the_system_browser() {
+        // Tauri serves the bundled pages (including the startup loading page)
+        // from its custom-protocol origin, which must stay in the WebView.
+        for url in [
+            "http://tauri.localhost/",
+            "http://tauri.localhost/index.html",
+            "https://tauri.localhost/index.html",
+            "http://localhost:30141/",
+            "http://127.0.0.1:30141/?session=abc",
+            "http://[::1]:30141/",
+        ] {
+            assert!(
+                !is_external_browser_url(&parse(url)),
+                "{url} stays in the WebView"
+            );
+        }
+    }
+
+    #[test]
+    fn real_web_pages_still_open_in_the_system_browser() {
+        for url in [
+            "https://github.com/ghost0211/pi-web",
+            "http://10.0.0.5:30141/",
+            "https://login.tailscale.com/admin",
+        ] {
+            assert!(
+                is_external_browser_url(&parse(url)),
+                "{url} opens in the browser"
+            );
+        }
+        // Custom schemes are neither page loads we manage nor external sites.
+        assert!(!is_external_browser_url(&parse(
+            "tauri://localhost/index.html"
+        )));
+    }
+
+    #[test]
+    fn only_the_sidecar_origin_reveals_the_window() {
+        for url in [
+            "http://127.0.0.1:3029/",
+            "http://localhost:30141/?session=x",
+            "http://127.0.0.1:3029/index.html",
+        ] {
+            assert!(
+                is_loopback_browser_url(&parse(url)),
+                "{url} reveals the window"
+            );
+        }
+        // The bundled loading page must not reveal the window.
+        for url in [
+            "http://tauri.localhost/index.html",
+            "https://github.com/",
+            "tauri://localhost/index.html",
+        ] {
+            assert!(!is_loopback_browser_url(&parse(url)), "{url} stays hidden");
+        }
+    }
 }

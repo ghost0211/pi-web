@@ -28,7 +28,7 @@ See `docs/adr/0004-windows-desktop-tauri.md` for the architecture rationale.
 ## Layout
 
 ```
-desktop/loading/          loading page shown while the sidecar boots
+desktop/loading/          loading page (kept hidden unless startup fails)
 src-tauri/                Tauri project (Rust shell)
   src/main.rs             sidecar lifecycle: spawn, readiness poll, kill-on-exit
   tauri.conf.json         bundle config; version stays in sync with package.json
@@ -117,8 +117,11 @@ separate work item.
 
 ## Troubleshooting
 
-- **The loading page never advances** — check the sidecar log:
+- **Startup shows the bundled loading page** — the app UI never reported a
+  finished page load, so the window was revealed by the 15-second fallback.
+  Check the sidecar log:
   `%LOCALAPPDATA%\com.github.ghost0211.pi-web\logs\pi-web-server.log`.
+  The normal path reveals the window as soon as the real UI loads.
 - **The app starts but shows a connection error** — the sidecar payload was
   not bundled where expected. `tauri.conf.json` deliberately uses the *list*
   form of `bundle.resources` (`["server/", "node/"]`); the map form regressed

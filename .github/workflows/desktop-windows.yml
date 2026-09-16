@@ -41,6 +41,16 @@ jobs:
       - name: Lint web app
         run: npm run lint -- --max-warnings=0
 
+      # The shell holds the desktop-only behavior (startup reveal, navigation
+      # allow-list); its unit tests run on Windows because `tauri-build` needs
+      # the bundled `server/` + `node/` resource directories to exist.
+      - name: Rust shell tests
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/server src-tauri/node
+          cargo test --manifest-path src-tauri/Cargo.toml
+
   build-windows:
     needs: test
     runs-on: windows-latest

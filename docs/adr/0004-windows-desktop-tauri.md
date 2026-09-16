@@ -43,11 +43,20 @@ then retries the canonical port next time. The stable port keeps the WebView
 origin stable so browser-local preferences (including hidden projects/sessions)
 survive restarts, while still allowing the desktop app to coexist with the fixed
 30141 dev server. The shell spawns `node.exe server.js` with
-`HOSTNAME=127.0.0.1`, shows a bundled loading page, polls
-`/api/desktop-health` for the per-launch nonce, then navigates the window to the
-server URL. A timeout leaves the trusted loading page visible rather than
+`HOSTNAME=127.0.0.1`, keeps the window hidden behind a bundled loading page,
+polls `/api/desktop-health` for the per-launch nonce, then navigates the window
+to the server URL. The window is revealed by the page-load handler once that
+URL has actually finished loading (with a 15-second fallback so a page that
+never finishes still shows something), because revealing it earlier flashed the
+bundled `tauri.localhost` page on every launch. A timeout leaves the trusted
+loading page visible rather than
 navigating to an unverified process that won a loopback bind race. Binding only to loopback avoids the Windows firewall prompt and keeps the
 existing threat model ("local UI for a local agent") intact.
+
+The navigation allow-list treats Tauri's own origin (`tauri.localhost`, plus the
+rest of the RFC 6761 loopback names) as internal. It used to be classified as an
+external site, which pushed the bundled page into the user's browser and
+cancelled it in the WebView.
 
 The shell sets `PI_WEB_DESKTOP=1` (marker for future desktop-only server
 behavior) and `PI_WEB_SKIP_VERSION_CHECK=1`, because version updates ship

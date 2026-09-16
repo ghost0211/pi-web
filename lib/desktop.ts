@@ -86,6 +86,29 @@ export async function listenDesktopFileDrop(
   return () => unlisteners.forEach((unlisten) => unlisten());
 }
 
+export type DesktopOpenMode = "default" | "chooser";
+
+/**
+ * Ask the desktop shell to open a local file. `default` uses the remembered
+ * system association; `chooser` opens the OS "open with" dialog. Returns false
+ * outside the desktop shell so callers can keep their browser behavior, and
+ * surfaces shell failures as a rejected promise.
+ */
+export async function openDesktopPath(path: string, mode: DesktopOpenMode = "default"): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return false;
+  await invoke(mode === "chooser" ? "open_local_path_with" : "open_local_path", { path });
+  return true;
+}
+
+/** Reveal a local file in the platform file manager. Returns false outside desktop. */
+export async function revealDesktopPath(path: string): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return false;
+  await invoke("reveal_local_path", { path });
+  return true;
+}
+
 /** Current close behavior, or null when not running in the desktop shell. */
 export async function getDesktopCloseBehavior(): Promise<DesktopCloseBehavior | null> {
   const invoke = tauriBridge()?.core?.invoke;

@@ -41,6 +41,9 @@ const TRAY_ITEM_SHOW: &str = "show";
 const TRAY_ITEM_QUIT: &str = "quit";
 const TRAY_ITEM_MINIMIZE_ON_CLOSE: &str = "minimize-on-close";
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Handle to the sidecar so it can be terminated on exit.
 struct DesktopServer {
     child: Option<Child>,
@@ -170,6 +173,98 @@ fn pick_attachment_paths(app: AppHandle) -> Vec<String> {
         .filter_map(|file| file.into_path().ok())
         .map(|path| path.to_string_lossy().into_owned())
         .collect()
+}
+
+/// Resolve a web-UI-supplied path into a native absolute path that exists.
+///
+/// The web UI always sends forward slashes, while Explorer and the shell
+/// association APIs want the platform separator. Rejecting relative and
+/// missing paths keeps the desktop-only open/reveal commands from being used
+/// as a blind filesystem probe by a broken or hostile page.
+fn native_existing_path(raw: &str) -> Result<PathBuf, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("no path provided".to_string());
+    }
+    let candidate = if cfg!(windows) {
+        PathBuf::from(trimmed.replace('/', "\\"))
+    } else {
+        PathBuf::from(trimmed)
+    };
+    if !candidate.is_absolute() {
+        return Err(format!("path must be absolute: {trimmed}"));
+    }
+    if !candidate.exists() {
+        return Err(format!("path does not exist: {}", candidate.display()));
+    }
+    Ok(candidate)
+}
+
+/// Open a workspace file with the OS default application. Desktop only: the
+/// web build keeps its download link because the server may run elsewhere.
+#[tauri::command]
+fn open_local_path(path: String) -> Result<(), String> {
+    let target = native_existing_path(&path)?;
+    open::that_detached(target.as_os_str())
+        .map_err(|error| format!("failed to open {}: {error}", target.display()))
+}
+
+/// Ask the OS for an application chooser (Windows: "How do you want to open
+/// this file?") instead of the remembered default association.
+#[tauri::command]
+fn open_local_path_with(path: String) -> Result<(), String> {
+    let target = native_existing_path(&path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        return Command::new("rundll32.exe")
+            .arg("shell32.dll,OpenAs_RunDLL")
+            .arg(target.as_os_str())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to open the application chooser: {error}"));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        Err("choosing an application is only supported on Windows".to_string())
+    }
+}
+
+/// Show the file in the platform file manager with the item selected.
+#[tauri::command]
+fn reveal_local_path(path: String) -> Result<(), String> {
+    let target = native_existing_path(&path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // `/select,<path>` must be one argument; Explorer strips the quotes.
+        return Command::new("explorer.exe")
+            .arg(format!("/select,{}", target.display()))
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to reveal {}: {error}", target.display()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return Command::new("open")
+            .arg("-R")
+            .arg(target.as_os_str())
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to reveal {}: {error}", target.display()));
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let directory = target.parent().unwrap_or(target.as_path()).to_path_buf();
+        Command::new("xdg-open")
+            .arg(directory.as_os_str())
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("failed to reveal {}: {error}", directory.display()))
+    }
 }
 
 #[tauri::command]
@@ -473,6 +568,9 @@ fn main() {
             get_close_behavior,
             set_close_behavior,
             pick_attachment_paths,
+            open_local_path,
+            open_local_path_with,
+            reveal_local_path,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

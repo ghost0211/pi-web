@@ -11,7 +11,10 @@ rust-version = "1.77.2"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-open = "5.4.0"
+# `shellexecute-on-windows` makes `open` call ShellExecuteExW directly (the
+# double-click behavior) instead of spawning PowerShell `Start-Process`, which
+# removes ~0.5s of latency from "open with the system app" and link handling.
+open = { version = "5.4.0", features = ["shellexecute-on-windows"] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"

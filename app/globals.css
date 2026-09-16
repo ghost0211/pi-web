@@ -1706,6 +1706,51 @@ pre, code {
   outline-offset: -2px;
 }
 
+/* Desktop header actions: primary "open with system app" plus a caret menu. */
+.file-viewer-open-button {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+
+.file-viewer-open-caret {
+  width: 16px;
+  flex: 0 0 16px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.file-viewer-open-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.file-explorer-row-action {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 5px;
+  height: 20px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.file-explorer-row-action:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
 .directory-picker-path:focus-visible {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);

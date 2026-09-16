@@ -7,6 +7,9 @@ fn main() {
             "get_close_behavior",
             "set_close_behavior",
             "pick_attachment_paths",
+            "open_local_path",
+            "open_local_path_with",
+            "reveal_local_path",
         ]),
     ))
     .expect("error while running tauri-build");

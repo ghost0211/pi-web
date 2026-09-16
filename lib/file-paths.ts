@@ -41,3 +41,24 @@ export function getRelativeFilePath(filePath: string, cwd?: string): string {
 export function joinFilePath(parent: string, child: string): string {
   return `${normalizeFilePathSlashes(parent).replace(/\/$/, "")}/${child}`;
 }
+
+/**
+ * Resolve a viewer path into an absolute path for the desktop shell's
+ * open/reveal commands. Absolute inputs (drive, UNC, POSIX) pass through;
+ * workspace-relative ones are joined onto `cwd`. Returns null when the path
+ * cannot be made absolute, which is why the desktop actions are hidden for it.
+ */
+export function toAbsoluteFilePath(filePath: string, cwd?: string | null): string | null {
+  const normalized = normalizeFilePathSlashes(filePath);
+  if (!normalized) return null;
+  if (isAbsoluteFilePath(normalized)) return normalized;
+  if (!cwd) return null;
+  // Re-normalize after joining: `normalizeFilePathSlashes` only rewrites
+  // separators for absolute inputs, so a relative `src\a.ts` would otherwise
+  // stay mixed once the (Windows) cwd prefix is prepended.
+  return normalizeFilePathSlashes(joinFilePath(cwd, normalized));
+}
+
+function isAbsoluteFilePath(normalized: string): boolean {
+  return /^[a-zA-Z]:\//.test(normalized) || normalized.startsWith("//") || normalized.startsWith("/");
+}

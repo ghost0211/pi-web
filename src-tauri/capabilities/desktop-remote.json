@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop-remote",
-  "description": "Grants the loopback-hosted pi-web pages access to desktop settings, native file picking, and file-drop events.",
+  "description": "Grants the loopback-hosted pi-web pages access to desktop settings, native file picking/open, and file-drop events.",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
@@ -10,6 +10,9 @@
     "allow-get-close-behavior",
     "allow-set-close-behavior",
     "allow-pick-attachment-paths",
+    "allow-open-local-path",
+    "allow-open-local-path-with",
+    "allow-reveal-local-path",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
   ]

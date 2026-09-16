@@ -6,13 +6,22 @@ WebView2 window. All UI, API, and agent-session code is shared with the web
 version — this directory only contains the shell's loading page.
 
 The shell adds the desktop-only behaviors on top: a system tray icon
-(show/quit/left-click to restore) and the close-behavior setting
+(show/quit/left-click to restore), the close-behavior setting
 (Settings → General → Desktop, or the tray menu's "Minimize to tray on
-close" check item). Closing the window minimizes to the tray by default so
-agent sessions keep running; "Quit" from the tray menu always exits for
-real. The setting is persisted in `<app_config>/desktop-settings.json` and
-reaches the web settings UI through IPC commands granted to loopback
-origins only (`src-tauri/capabilities/desktop-remote.json`).
+close" check item), and the file open/reveal actions. Closing the window
+minimizes to the tray by default so agent sessions keep running; "Quit" from
+the tray menu always exits for real. The setting is persisted in
+`<app_config>/desktop-settings.json` and reaches the web settings UI through
+IPC commands granted to loopback origins only
+(`src-tauri/capabilities/desktop-remote.json`).
+
+Because the desktop client browses a project on the local machine, the file
+viewer header opens the file with the system default application instead of
+downloading a copy: the caret menu offers the OS application chooser, "show in
+file manager", and "copy full path". The browser build keeps the download link
+(the server may run elsewhere). Those actions go through the
+`open_local_path` / `open_local_path_with` / `reveal_local_path` commands, which
+reject relative and missing paths before touching the shell.
 
 See `docs/adr/0004-windows-desktop-tauri.md` for the architecture rationale.
 

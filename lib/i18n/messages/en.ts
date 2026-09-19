@@ -485,6 +485,7 @@ export const enLocale: LocalePlugin = {
     "chat.commandNoOutput": "No output recorded",
     "chat.openWrittenFile": "Open {name}",
     "chat.loadEarlier": "Scroll up to load earlier messages",
+    "chat.scrollToLatest": "Scroll to latest",
     "chat.extensionRequest": "extension request",
     "chat.cancel": "Cancel",
     "chat.confirm": "Confirm",

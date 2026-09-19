@@ -485,6 +485,7 @@ export const zhTWLocale: LocalePlugin = {
     "chat.commandNoOutput": "未記錄輸出",
     "chat.openWrittenFile": "開啟 {name}",
     "chat.loadEarlier": "向上捲動以載入較早的訊息",
+    "chat.scrollToLatest": "回到最新訊息",
     "chat.extensionRequest": "擴充功能請求",
     "chat.cancel": "取消",
     "chat.confirm": "確認",

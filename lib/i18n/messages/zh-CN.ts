@@ -485,6 +485,7 @@ export const zhCNLocale: LocalePlugin = {
     "chat.commandNoOutput": "未记录输出",
     "chat.openWrittenFile": "打开 {name}",
     "chat.loadEarlier": "向上滚动以加载更早的消息",
+    "chat.scrollToLatest": "回到最新消息",
     "chat.extensionRequest": "扩展请求",
     "chat.cancel": "取消",
     "chat.confirm": "确认",

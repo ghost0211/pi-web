@@ -8,7 +8,7 @@ import {
   normalizeDisplayMath,
 } from "@/lib/markdown";
 import { splitFinalAssistantBlocks } from "@/lib/message-display";
-import type { AgentMessage, AssistantMessage, TextContent, UserMessage } from "@/lib/types";
+import type { AgentMessage, AssistantMessage, TextContent } from "@/lib/types";
 import styles from "./ChatMinimap.module.css";
 
 interface Props {
@@ -31,7 +31,12 @@ interface AssistantPreview {
 }
 
 interface TurnInfo {
-  userMessage: UserMessage;
+  /**
+   * Label shown in the preview list: the user prompt, a compaction summary,
+   * or the first line of a leading segment when the lazy-loaded window
+   * starts mid-turn (no anchor message in range yet).
+   */
+  previewText: string;
   assistantPreviews: AssistantPreview[];
   scrollTop: number | null;
 }
@@ -42,13 +47,25 @@ interface NodeInfo {
   index: number;
 }
 
-function getUserPreview(message: UserMessage): string {
-  if (typeof message.content === "string") return message.content.trim();
-  return message.content
-    .filter((block): block is TextContent => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
+function getMessagePreview(message: { content?: unknown }): string {
+  const { content } = message;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .filter((block): block is TextContent => (block as TextContent)?.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
+function firstTextLine(text: string): string {
+  const line = text
+    .split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  return (line ?? "").replace(/^#+\s*/, "") || "…";
 }
 
 function getAssistantAnswerMarkdown(message: AgentMessage | Partial<AgentMessage>): string {
@@ -323,31 +340,60 @@ export function ChatMinimap({
 
       const refs = messageRefs.current;
       const containerRect = scrollEl.getBoundingClientRect();
+      const measureTop = (element: HTMLDivElement | null): number | null => {
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return rect.top - containerRect.top + scrollEl.scrollTop;
+      };
       const turns: TurnInfo[] = [];
       let refIndex = 0;
       let currentTurn: TurnInfo | null = null;
+      // A compaction summary anchors a turn like a user prompt (mirroring
+      // ChatWindow's isGroupAnchor) but carries no message ref, so the turn's
+      // measured anchor is the first message rendered after it.
+      let pendingAnchorText: string | null = null;
 
       for (const message of allMessagesRef.current) {
-        if (message.role !== "user" && message.role !== "assistant") continue;
-        const element = refs?.[refIndex];
+        const isUser = message.role === "user";
+        const isAssistant = message.role === "assistant";
+        if (!isUser && !isAssistant) {
+          if (
+            message.role === "custom"
+            && (message as { customType?: string }).customType === "compaction"
+          ) {
+            pendingAnchorText = firstTextLine(getMessagePreview(message));
+            currentTurn = null;
+          }
+          continue;
+        }
+        const element = refs?.[refIndex] ?? null;
         refIndex++;
 
-        if (message.role === "user") {
-          currentTurn = null;
-          const elementRect = element?.getBoundingClientRect();
+        if (isUser) {
+          pendingAnchorText = null;
           currentTurn = {
-            userMessage: message as UserMessage,
+            previewText: getMessagePreview(message) || "…",
             assistantPreviews: [],
-            scrollTop: elementRect
-              ? elementRect.top - containerRect.top + scrollEl.scrollTop
-              : null,
+            scrollTop: measureTop(element),
           };
           turns.push(currentTurn);
           continue;
         }
 
-        if (!currentTurn) continue;
+        // Assistant message: fold it into the current turn. When the lazy
+        // loaded window starts mid-turn (no anchor message before it), open a
+        // head turn so the rail is never empty on long sessions.
         const answerMarkdown = getAssistantAnswerMarkdown(message);
+        if (!currentTurn && (pendingAnchorText !== null || turns.length === 0)) {
+          currentTurn = {
+            previewText: pendingAnchorText ?? firstTextLine(answerMarkdown),
+            assistantPreviews: [],
+            scrollTop: measureTop(element),
+          };
+          pendingAnchorText = null;
+          turns.push(currentTurn);
+        }
+        if (!currentTurn) continue;
         if (answerMarkdown) {
           currentTurn.assistantPreviews.push({
             markdown: answerMarkdown,
@@ -706,7 +752,7 @@ export function ChatMinimap({
                     }}
                   >
                     <span className={styles.userText}>
-                      {getUserPreview(node.targetTurn.userMessage)}
+                      {node.targetTurn.previewText}
                     </span>
                   </button>
 

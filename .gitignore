@@ -43,6 +43,8 @@ next-env.d.ts
 .factory
 e2e_*.mjs
 .pi-web-attachments/
+.pi-dev.cmd
+.pi-dev.err
 
 # desktop (Tauri)
 /src-tauri/target/

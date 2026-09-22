@@ -11,7 +11,8 @@ import { TurnOutcomeCard } from "./TurnOutcomeCard";
 import { getFileName } from "@/lib/file-paths";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
-import { useMessageRefs } from "./ChatMinimap";
+import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { ChatScrollbar } from "./ChatScrollbar";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { KimiTaskDock } from "./KimiTaskDock";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -19,6 +20,7 @@ import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useDragDrop } from "@/hooks/useDragDrop";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
 import type { ToolEntry } from "@/lib/tool-presets";
@@ -403,6 +405,12 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     return history.reverse();
   }, [messages]);
   const messageRefs = useMessageRefs(visibleMessages.length);
+  const isMobile = useIsMobile();
+  // Expand the rendered-message window so minimap jump targets outside the
+  // virtualized slice become measurable, then the pending jump re-runs.
+  const revealHistoryForMinimap = useCallback(() => {
+    setVisibleCount((current) => Math.max(current, messages.length * 2));
+  }, [messages.length]);
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
   const hasStreamingContent = Boolean(streamState.streamingMessage?.content.length);
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
@@ -974,6 +982,18 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
             </div>
           </div>
         </div>
+        {isMobile ? null : (
+          <>
+            <ChatMinimap
+              messages={messages}
+              streamingMessage={streamState.streamingMessage}
+              scrollContainer={scrollContainerRef}
+              messageRefs={messageRefs}
+              onRevealHistory={revealHistoryForMinimap}
+            />
+            <ChatScrollbar scrollContainer={scrollContainerRef} />
+          </>
+        )}
       </div>
 
       <div className="relative">

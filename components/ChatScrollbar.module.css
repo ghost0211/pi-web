@@ -1,0 +1,42 @@
+.rail {
+  position: relative;
+  width: 12px;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  background: transparent;
+}
+
+.rail:focus-visible {
+  outline: none;
+}
+
+.thumb {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  min-height: 28px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--border) 85%, transparent);
+  cursor: grab;
+  transition: background 120ms ease, left 120ms ease, right 120ms ease;
+}
+
+.thumb:hover {
+  background: var(--text-dim);
+  left: 2px;
+  right: 2px;
+}
+
+.thumb[data-dragging] {
+  cursor: grabbing;
+  background: var(--text-dim);
+  left: 2px;
+  right: 2px;
+  transition: none;
+}
+
+.rail:focus-visible .thumb {
+  background: var(--text-dim);
+}

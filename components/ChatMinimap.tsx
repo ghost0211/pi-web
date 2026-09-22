@@ -1,12 +1,7 @@
 "use client";
 
-import { memo, useEffect, useRef, useState, useCallback, useMemo, type RefObject } from "react";
-import ReactMarkdown, { type Options as ReactMarkdownOptions } from "react-markdown";
-import rehypeKatex from "rehype-katex";
-import {
-  markdownPreviewRemarkPlugins,
-  normalizeDisplayMath,
-} from "@/lib/markdown";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { normalizeDisplayMath } from "@/lib/markdown";
 import { splitFinalAssistantBlocks } from "@/lib/message-display";
 import type { AgentMessage, AssistantMessage, TextContent } from "@/lib/types";
 import styles from "./ChatMinimap.module.css";
@@ -19,32 +14,47 @@ interface Props {
   onRevealHistory: () => void;
 }
 
-const MINIMAP_WIDTH = 36;
-const MAX_NODE_GAP = 50;
-const MINIMAP_PADDING = 12;
-const PREVIEW_HIDE_DELAY = 250;
+// ---------------------------------------------------------------------------
+// Turn rail geometry. One 3px bar per turn on a fixed 15px pitch, left aligned
+// in a slim column at the left edge of the chat area. On hover the bar under
+// the pointer grows into a lens and its neighbours taper with distance, while
+// a compact card with that turn's prompt + answer summary opens to the right.
+// The rail compresses its pitch instead of scrolling once the turns outgrow
+// the column, so every turn stays reachable without touching the mouse wheel.
+// ---------------------------------------------------------------------------
+const RAIL_WIDTH = 56;
+const BAR_LEFT = 16;
+const BAR_HEIGHT = 3;
+const BAR_PITCH = 15;
+const BAR_WIDTH = 9;
+const BAR_LENS_WIDTH = 39;
+/**
+ * Bar widths for the hovered bar and its neighbours, measured from the
+ * reference design: 39 → 30 → 21 → 15, then the resting width.
+ */
+const LENS_WIDTHS = [BAR_LENS_WIDTH, 30, 21, 15];
+const RAIL_PADDING = 12;
+const CARD_MAX_HEIGHT = 168;
+const CARD_EDGE_PADDING = 8;
+const PREVIEW_HIDE_DELAY = 180;
 const NAVIGATION_ACTIVE_LOCK_MS = 1600;
-
-interface AssistantPreview {
-  markdown: string;
-  element: HTMLDivElement | null;
-}
 
 interface TurnInfo {
   /**
-   * Label shown in the preview list: the user prompt, a compaction summary,
-   * or the first line of a leading segment when the lazy-loaded window
-   * starts mid-turn (no anchor message in range yet).
+   * Label shown for the turn: the user prompt, a compaction summary, or the
+   * first line of a leading segment when the lazy-loaded window starts
+   * mid-turn (no anchor message in range yet).
    */
   previewText: string;
-  assistantPreviews: AssistantPreview[];
+  /** Plain-text digest of the turn's final answer, shown under the prompt. */
+  summary: string;
   scrollTop: number | null;
 }
 
-interface NodeInfo {
-  topRatio: number;
-  targetTurn: TurnInfo;
+interface RailBar {
   index: number;
+  top: number;
+  turn: TurnInfo;
 }
 
 function getMessagePreview(message: { content?: unknown }): string {
@@ -78,169 +88,141 @@ function getAssistantAnswerMarkdown(message: AgentMessage | Partial<AgentMessage
     .trim();
 }
 
-function PreviewHeading({
-  level,
-  children,
-  headingIndex,
-  onClick,
-}: {
-  level: 1 | 2 | 3;
-  children: React.ReactNode;
-  headingIndex: number | null;
-  onClick?: (headingIndex: number) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={styles.heading}
-      data-level={level}
-      data-preview-heading-index={headingIndex ?? undefined}
-      disabled={headingIndex === null || !onClick}
-      onClick={(event) => {
-        event.stopPropagation();
-        if (headingIndex !== null) onClick?.(headingIndex);
-      }}
-    >
-      {children}
-    </button>
-  );
+/**
+ * Flattens an answer into the single paragraph shown under the prompt in the
+ * hover card: markdown structure (headings, lists, emphasis, tables, code
+ * fences) is dropped and math delimiters are unwrapped so the digest reads as
+ * prose instead of source.
+ */
+export function turnSummaryFromMarkdown(markdown: string): string {
+  return normalizeDisplayMath(markdown)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s{0,3}(?:[-*+]|\d+\.)\s+/gm, "")
+    .replace(/^\s{0,3}(?:[-*_]\s*){3,}$/gm, " ")
+    .replace(/\|/g, " ")
+    .replace(/\$\$?([^$]*)\$\$?/g, "$1")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/[*~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-interface PreviewAstNode {
-  type?: string;
-  depth?: number;
-  data?: {
-    hProperties?: Record<string, unknown>;
-  };
+/** Bar width for a given distance from the hovered bar (the lens falloff). */
+function barWidthAt(distance: number): number {
+  return LENS_WIDTHS[distance] ?? BAR_WIDTH;
 }
 
-function remarkPreviewOutline() {
-  return (tree: { children?: PreviewAstNode[] }) => {
-    if (!Array.isArray(tree.children)) return;
-    const headings = tree.children.filter((node) => (
-      node.type === "heading" && typeof node.depth === "number" && node.depth <= 3
-    ));
-    if (headings.length > 0) {
-      headings.forEach((node, headingIndex) => {
-        node.data = {
-          ...node.data,
-          hProperties: {
-            ...node.data?.hProperties,
-            "data-preview-heading-index": headingIndex,
-          },
-        };
-      });
-      tree.children = headings;
-      return;
-    }
-    const firstParagraph = tree.children.find((node) => node.type === "paragraph");
-    tree.children = firstParagraph ? [firstParagraph] : [];
-  };
-}
-
-const previewRemarkPlugins = [
-  ...(markdownPreviewRemarkPlugins ?? []),
-  remarkPreviewOutline,
-];
-const previewRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [
-  [rehypeKatex, { throwOnError: false, strict: false }],
-];
-
-function getPreviewHeadingIndex(node: unknown): number | null {
-  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
-  const value = properties?.dataPreviewHeadingIndex ?? properties?.["data-preview-heading-index"];
-  if (typeof value === "number") return value;
-  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
-  return null;
-}
-
-export const AssistantOutline = memo(function AssistantOutline({
-  markdown,
-  onHeadingClick,
-  onAnswerClick,
-}: {
-  markdown: string;
-  onHeadingClick?: (headingIndex: number) => void;
-  onAnswerClick?: () => void;
-}) {
-  const normalizedMarkdown = useMemo(() => normalizeDisplayMath(markdown), [markdown]);
-  if (!markdown) return null;
-  return (
-    <div className={styles.outline}>
-      <ReactMarkdown
-        remarkPlugins={previewRemarkPlugins}
-        rehypePlugins={previewRehypePlugins}
-        components={{
-          h1: ({ children, node }) => <PreviewHeading level={1} headingIndex={getPreviewHeadingIndex(node)} onClick={onHeadingClick}>{children}</PreviewHeading>,
-          h2: ({ children, node }) => <PreviewHeading level={2} headingIndex={getPreviewHeadingIndex(node)} onClick={onHeadingClick}>{children}</PreviewHeading>,
-          h3: ({ children, node }) => <PreviewHeading level={3} headingIndex={getPreviewHeadingIndex(node)} onClick={onHeadingClick}>{children}</PreviewHeading>,
-          h4: () => null,
-          h5: () => null,
-          h6: () => null,
-          p: ({ children }) => (
-            <button
-              type="button"
-              className={styles.paragraph}
-              onClick={onAnswerClick}
-            >
-              {children}
-            </button>
-          ),
-          blockquote: () => null,
-          ul: () => null,
-          ol: () => null,
-          pre: () => null,
-          table: () => null,
-          hr: () => null,
-          a: ({ children }) => <>{children}</>,
-          code: ({ children }) => <>{children}</>,
-        }}
-      >
-        {normalizedMarkdown}
-      </ReactMarkdown>
-    </div>
-  );
-});
-
-function createTurnNodes(turns: TurnInfo[]): NodeInfo[] {
+/**
+ * Places the bars on a fixed pitch, compressing it only when the turns would
+ * otherwise overflow the rail.
+ */
+export function layoutBars(turns: TurnInfo[], railHeight: number): RailBar[] {
+  if (turns.length === 0) return [];
+  if (turns.length === 1) {
+    return [{ index: 0, top: Math.max(RAIL_PADDING, railHeight / 2), turn: turns[0] }];
+  }
+  const usable = Math.max(0, railHeight - RAIL_PADDING * 2);
+  const pitch = Math.min(BAR_PITCH, usable / (turns.length - 1));
   return turns.map((turn, index) => ({
-    topRatio: 0,
-    targetTurn: turn,
     index,
+    top: RAIL_PADDING + index * pitch,
+    turn,
   }));
 }
 
-interface NodeLayout {
-  nodes: NodeInfo[];
-  gap: number;
-  fillsHeight: boolean;
+/**
+ * Keeps the preview card inside the chat area while it stays vertically
+ * centered on the hovered bar.
+ */
+export function cardTopFor(barTop: number, railHeight: number): number {
+  const half = CARD_MAX_HEIGHT / 2;
+  const min = half + CARD_EDGE_PADDING;
+  const max = railHeight - half - CARD_EDGE_PADDING;
+  if (max < min) return railHeight / 2;
+  return Math.min(max, Math.max(min, barTop));
 }
 
-function layoutNodes(allNodes: NodeInfo[], minimapHeight: number): NodeLayout {
-  if (allNodes.length === 0) {
-    return { nodes: [], gap: MAX_NODE_GAP, fillsHeight: false };
-  }
+interface RailViewProps {
+  bars: RailBar[];
+  railHeight: number;
+  activeIndex: number | null;
+  hoveredIndex: number | null;
+  onHoverBar: (index: number) => void;
+  onLeaveRail: () => void;
+  onJump: (index: number) => void;
+}
 
-  const height = Math.max(1, minimapHeight);
-  const usableHeight = Math.max(0, height - MINIMAP_PADDING * 2);
-  if (allNodes.length === 1) {
-    return {
-      nodes: [{ ...allNodes[0], topRatio: MINIMAP_PADDING / height }],
-      gap: MAX_NODE_GAP,
-      fillsHeight: false,
-    };
-  }
+/**
+ * Presentational turn rail: one bar per turn plus the hover preview card.
+ * Kept free of measurement state so the geometry is directly testable.
+ */
+export function TurnRailView({
+  bars,
+  railHeight,
+  activeIndex,
+  hoveredIndex,
+  onHoverBar,
+  onLeaveRail,
+  onJump,
+}: RailViewProps) {
+  const hoveredBar = hoveredIndex === null ? null : (bars[hoveredIndex] ?? null);
+  return (
+    <div
+      className={styles.rail}
+      style={{ width: RAIL_WIDTH }}
+      onMouseLeave={onLeaveRail}
+    >
+      {bars.map((bar) => {
+        const distance = hoveredIndex === null ? null : Math.abs(bar.index - hoveredIndex);
+        return (
+          <button
+            key={bar.index}
+            type="button"
+            className={styles.bar}
+            data-turn-index={bar.index}
+            data-active={activeIndex === bar.index ? "true" : undefined}
+            data-hovered={hoveredIndex === bar.index ? "true" : undefined}
+            style={{
+              top: bar.top,
+              left: BAR_LEFT,
+              width: distance === null ? BAR_WIDTH : barWidthAt(distance),
+              height: BAR_HEIGHT,
+            }}
+            aria-label={`Jump to turn ${bar.index + 1}: ${bar.turn.previewText}`}
+            title={bar.turn.previewText}
+            onMouseEnter={() => onHoverBar(bar.index)}
+            onFocus={() => onHoverBar(bar.index)}
+            onBlur={onLeaveRail}
+            onClick={() => onJump(bar.index)}
+          />
+        );
+      })}
 
-  const naturalGap = usableHeight / (allNodes.length - 1);
-  const gap = Math.min(MAX_NODE_GAP, naturalGap);
-  return {
-    nodes: allNodes.map((node, index) => ({
-      ...node,
-      topRatio: (MINIMAP_PADDING + index * gap) / height,
-    })),
-    gap,
-    fillsHeight: naturalGap <= MAX_NODE_GAP,
-  };
+      {hoveredBar && (
+        <button
+          type="button"
+          className={styles.card}
+          data-turn-preview={hoveredBar.index}
+          style={{ top: cardTopFor(hoveredBar.top, railHeight) }}
+          onMouseEnter={() => onHoverBar(hoveredBar.index)}
+          onMouseLeave={onLeaveRail}
+          onClick={() => onJump(hoveredBar.index)}
+        >
+          <span className={styles.cardPrompt}>{hoveredBar.turn.previewText}</span>
+          {hoveredBar.turn.summary && (
+            <span className={styles.cardSummary}>{hoveredBar.turn.summary}</span>
+          )}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function ChatMinimap({
@@ -251,29 +233,14 @@ export function ChatMinimap({
   onRevealHistory,
 }: Props) {
   const [visible, setVisible] = useState(false);
-  const [allNodes, setAllNodes] = useState<NodeInfo[]>([]);
+  const [turns, setTurns] = useState<TurnInfo[]>([]);
+  const [railHeight, setRailHeight] = useState(600);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [minimapHeight, setMinimapHeight] = useState(600);
-  const [minimapHovered, setMinimapHovered] = useState(false);
-  const [mouseYRatio, setMouseYRatio] = useState<number | null>(null);
-  const draggingRef = useRef(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const allNodesRef = useRef<NodeInfo[]>([]);
-  const nodeLayoutRef = useRef<NodeLayout>({
-    nodes: [],
-    gap: MAX_NODE_GAP,
-    fillsHeight: false,
-  });
-  const previewBoxRef = useRef<HTMLDivElement>(null);
-  const previewItemRefs = useRef(new Map<number, HTMLDivElement>());
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const turnsRef = useRef<TurnInfo[]>([]);
   const previewHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeNodeLockRef = useRef<{ index: number; until: number } | null>(null);
-  const pendingNavigationRef = useRef<{
-    nodeIndex: number;
-    target: "user" | "assistant" | "heading";
-    assistantIndex?: number;
-    headingIndex?: number;
-  } | null>(null);
+  const pendingNavigationRef = useRef<number | null>(null);
 
   const allMessages = useMemo(
     () => (streamingMessage ? [...messages, streamingMessage] : messages) as (AgentMessage | Partial<AgentMessage>)[],
@@ -282,12 +249,7 @@ export function ChatMinimap({
   const allMessagesRef = useRef(allMessages);
   allMessagesRef.current = allMessages;
 
-  const nodeLayout = useMemo(
-    () => layoutNodes(allNodes, minimapHeight),
-    [allNodes, minimapHeight],
-  );
-  const { nodes: positionedNodes, gap: nodeGap } = nodeLayout;
-  nodeLayoutRef.current = nodeLayout;
+  const bars = useMemo(() => layoutBars(turns, railHeight), [turns, railHeight]);
 
   const lockActiveNode = useCallback((index: number) => {
     activeNodeLockRef.current = {
@@ -297,7 +259,7 @@ export function ChatMinimap({
     setActiveIndex(index);
   }, []);
 
-  const syncActiveNode = useCallback((scrollEl: HTMLDivElement, nextNodes: NodeInfo[]) => {
+  const syncActiveNode = useCallback((scrollEl: HTMLDivElement, nextTurns: TurnInfo[]) => {
     const activeLock = activeNodeLockRef.current;
     if (activeLock && Date.now() < activeLock.until) {
       setActiveIndex(activeLock.index);
@@ -305,38 +267,37 @@ export function ChatMinimap({
     }
     activeNodeLockRef.current = null;
 
-    const measuredNodes = nextNodes.filter((node) => node.targetTurn.scrollTop !== null);
-    if (measuredNodes.length === 0) {
+    const measured = nextTurns
+      .map((turn, index) => ({ turn, index }))
+      .filter(({ turn }) => turn.scrollTop !== null);
+    if (measured.length === 0) {
       setActiveIndex(null);
       return;
     }
     const focusTop = scrollEl.scrollTop + scrollEl.clientHeight * 0.3;
-    const nextActiveNode = measuredNodes.reduce((bestNode, node) => (
-      Math.abs((node.targetTurn.scrollTop ?? 0) - focusTop)
-        < Math.abs((bestNode.targetTurn.scrollTop ?? 0) - focusTop)
-        ? node
-        : bestNode
-    ), measuredNodes[0]);
-    setActiveIndex(nextActiveNode.index);
+    const next = measured.reduce((best, candidate) => (
+      Math.abs((candidate.turn.scrollTop ?? 0) - focusTop)
+        < Math.abs((best.turn.scrollTop ?? 0) - focusTop)
+        ? candidate
+        : best
+    ), measured[0]);
+    setActiveIndex(next.index);
   }, []);
 
   const updateScroll = useCallback(() => {
     const scrollEl = scrollContainer.current;
     if (!scrollEl) return;
-    const scrollable = scrollEl.scrollHeight - scrollEl.clientHeight;
-    const currentNodes = allNodesRef.current;
-    setVisible(scrollable > 20);
-    syncActiveNode(scrollEl, currentNodes);
+    setVisible(scrollEl.scrollHeight - scrollEl.clientHeight > 20);
+    syncActiveNode(scrollEl, turnsRef.current);
   }, [scrollContainer, syncActiveNode]);
 
   const measureThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const measureNodes = useCallback(() => {
+  const measureTurns = useCallback(() => {
     if (measureThrottleRef.current) return;
     measureThrottleRef.current = setTimeout(() => {
       measureThrottleRef.current = null;
       const scrollEl = scrollContainer.current;
-      const minimapEl = containerRef.current;
-      if (!scrollEl || !minimapEl) return;
+      if (!scrollEl) return;
 
       const refs = messageRefs.current;
       const containerRect = scrollEl.getBoundingClientRect();
@@ -345,7 +306,7 @@ export function ChatMinimap({
         const rect = element.getBoundingClientRect();
         return rect.top - containerRect.top + scrollEl.scrollTop;
       };
-      const turns: TurnInfo[] = [];
+      const nextTurns: TurnInfo[] = [];
       let refIndex = 0;
       let currentTurn: TurnInfo | null = null;
       // A compaction summary anchors a turn like a user prompt (mirroring
@@ -373,10 +334,10 @@ export function ChatMinimap({
           pendingAnchorText = null;
           currentTurn = {
             previewText: getMessagePreview(message) || "…",
-            assistantPreviews: [],
+            summary: "",
             scrollTop: measureTop(element),
           };
-          turns.push(currentTurn);
+          nextTurns.push(currentTurn);
           continue;
         }
 
@@ -384,63 +345,36 @@ export function ChatMinimap({
         // loaded window starts mid-turn (no anchor message before it), open a
         // head turn so the rail is never empty on long sessions.
         const answerMarkdown = getAssistantAnswerMarkdown(message);
-        if (!currentTurn && (pendingAnchorText !== null || turns.length === 0)) {
+        if (!currentTurn && (pendingAnchorText !== null || nextTurns.length === 0)) {
           currentTurn = {
             previewText: pendingAnchorText ?? firstTextLine(answerMarkdown),
-            assistantPreviews: [],
+            summary: "",
             scrollTop: measureTop(element),
           };
           pendingAnchorText = null;
-          turns.push(currentTurn);
+          nextTurns.push(currentTurn);
         }
         if (!currentTurn) continue;
         if (answerMarkdown) {
-          currentTurn.assistantPreviews.push({
-            markdown: answerMarkdown,
-            element,
-          });
+          currentTurn.summary = turnSummaryFromMarkdown(answerMarkdown);
         }
       }
 
-      const nextNodes = createTurnNodes(turns);
-      setMinimapHeight(minimapEl.clientHeight);
-      allNodesRef.current = nextNodes;
-      setAllNodes(nextNodes);
+      turnsRef.current = nextTurns;
+      setTurns(nextTurns);
+      setRailHeight(scrollEl.clientHeight);
       setVisible(scrollEl.scrollHeight - scrollEl.clientHeight > 20);
-      syncActiveNode(scrollEl, nextNodes);
+      syncActiveNode(scrollEl, nextTurns);
 
-      const pendingNavigation = pendingNavigationRef.current;
-      const pendingNode = pendingNavigation
-        ? nextNodes[pendingNavigation.nodeIndex]
-        : null;
-      if (pendingNavigation && pendingNode) {
-        const assistant = pendingNavigation.assistantIndex === undefined
-          ? null
-          : pendingNode.targetTurn.assistantPreviews[pendingNavigation.assistantIndex];
-        let targetTop: number | null = pendingNode.targetTurn.scrollTop;
-        if (pendingNavigation.target === "assistant") {
-          const assistantRect = assistant?.element?.getBoundingClientRect();
-          targetTop = assistantRect
-            ? assistantRect.top - containerRect.top + scrollEl.scrollTop
-            : null;
-        } else if (pendingNavigation.target === "heading") {
-          const heading = (
-            pendingNavigation.headingIndex === undefined
-              ? null
-              : assistant?.element
-                ?.querySelectorAll<HTMLElement>("h1, h2, h3")
-                .item(pendingNavigation.headingIndex)
-          );
-          const headingRect = heading?.getBoundingClientRect();
-          targetTop = headingRect
-            ? headingRect.top - containerRect.top + scrollEl.scrollTop
-            : null;
-        }
-        if (targetTop === null) return;
+      const pendingIndex = pendingNavigationRef.current;
+      const pendingTurn = pendingIndex === null ? null : nextTurns[pendingIndex];
+      if (pendingIndex !== null && pendingTurn && pendingTurn.scrollTop !== null) {
         pendingNavigationRef.current = null;
-        lockActiveNode(pendingNode.index);
-        const targetOffset = scrollEl.clientHeight * 0.3;
-        scrollEl.scrollTo({ top: Math.max(0, targetTop - targetOffset), behavior: "smooth" });
+        lockActiveNode(pendingIndex);
+        scrollEl.scrollTo({
+          top: Math.max(0, pendingTurn.scrollTop - scrollEl.clientHeight * 0.3),
+          behavior: "smooth",
+        });
       }
     }, 150);
   }, [lockActiveNode, messageRefs, scrollContainer, syncActiveNode]);
@@ -456,7 +390,7 @@ export function ChatMinimap({
     const el = scrollContainer.current;
     if (!el) return;
     const syncLayout = () => {
-      measureNodes();
+      measureTurns();
       updateScroll();
     };
     const ro = new ResizeObserver(syncLayout);
@@ -470,106 +404,31 @@ export function ChatMinimap({
         measureThrottleRef.current = null;
       }
     };
-  }, [measureNodes, scrollContainer, updateScroll]);
+  }, [measureTurns, scrollContainer, updateScroll]);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      measureNodes();
+      measureTurns();
       updateScroll();
     }, 50);
     return () => clearTimeout(timeout);
-  }, [messages.length, measureNodes, updateScroll]);
+  }, [messages.length, measureTurns, updateScroll]);
 
-  const scrollToNode = useCallback((node: NodeInfo, behavior: ScrollBehavior) => {
+  const scrollToTurn = useCallback((index: number, behavior: ScrollBehavior) => {
     const scrollEl = scrollContainer.current;
     if (!scrollEl) return;
-    lockActiveNode(node.index);
-    if (node.targetTurn.scrollTop === null) {
-      pendingNavigationRef.current = { nodeIndex: node.index, target: "user" };
+    const turn = turnsRef.current[index];
+    if (!turn) return;
+    lockActiveNode(index);
+    if (turn.scrollTop === null) {
+      pendingNavigationRef.current = index;
       onRevealHistory();
       return;
     }
-    const targetTop = Math.max(
-      0,
-      node.targetTurn.scrollTop - scrollEl.clientHeight * 0.3,
-    );
-    scrollEl.scrollTo({ top: targetTop, behavior });
-  }, [lockActiveNode, onRevealHistory, scrollContainer]);
-
-  const scrollToAssistant = useCallback((node: NodeInfo, assistantIndex: number) => {
-    const scrollEl = scrollContainer.current;
-    if (!scrollEl) return;
-    const assistantElement = node.targetTurn.assistantPreviews[assistantIndex]?.element;
-    if (!assistantElement) {
-      pendingNavigationRef.current = {
-        nodeIndex: node.index,
-        target: "assistant",
-        assistantIndex,
-      };
-      onRevealHistory();
-      return;
-    }
-    const containerRect = scrollEl.getBoundingClientRect();
-    const assistantRect = assistantElement.getBoundingClientRect();
-    const targetTop = (
-      assistantRect.top
-      - containerRect.top
-      + scrollEl.scrollTop
-      - scrollEl.clientHeight * 0.3
-    );
-    lockActiveNode(node.index);
-    scrollEl.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-  }, [lockActiveNode, onRevealHistory, scrollContainer]);
-
-  const findNearestNode = useCallback((ratio: number): NodeInfo | null => {
-    const { nodes, gap, fillsHeight } = nodeLayoutRef.current;
-    const height = containerRef.current?.clientHeight ?? 0;
-    if (nodes.length === 0 || height <= 0) return null;
-
-    const pointerY = Math.max(0, Math.min(height, ratio * height));
-    const firstNodeY = nodes[0].topRatio * height;
-    const rawIndex = gap > 0 ? Math.round((pointerY - firstNodeY) / gap) : 0;
-    const nodeIndex = Math.max(0, Math.min(nodes.length - 1, rawIndex));
-    const nearestNode = nodes[nodeIndex];
-
-    if (!fillsHeight) {
-      const nodeY = nearestNode.topRatio * height;
-      const hitRadius = Math.max(10, gap / 2);
-      if (Math.abs(pointerY - nodeY) > hitRadius) return null;
-    }
-    return nearestNode;
-  }, []);
-
-  const scrollToHeading = useCallback((
-    node: NodeInfo,
-    assistantIndex: number,
-    headingIndex: number,
-  ) => {
-    const scrollEl = scrollContainer.current;
-    if (!scrollEl) return;
-    const answerElement = node.targetTurn.assistantPreviews[assistantIndex]?.element;
-    if (!answerElement) {
-      pendingNavigationRef.current = {
-        nodeIndex: node.index,
-        target: "heading",
-        assistantIndex,
-        headingIndex,
-      };
-      onRevealHistory();
-      return;
-    }
-    const heading = answerElement.querySelectorAll<HTMLElement>("h1, h2, h3").item(headingIndex);
-    if (!heading) return;
-    const containerRect = scrollEl.getBoundingClientRect();
-    const headingRect = heading.getBoundingClientRect();
-    const targetTop = (
-      headingRect.top
-      - containerRect.top
-      + scrollEl.scrollTop
-      - scrollEl.clientHeight * 0.3
-    );
-    lockActiveNode(node.index);
-    scrollEl.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    scrollEl.scrollTo({
+      top: Math.max(0, turn.scrollTop - scrollEl.clientHeight * 0.3),
+      behavior,
+    });
   }, [lockActiveNode, onRevealHistory, scrollContainer]);
 
   const cancelPreviewHide = useCallback(() => {
@@ -578,215 +437,31 @@ export function ChatMinimap({
     previewHideTimerRef.current = null;
   }, []);
 
-  const showPreview = useCallback(() => {
-    cancelPreviewHide();
-    setMinimapHovered(true);
-  }, [cancelPreviewHide]);
-
   const schedulePreviewHide = useCallback(() => {
     cancelPreviewHide();
     previewHideTimerRef.current = setTimeout(() => {
       previewHideTimerRef.current = null;
-      setMinimapHovered(false);
-      setMouseYRatio(null);
+      setHoveredIndex(null);
     }, PREVIEW_HIDE_DELAY);
   }, [cancelPreviewHide]);
 
   useEffect(() => () => cancelPreviewHide(), [cancelPreviewHide]);
 
-  const handleMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!visible) return;
-
-    draggingRef.current = true;
-    showPreview();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const pointerRatio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-    setMouseYRatio(pointerRatio);
-    const jumpToPointer = (clientY: number, behavior: ScrollBehavior) => {
-      const ratio = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
-      const node = findNearestNode(ratio);
-      if (node) {
-        scrollToNode(node, behavior);
-      }
-    };
-
-    jumpToPointer(event.clientY, "smooth");
-    const onMove = (moveEvent: MouseEvent) => {
-      if (!draggingRef.current) return;
-      jumpToPointer(moveEvent.clientY, "auto");
-    };
-    const onUp = () => {
-      draggingRef.current = false;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }, [findNearestNode, scrollToNode, showPreview, visible]);
-
-  const nearestNode = mouseYRatio === null ? null : findNearestNode(mouseYRatio);
-  const nearestNodeIndex = nearestNode?.index ?? null;
-
-  useEffect(() => {
-    if (!minimapHovered || nearestNodeIndex === null) return;
-    const previewBox = previewBoxRef.current;
-    const previewItem = previewItemRefs.current.get(nearestNodeIndex);
-    if (!previewBox || !previewItem) return;
-    const targetTop = previewItem.offsetTop
-      - (previewBox.clientHeight - previewItem.offsetHeight) / 2;
-    previewBox.scrollTop = Math.max(0, targetTop);
-  }, [allNodes, minimapHovered, nearestNodeIndex]);
-
-  if (!visible) return null;
-
-  const lastNodeTop = positionedNodes.length > 0
-    ? positionedNodes[positionedNodes.length - 1].topRatio * minimapHeight
-    : MINIMAP_PADDING;
-  const railHeight = Math.max(1, lastNodeTop - MINIMAP_PADDING);
+  if (!visible || turns.length === 0) return null;
 
   return (
-    <div
-      ref={containerRef}
-      onMouseDown={handleMouseDown}
-      onMouseEnter={showPreview}
-      onMouseLeave={schedulePreviewHide}
-      onMouseMove={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect();
-        setMouseYRatio((event.clientY - rect.top) / rect.height);
+    <TurnRailView
+      bars={bars}
+      railHeight={railHeight}
+      activeIndex={activeIndex}
+      hoveredIndex={hoveredIndex}
+      onHoverBar={(index) => {
+        cancelPreviewHide();
+        setHoveredIndex(index);
       }}
-      style={{
-        width: MINIMAP_WIDTH,
-        flexShrink: 0,
-        position: "relative",
-        cursor: "pointer",
-        userSelect: "none",
-        borderLeft: "1px solid var(--border)",
-        background: "var(--bg-panel)",
-        overflow: "visible",
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          left: "50%",
-          top: MINIMAP_PADDING,
-          height: railHeight,
-          width: 1,
-          background: "var(--border)",
-          transform: "translateX(-50%)",
-          zIndex: 0,
-        }}
-      />
-
-      {positionedNodes.map((node) => {
-        const isNearest = minimapHovered && nearestNode?.index === node.index;
-        const isActive = activeIndex === node.index;
-
-        return (
-          <div
-            key={node.index}
-            data-minimap-node-index={node.index}
-            data-minimap-node-active={isActive ? "" : undefined}
-            style={{
-              position: "absolute",
-              top: `${node.topRatio * 100}%`,
-              transform: "translateY(-50%)",
-              left: 0,
-              right: 0,
-              height: Math.max(1, nodeGap),
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              pointerEvents: "none",
-              zIndex: 2,
-            }}
-          >
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: 2,
-                background: isActive ? "rgba(128,128,128,0.42)" : "rgba(128,128,128,0.16)",
-                border: `1.5px solid ${isActive ? "rgba(128,128,128,0.95)" : "rgba(128,128,128,0.58)"}`,
-                boxShadow: isActive ? "0 0 0 2px var(--bg-panel)" : "none",
-                transition: "transform 0.1s, background 0.1s",
-                transform: isNearest ? "scale(1.25)" : "scale(1)",
-              }}
-            />
-          </div>
-        );
-      })}
-
-      {minimapHovered && allNodes.length > 0 && (
-        <div
-          ref={previewBoxRef}
-          className={styles.preview}
-          data-minimap-preview-box=""
-          onMouseEnter={showPreview}
-          onMouseDown={(event) => event.stopPropagation()}
-          onMouseMove={(event) => event.stopPropagation()}
-        >
-          {allNodes.map((node) => {
-            const isLocated = nearestNodeIndex === node.index;
-            return (
-              <div
-                key={node.index}
-                ref={(element) => {
-                  if (element) previewItemRefs.current.set(node.index, element);
-                  else previewItemRefs.current.delete(node.index);
-                }}
-                className={styles.turn}
-                data-minimap-preview-index={node.index}
-                data-located={isLocated ? "true" : undefined}
-              >
-                <span className={styles.number} aria-hidden="true">
-                  {String(node.index + 1).padStart(2, "0")}
-                </span>
-                <div className={styles.content}>
-                  <button
-                    type="button"
-                    className={styles.user}
-                    data-minimap-preview-user={node.index}
-                    onClick={() => {
-                      scrollToNode(node, "smooth");
-                    }}
-                  >
-                    <span className={styles.userText}>
-                      {node.targetTurn.previewText}
-                    </span>
-                  </button>
-
-                  {node.targetTurn.assistantPreviews.map((assistant, assistantIndex) => (
-                    <div
-                      key={assistantIndex}
-                      className={styles.assistant}
-                    >
-                      <button
-                        type="button"
-                        className={styles.assistantJump}
-                        data-minimap-preview-assistant={`${node.index}-${assistantIndex}`}
-                        onClick={() => scrollToAssistant(node, assistantIndex)}
-                        aria-label="Locate assistant message"
-                        title="Locate assistant message"
-                      >
-                        A
-                      </button>
-                      <AssistantOutline
-                        markdown={assistant.markdown}
-                        onAnswerClick={() => scrollToAssistant(node, assistantIndex)}
-                        onHeadingClick={(headingIndex) => (
-                          scrollToHeading(node, assistantIndex, headingIndex)
-                        )}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+      onLeaveRail={schedulePreviewHide}
+      onJump={(index) => scrollToTurn(index, "smooth")}
+    />
   );
 }
 

@@ -7,7 +7,7 @@ import styles from "./ChatScrollbar.module.css";
 // Slim custom scrollbar pinned to the far right of the chat window. The chat
 // scroll container hides its native scrollbar (`[scrollbar-width:none]`), so
 // this rail is the only draggable scroll affordance for browsing history.
-// Sits to the right of the ChatMinimap rail.
+// Sits at the opposite edge from the ChatMinimap turn rail.
 // ---------------------------------------------------------------------------
 
 interface Props {

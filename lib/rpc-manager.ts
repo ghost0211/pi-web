@@ -6,6 +6,11 @@ import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
 import { createBinaryAttachmentExtension } from "./attachment-extension";
+import {
+  computeEffectiveSystemPrompt,
+  createSystemPromptExtension,
+  type SystemPromptState,
+} from "./system-prompt-extension";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import {
@@ -120,6 +125,8 @@ type ExtensionCommandContextActionsLike = {
 type AgentSessionWrapperOptions = {
   exactSystemPrompt?: () => string;
   customSystemPrompt?: SessionSystemPromptCustomization | null;
+  /** Shared with the session's system-prompt extension; takes precedence over the two above. */
+  systemPromptState?: SystemPromptState;
   chatOnly?: boolean;
   ephemeral?: boolean;
   onAgentRunComplete?: AgentRunCompleteListener;
@@ -202,14 +209,36 @@ function persistDeferredSessionFile(manager: SessionManager): void {
   (manager as unknown as { flushed: boolean }).flushed = true;
 }
 
+// Pi 0.87's Theme constructor resolves every colour it is handed and derives
+// optional colours from base ones (`scrollbarTrack ?? muted`, ...), so a partial
+// map throws while resolving `undefined`. Extensions only need a complete Theme
+// instance — every accessor is overridden below — so hand it every colour name
+// from the SDK's `ThemeColor`/`ThemeBg` unions set to "".
+const PLAIN_THEME_FG_NAMES = [
+  "accent", "border", "borderAccent", "borderMuted", "success", "error", "warning",
+  "muted", "dim", "text", "thinkingText", "thinkingOff", "thinkingMinimal",
+  "thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh", "thinkingMax",
+  "scrollbarTrack", "scrollbarThumb", "searchMatchText", "userMessageText",
+  "customMessageText", "customMessageLabel", "toolTitle", "toolOutput",
+  "mdHeading", "mdLink", "mdLinkUrl", "mdCode", "mdCodeBlock", "mdCodeBlockBorder",
+  "mdQuote", "mdQuoteBorder", "mdHr", "mdListBullet", "toolDiffAdded",
+  "toolDiffRemoved", "toolDiffContext", "syntaxComment", "syntaxKeyword",
+  "syntaxFunction", "syntaxVariable", "syntaxString", "syntaxNumber", "syntaxType",
+  "syntaxOperator", "syntaxPunctuation", "bashMode",
+] as const;
+const PLAIN_THEME_BG_NAMES = [
+  "selectedBg", "searchMatchBg", "userMessageBg", "customMessageBg",
+  "toolPendingBg", "toolSuccessBg", "toolErrorBg",
+] as const;
+
+function plainThemeColors<const T extends string>(names: readonly T[]): Record<T, string> {
+  return Object.fromEntries(names.map((name) => [name, ""])) as Record<T, string>;
+}
+
 // Extensions require a complete Theme, while the web UI applies its own styling.
 class PlainTextTheme extends Theme {
   constructor() {
-    super(
-      { thinkingXhigh: "", searchMatchText: "" } as ConstructorParameters<typeof Theme>[0],
-      { selectedBg: "" } as ConstructorParameters<typeof Theme>[1],
-      "truecolor",
-    );
+    super(plainThemeColors(PLAIN_THEME_FG_NAMES), plainThemeColors(PLAIN_THEME_BG_NAMES), "truecolor");
   }
 
   override fg(...[, text]: Parameters<Theme["fg"]>): string { return text; }
@@ -266,10 +295,7 @@ export class AgentSessionWrapper {
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
   private extensionBindingError: unknown = null;
-  private readonly exactSystemPrompt?: () => string;
-  private customSystemPrompt: SessionSystemPromptCustomization | null;
-  private lastNaturalSystemPrompt: string | null = null;
-  private lastEffectiveSystemPrompt: string | null = null;
+  private readonly systemPromptState: SystemPromptState;
   private readonly chatOnly: boolean;
   private readonly ephemeral: boolean;
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
@@ -286,14 +312,14 @@ export class AgentSessionWrapper {
     public readonly inner: AgentSessionLike,
     options: AgentSessionWrapperOptions = {},
   ) {
-    this.exactSystemPrompt = options.exactSystemPrompt;
-    this.customSystemPrompt = options.customSystemPrompt ?? null;
+    this.systemPromptState = options.systemPromptState ?? {
+      exact: options.exactSystemPrompt,
+      custom: options.customSystemPrompt ?? null,
+    };
     this.chatOnly = options.chatOnly ?? false;
     this.ephemeral = options.ephemeral ?? false;
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
-    this.installSystemPromptContinuation();
-    this.applyEffectiveSystemPrompt();
   }
 
   get sessionId(): string {
@@ -373,7 +399,6 @@ export class AgentSessionWrapper {
 
   private ensureExtensionsBound(): Promise<void> {
     if (this.extensionsBound) {
-      this.applyEffectiveSystemPrompt();
       return Promise.resolve();
     }
     if (this.extensionBindingPromise) return this.extensionBindingPromise;
@@ -412,7 +437,6 @@ export class AgentSessionWrapper {
         this.inner.extensionRunner.setUIContext?.(uiContext, "rpc");
       }
       this.extensionsBound = true;
-      this.applyEffectiveSystemPrompt();
       console.log(`[pi-web] session_start dispatched to extensions for session ${this.inner.sessionId}`);
     })().catch((err) => {
       this.extensionBindingError = err;
@@ -452,62 +476,18 @@ export class AgentSessionWrapper {
   }
 
   /**
-   * Effective system prompt precedence: exactSystemPrompt (chat-only mode)
-   * > custom replace > custom append > natural. The SDK recomputes the
-   * natural prompt into every prepared turn, so we never mutate its base —
-   * append composition stays idempotent across turns.
+   * The prompt the next request will use: exactSystemPrompt (chat-only mode)
+   * > custom replace > custom append > natural. Pi owns the transcript's system
+   * message; the forced text is applied per turn by the system-prompt
+   * extension (see lib/system-prompt-extension.ts).
    */
-  private computeEffectiveSystemPrompt(natural: string | undefined): string | undefined {
-    if (this.exactSystemPrompt) return this.exactSystemPrompt();
-    const custom = this.customSystemPrompt;
-    if (!custom) return natural;
-    if (custom.mode === "replace") return custom.text;
-    if (natural === undefined) return undefined;
-    return natural ? `${natural}\n\n${custom.text}` : custom.text;
-  }
-
-  private applyEffectiveSystemPrompt(): void {
-    const state = this.inner.agent?.state;
-    if (!state) return;
-    if (!this.exactSystemPrompt && !this.customSystemPrompt) return;
-    const current = state.systemPrompt;
-    // SDK rebuilds (e.g. setActiveToolsByName) overwrite state.systemPrompt
-    // with a fresh natural prompt. If state still holds our last effective
-    // value, keep the previously captured natural base instead.
-    if (current !== undefined && (this.lastEffectiveSystemPrompt === null || current !== this.lastEffectiveSystemPrompt)) {
-      this.lastNaturalSystemPrompt = current;
-    }
-    const effective = this.computeEffectiveSystemPrompt(this.lastNaturalSystemPrompt ?? current);
-    if (effective === undefined) return;
-    state.systemPrompt = effective;
-    this.lastEffectiveSystemPrompt = effective;
-  }
-
-  private installSystemPromptContinuation(): void {
-    // Always installed: even with no override active we capture the natural
-    // prompt each turn so a late-applied customization composes against a
-    // clean base.
-    const agent = this.inner.agent;
-    if (!agent) return;
-    const previous = agent.prepareNextTurnWithContext;
-    agent.prepareNextTurnWithContext = async (turn, signal) => {
-      const prepared = await previous?.(turn, signal);
-      const natural = (prepared?.context ?? turn.context).systemPrompt;
-      this.lastNaturalSystemPrompt = natural;
-      const effective = this.computeEffectiveSystemPrompt(natural);
-      if (effective === undefined || effective === natural) return prepared;
-      return {
-        ...prepared,
-        context: {
-          ...(prepared?.context ?? turn.context),
-          systemPrompt: effective,
-        },
-      };
-    };
+  getEffectiveSystemPrompt(): string {
+    const natural = this.inner.agent?.state?.systemPrompt ?? "";
+    return computeEffectiveSystemPrompt(natural, this.systemPromptState) ?? natural;
   }
 
   getCustomSystemPrompt(): SessionSystemPromptCustomization | null {
-    return this.customSystemPrompt;
+    return this.systemPromptState.custom;
   }
 
   /**
@@ -517,17 +497,14 @@ export class AgentSessionWrapper {
    * the entry is then written by the persist path below.
    */
   setCustomSystemPrompt(custom: SessionSystemPromptCustomization | null): void {
-    this.customSystemPrompt = custom;
+    this.systemPromptState.custom = custom;
     if (this.inner.sessionFile) {
       appendSessionSystemPrompt(this.inner.sessionManager, custom);
     }
-    this.lastEffectiveSystemPrompt = null;
-    this.applyEffectiveSystemPrompt();
   }
 
   setActiveToolSelection(toolNames: string[]): void {
     this.inner.setActiveToolsByName(withExtensionTools(this.inner, toolNames));
-    this.applyEffectiveSystemPrompt();
   }
 
   private emit(event: AgentEvent): void {
@@ -710,7 +687,6 @@ export class AgentSessionWrapper {
               // validation and extension preflight have accepted the submission.
               preflightResult: (success) => {
                 if (success) {
-                  this.applyEffectiveSystemPrompt();
                   acceptPreflight();
                 }
               },
@@ -789,7 +765,7 @@ export class AgentSessionWrapper {
           contextUsage: contextUsage
             ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
             : null,
-          systemPrompt: this.inner.agent.state?.systemPrompt ?? "",
+          systemPrompt: this.getEffectiveSystemPrompt(),
           thinkingLevel: this.inner.agent.state?.thinkingLevel ?? "off",
           extensionStatuses: this.getExtensionStatuses(),
           extensionWidgets: this.getExtensionWidgets(),
@@ -931,7 +907,7 @@ export class AgentSessionWrapper {
         if (!text) throw new Error("text is required");
         if (this.chatOnly) throw new Error("Chat-only sessions do not support system prompt overrides");
         this.setCustomSystemPrompt({ mode, text });
-        return { customSystemPrompt: this.customSystemPrompt };
+        return { customSystemPrompt: this.systemPromptState.custom };
       }
 
       case "set_label": {
@@ -1043,7 +1019,6 @@ export class AgentSessionWrapper {
         if (typeof this.inner.bindExtensions !== "function") {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
-        this.applyEffectiveSystemPrompt();
         invalidateModelsCache();
         return { success: true };
       }
@@ -1718,7 +1693,6 @@ export class AgentSessionWrapper {
             this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
           },
         });
-        this.applyEffectiveSystemPrompt();
       },
     };
   }
@@ -1770,9 +1744,11 @@ const SUBAGENT_CONTROLLER = createSubagentController({
   getSession: (sessionId) => getRegistry().get(sessionId),
   registerSession: (inner, options) => {
     const wrapper = new AgentSessionWrapper(inner, {
-      ...(options?.exactSystemPrompt !== undefined
-        ? { exactSystemPrompt: () => options.exactSystemPrompt! }
-        : {}),
+      ...(options?.systemPromptState
+        ? { systemPromptState: options.systemPromptState }
+        : options?.exactSystemPrompt !== undefined
+          ? { exactSystemPrompt: () => options.exactSystemPrompt! }
+          : {}),
       chatOnly: options?.chatOnly,
       suppressCompletionNotifications: true,
     });
@@ -2111,6 +2087,13 @@ export async function startRpcSession(
         ? undefined
         : projectTrustReloadOptions(sessionCwd, agentDir);
     const settingsManager = SettingsManager.create(sessionCwd, agentDir);
+    // Pi owns the transcript's system prompt (AgentState.systemPrompt is
+    // read-only since 0.87); pi-web forces its own text per turn through this
+    // extension, whose state is shared with the wrapper created below.
+    const systemPromptState: SystemPromptState = {
+      custom: chatOnly ? null : selectedSystemPrompt,
+    };
+    const systemPromptExtension = createSystemPromptExtension(systemPromptState);
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
       agentDir,
@@ -2129,11 +2112,16 @@ export async function startRpcSession(
                 }
               : {}),
             appendSystemPrompt: subagentResources.appendSystemPrompt,
+            extensionFactories: [systemPromptExtension],
           }
         : chatOnly
-          ? CHAT_ONLY_RESOURCE_LOADER_OPTIONS
+          ? {
+              ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS,
+              extensionFactories: [systemPromptExtension],
+            }
         : {
             extensionFactories: [
+              systemPromptExtension,
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
@@ -2209,9 +2197,9 @@ export async function startRpcSession(
         ? () => subagentResources.appendSystemPrompt[0] ?? ""
         : () => contextFilesSystemPrompt(inner.resourceLoader.getAgentsFiles().agentsFiles)
       : undefined;
+    systemPromptState.exact = exactSystemPrompt;
     const wrapper = new AgentSessionWrapper(inner, {
-      exactSystemPrompt,
-      customSystemPrompt: chatOnly ? null : selectedSystemPrompt,
+      systemPromptState,
       chatOnly,
       ephemeral: Boolean(options.ephemeral) && !sessionFile,
       onAgentRunComplete: (completedSessionId) => {

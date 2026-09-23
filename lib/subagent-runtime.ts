@@ -10,6 +10,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike } from "./pi-types";
 import {
+  createSystemPromptExtension,
+  type SystemPromptState,
+} from "./system-prompt-extension";
+import {
   subagentFinalText,
   subagentToolDetails,
   type StartSubagentRequest,
@@ -47,7 +51,7 @@ export interface SubagentRuntimeDependencies {
   getSession(sessionId: string): HostSession | undefined;
   registerSession(
     inner: AgentSessionLike,
-    options?: { exactSystemPrompt?: string; chatOnly?: boolean },
+    options?: { exactSystemPrompt?: string; chatOnly?: boolean; systemPromptState?: SystemPromptState },
   ): void;
   reopenSession(sessionId: string, sessionFile: string): Promise<HostSession>;
   resolveSessionPath(sessionId: string): Promise<string | null>;
@@ -174,6 +178,10 @@ export function createSubagentController(
       });
       const { chatOnly, appendSystemPrompt, delegatedTask } = promptPlan;
       if (!chatOnly) initTheme();
+      // Subagents build their own services, so their prompt state lives here and
+      // is handed to the wrapper registered below.
+      const systemPromptState: SystemPromptState = { custom: null };
+      const systemPromptExtension = createSystemPromptExtension(systemPromptState);
       const services = await createAgentSessionServices({
         cwd: parent.cwd,
         agentDir,
@@ -192,6 +200,7 @@ export function createSubagentController(
               }
             : {}),
           appendSystemPrompt,
+          extensionFactories: [systemPromptExtension],
         },
         ...((profile.loadExtensions || profile.loadSkills)
           ? { resourceLoaderReloadOptions: projectTrustReloadOptions(parent.cwd, agentDir) }
@@ -239,12 +248,10 @@ export function createSubagentController(
         tools: activeTools,
         excludeTools: [...SUBAGENT_CONTROL_TOOL_NAMES],
       });
-      dependencies.registerSession(inner, {
-        ...(promptPlan.exactSystemPrompt !== undefined
-          ? { exactSystemPrompt: promptPlan.exactSystemPrompt }
-          : {}),
-        chatOnly,
-      });
+      systemPromptState.exact = promptPlan.exactSystemPrompt !== undefined
+        ? () => promptPlan.exactSystemPrompt!
+        : undefined;
+      dependencies.registerSession(inner, { systemPromptState, chatOnly });
 
       const initialRun: SubagentRunInfo = {
         sessionId: inner.sessionId,
@@ -293,18 +300,7 @@ export function createSubagentController(
       stored.completion = (async () => {
         let result: SubagentRunInfo;
         try {
-          await inner.prompt(delegatedTask, {
-            source: "rpc",
-            ...(chatOnly
-              ? {
-                  preflightResult: (success: boolean) => {
-                    if (success && inner.agent.state) {
-                      inner.agent.state.systemPrompt = profile.systemPrompt;
-                    }
-                  },
-                }
-              : {}),
-          });
+          await inner.prompt(delegatedTask, { source: "rpc" });
           const text = inner.getLastAssistantText()?.trim();
           const aborted = stored.abortRequested && !maxTurnsReached;
           result = {

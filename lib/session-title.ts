@@ -213,7 +213,6 @@ export async function generateSessionTitle(source: AgentSession): Promise<Genera
   await sourceAgent.waitForIdle();
 
   const sanitizedMessages = sanitizeTitleMessages(sourceAgent.state.messages);
-  const historyLength = sanitizedMessages.length;
   if (!sanitizedMessages.some(
     (message) => message.role === "user" || message.role === "compactionSummary",
   )) {
@@ -228,6 +227,10 @@ export async function generateSessionTitle(source: AgentSession): Promise<Genera
   }
 
   const temporaryAgent = new Agent(options);
+  // Measure the transcript after construction: Pi seeds the leading system
+  // message from `initialState.systemPrompt`, so slicing by the sanitized
+  // length would start one message early.
+  const historyLength = temporaryAgent.state.messages.length;
   const runPromise = continuesFromTrailingUser
     ? temporaryAgent.continue()
     : temporaryAgent.prompt(TITLE_PROMPT);

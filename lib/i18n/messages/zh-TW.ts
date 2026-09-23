@@ -162,6 +162,7 @@ export const zhTWLocale: LocalePlugin = {
     "agents.scope.project": "專案",
     "agents.overridden": "已被覆寫",
     "subagent.open": "開啟子代理工作階段",
+    "subagent.readOnly": "子代理工作階段 · 唯讀（由主工作階段控制）",
     "agentSwitcher.title": "Agents",
     "agentSwitcher.main": "主 Agent",
     "agentSwitcher.subagent": "子 Agent",

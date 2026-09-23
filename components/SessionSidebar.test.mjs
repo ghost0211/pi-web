@@ -94,7 +94,8 @@ test("manual and lifecycle refreshes bypass the server session-list cache", () =
 
 test("does not expose disk-backed actions for transient sessions", () => {
   assert.match(sessionItemSource, /if \(session\.transient\) return;/);
-  assert.match(sessionItemSource, /\{hovered && !session\.transient && \(/);
+  assert.match(sessionItemSource, /\{!session\.transient && \(/);
+  assert.match(sessionItemSource, /className="session-row-actions"/);
 });
 
 test("hides subagent rows and aggregates their state into the main session row", () => {

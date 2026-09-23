@@ -2306,6 +2306,14 @@ export function AppShell() {
               hideInlineButton
             />
           )}
+          {/* Tap outside a mobile top panel to return to the conversation. */}
+          {isMobile && activeTopPanel && topPanelPos && (
+            <div
+              aria-hidden="true"
+              onClick={() => setActiveTopPanel(null)}
+              style={{ position: "fixed", inset: 0, zIndex: 499, background: "rgba(0,0,0,0.18)" }}
+            />
+          )}
           {/* Top panel dropdown — shared, only one active at a time */}
           {activeTopPanel && topPanelPos && (
             <div style={{
@@ -2313,7 +2321,7 @@ export function AppShell() {
               top: topPanelPos.top,
               left: topPanelPos.left,
               width: topPanelPos.width,
-              maxHeight: `calc(100dvh - ${topPanelPos.top}px)`,
+              maxHeight: `calc(var(--app-viewport-height, 100dvh) - ${topPanelPos.top}px)`,
               overflowY: "auto",
               zIndex: 500,
             }}>
@@ -2484,6 +2492,7 @@ export function AppShell() {
                       return (
                         <button
                           type="button"
+                          className="session-info-copy-button"
                           title={copied ? translate("session.copied") : translate(copyTitleKey[field])}
                           onClick={() => handleCopySessionField(field, value)}
                           style={{
@@ -2754,6 +2763,7 @@ export function AppShell() {
             <div style={{ width: "100%", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
               <ChatWindow
                 key={activeFileTab.subagentSessionId}
+                readOnly
                 session={activeFileTab.subagentSession ?? {
                   id: activeFileTab.subagentSessionId,
                   path: "",

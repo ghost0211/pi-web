@@ -162,6 +162,7 @@ export const zhCNLocale: LocalePlugin = {
     "agents.scope.project": "项目",
     "agents.overridden": "被覆盖",
     "subagent.open": "打开子代理会话",
+    "subagent.readOnly": "子代理会话 · 只读（由主会话控制）",
     "agentSwitcher.title": "Agents",
     "agentSwitcher.main": "主 Agent",
     "agentSwitcher.subagent": "子 Agent",

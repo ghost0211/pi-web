@@ -32,10 +32,8 @@ test("shows schema fields and metadata in the detail form", () => {
   assert.match(panelSource, /selectedTool\.promptGuidelines/);
 });
 
-test("preserves the two-column layout on narrow screens", () => {
-  assert.match(
-    panelSource,
-    /@media \(max-width: 640px\)[\s\S]*?\.tool-definitions-panel \{[\s\S]*?grid-template-columns: 112px minmax\(0, 1fr\)/,
-  );
-  assert.doesNotMatch(panelSource, /@media \(max-width: 640px\)[\s\S]*?\.tool-definitions-panel \{[\s\S]*?display: block/);
+test("uses horizontally scrollable tool tabs above full-width details on phones", () => {
+  assert.match(panelSource, /@media \(max-width: 640px\)[\s\S]*?grid-template-rows: auto minmax\(0, 1fr\)/);
+  assert.match(panelSource, /\.tool-definitions-list \{[\s\S]*?overflow-x: auto;/);
+  assert.match(panelSource, /\.tool-definition-field \{\s*grid-template-columns: minmax\(0, 1fr\);/);
 });

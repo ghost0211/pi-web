@@ -162,6 +162,7 @@ export const enLocale: LocalePlugin = {
     "agents.scope.project": "project",
     "agents.overridden": "Overridden",
     "subagent.open": "Open sub-agent session",
+    "subagent.readOnly": "Sub-agent session · Read-only (controlled by parent agent)",
     "agentSwitcher.title": "Agents",
     "agentSwitcher.main": "Main agent",
     "agentSwitcher.subagent": "Sub-agent",

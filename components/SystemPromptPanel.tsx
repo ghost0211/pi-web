@@ -276,6 +276,18 @@ export function SystemPromptPanel({ loading, prompt, custom, onSave, translate }
           overflow-wrap: anywhere;
           white-space: pre-wrap;
         }
+        @media (max-width: 640px) {
+          .system-prompt-panel {
+            height: min(600px, calc(var(--app-viewport-height, 100dvh) - 56px));
+            min-height: 0;
+          }
+          .system-prompt-custom-header, .system-prompt-custom-actions {
+            flex-wrap: wrap;
+          }
+          .system-prompt-custom-button, .system-prompt-custom-select {
+            min-height: 40px;
+          }
+        }
         .system-prompt-empty {
           padding: 10px 0;
           color: var(--text-muted);

@@ -2081,6 +2081,7 @@ function SessionItem({
 
   return (
     <div
+      className="session-row"
       onClick={confirmDelete || renaming ? undefined : onClick}
       onContextMenu={confirmDelete || renaming ? undefined : handleContextMenu}
       onMouseEnter={() => setHovered(true)}
@@ -2227,9 +2228,9 @@ function SessionItem({
             </button>
           )}
 
-          {/* Action buttons — shown on hover */}
-          {hovered && !session.transient && (
-            <div style={{ display: "flex", gap: 3, flexShrink: 0 }}>
+          {/* Hover on desktop, always available to touch users. */}
+          {!session.transient && (
+            <div className="session-row-actions" style={{ gap: 3, flexShrink: 0 }}>
               <button
                 onClick={startRename}
                 title={t("sidebar.rename")}

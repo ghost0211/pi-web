@@ -356,17 +356,34 @@ export function ToolDefinitionsPanel({ loading, tools, translate }: Props) {
         }
         @media (max-width: 640px) {
           .tool-definitions-panel {
-            grid-template-columns: 112px minmax(0, 1fr);
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: auto minmax(0, 1fr);
+            height: min(600px, calc(var(--app-viewport-height, 100dvh) - 56px));
+            min-height: 0;
+          }
+          .tool-definitions-sidebar {
+            border-right: 0;
+            border-bottom: 1px solid var(--border);
+          }
+          .tool-definitions-list {
+            display: flex;
+            flex: none;
+            overflow-x: auto;
+            overflow-y: hidden;
           }
           .tool-definitions-item {
-            padding: 8px 10px;
+            flex: none;
+            width: auto;
+            min-height: 44px;
+            padding: 8px 12px;
+            border-bottom: 0;
           }
           .tool-definition-scroll {
             padding: 12px;
           }
           .tool-definition-field {
-            grid-template-columns: minmax(74px, 0.7fr) minmax(0, 1.3fr);
-            gap: 9px;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 4px;
           }
         }
       `}</style>

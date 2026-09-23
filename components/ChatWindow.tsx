@@ -35,6 +35,8 @@ import {
 interface Props {
   session: SessionInfo | null;
   sessionRunning?: boolean;
+  /** Sub-agent tabs are observational: only their parent agent can send commands. */
+  readOnly?: boolean;
   newSessionCwd: string | null;
   newSessionDraftKey: string | null;
   onAgentEnd?: () => void;
@@ -200,7 +202,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
+export function ChatWindow({ session, sessionRunning, readOnly = false, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
@@ -216,7 +218,8 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [projectMenuOpen]);
-  const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
+  const isReadOnlySubagent = readOnly || session?.relation?.kind === "subagent";
+  const completionNotificationsEnabled = !isReadOnlySubagent;
 
   // Wrap onAgentEnd to play the completion sound. This is more reliable than
   // wrapping handleAgentEventRef because useAgentSession overwrites that ref
@@ -276,8 +279,9 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
 
   // Register the abort handler for the global Esc shortcut
   useEffect(() => {
-    registerAbortHandler(sessionBusy ? handleAbort : null);
-  }, [sessionBusy, handleAbort]);
+    // A sub-agent pane must not replace the main conversation's Esc handler.
+    if (!isReadOnlySubagent) registerAbortHandler(sessionBusy ? handleAbort : null);
+  }, [sessionBusy, handleAbort, isReadOnlySubagent]);
 
   // --- Lazy-load historical messages ---
   // Only render the last N messages initially. When the user scrolls to the
@@ -371,11 +375,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
   useEffect(() => () => { onContextUsageChange?.(null); }, [onContextUsageChange]);
 
   const onDrop = useCallback((files: File[]) => {
-    chatInputRef?.current?.addFiles(files);
-  }, [chatInputRef]);
+    if (!isReadOnlySubagent) chatInputRef?.current?.addFiles(files);
+  }, [chatInputRef, isReadOnlySubagent]);
   const onDesktopPathDrop = useCallback((paths: string[]) => {
-    chatInputRef?.current?.addLocalFiles(paths);
-  }, [chatInputRef]);
+    if (!isReadOnlySubagent) chatInputRef?.current?.addLocalFiles(paths);
+  }, [chatInputRef, isReadOnlySubagent]);
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop, onDesktopPathDrop);
 
@@ -527,6 +531,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
+  const readOnlyNotice = (
+    <div role="status" data-subagent-read-only="true" style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
+      {t("subagent.readOnly")}
+    </div>
+  );
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
@@ -597,10 +606,10 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
     <div
       className="relative flex h-full min-w-0 flex-col overflow-hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragEnter={isReadOnlySubagent ? undefined : handleDragEnter}
+      onDragOver={isReadOnlySubagent ? undefined : handleDragOver}
+      onDragLeave={isReadOnlySubagent ? undefined : handleDragLeave}
+      onDrop={isReadOnlySubagent ? undefined : handleDrop}
     >
       {isDragOver && (
         <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
@@ -634,14 +643,14 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
         </div>
       )}
 
-      {extensionDialog && (
+      {!isReadOnlySubagent && extensionDialog && (
         <ExtensionDialog
           request={extensionDialog}
           onRespond={respondToExtensionUi}
         />
       )}
 
-      {extensionCustomUi && (
+      {!isReadOnlySubagent && extensionCustomUi && (
         <ExtensionCustomPanel
           request={extensionCustomUi}
           onInput={sendExtensionCustomInput}
@@ -675,9 +684,9 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
               </p>
             </div>
 
-            {chatInputElement}
+            {isReadOnlySubagent ? readOnlyNotice : chatInputElement}
 
-            {messageCwd && (
+            {messageCwd && !isReadOnlySubagent && (
               <div ref={projectMenuRef} className="relative mx-4 -mt-2">
                 <button
                   type="button"
@@ -747,7 +756,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
               />
             )}
 
-            <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />
+            {!isReadOnlySubagent && <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />}
           </div>
         </div>
       ) : (
@@ -832,11 +841,11 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
                     onOpenFile={onOpenFile}
                     onOpenSession={onOpenSession}
                     entryId={entryIds[idx]}
-                    onFork={sessionBusy || isNew ? undefined : handleFork}
+                    onFork={isReadOnlySubagent || sessionBusy || isNew ? undefined : handleFork}
                     forking={forkingEntryId === entryIds[idx]}
-                    onNavigate={sessionBusy ? undefined : handleNavigate}
-                    prevAssistantEntryId={sessionBusy ? undefined : prevAssistantEntryId}
-                    onEditContent={handleEditContent}
+                    onNavigate={isReadOnlySubagent || sessionBusy ? undefined : handleNavigate}
+                    prevAssistantEntryId={isReadOnlySubagent || sessionBusy ? undefined : prevAssistantEntryId}
+                    onEditContent={isReadOnlySubagent ? undefined : handleEditContent}
                     showTimestamp={showTimestamp}
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
                     sessionId={session?.id ?? sessionIdRef.current ?? undefined}
@@ -1012,8 +1021,12 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
           onOpenSession={onOpenSession}
           fallbackPlan={data?.history?.latestPlan ?? data?.context?.latestPlan}
         />
-        {chatInputElement}
-        <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />
+        {isReadOnlySubagent ? readOnlyNotice : (
+          <>
+            {chatInputElement}
+            <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />
+          </>
+        )}
       </div>
       </>
       )}
@@ -1351,7 +1364,7 @@ function ExtensionCustomPanel({
         style={{
           position: "relative",
           width: "min(920px, 100%)",
-          maxHeight: "min(760px, calc(100vh - 40px))",
+          maxHeight: "min(760px, calc(var(--app-viewport-height, 100dvh) - 40px))",
           border: "1px solid var(--border)",
           borderRadius: 8,
           background: "var(--bg)",
@@ -1429,7 +1442,7 @@ function ExtensionCustomPanel({
           style={{
             margin: 0,
             padding: 14,
-            maxHeight: "calc(min(760px, 100vh - 40px) - 48px)",
+            maxHeight: "calc(min(760px, var(--app-viewport-height, 100dvh) - 40px) - 48px)",
             overflow: "auto",
             background: "var(--bg-panel)",
             color: "var(--text)",

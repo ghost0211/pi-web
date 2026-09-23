@@ -2460,11 +2460,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                             atItemRefs.current[index] = node;
                           }}
                           type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            applyAtCompletion(entry);
-                          }}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => applyAtCompletion(entry)}
                           onMouseEnter={() => setAtActiveIndex(index)}
+                          className="file-mention-option"
                           style={{
                             width: "100%",
                             display: "flex",
@@ -2611,7 +2610,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <line x1="12" y1="4" x2="12" y2="20" /><line x1="4" y1="12" x2="20" y2="12" />
               </svg>
             </button>
-            {!isMobile && !isStreaming && onToolPresetChange && (
+            {!isStreaming && onToolPresetChange && (
               <div ref={toolDropdownRef} style={{ position: "relative" }}>
                 <button
                   type="button"
@@ -2812,13 +2811,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               ...(isMobile ? {
                 position: "absolute",
                 right: 0,
-                bottom: 0,
+                bottom: "calc(100% + 8px)",
                 zIndex: 60,
-                padding: 1,
-                width: "max-content",
-                maxWidth: "calc(100vw - 32px)",
-                flexWrap: "nowrap",
-                justifyContent: "flex-end",
+                padding: 8,
+                width: "min(340px, calc(100vw - 32px))",
+                flexWrap: "wrap",
+                justifyContent: "flex-start",
+                gap: 6,
                 border: "1px solid color-mix(in srgb, var(--border) 72%, transparent)",
                 borderRadius: 10,
                 background: "color-mix(in srgb, var(--bg-panel) 92%, var(--bg))",
@@ -2827,7 +2826,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               } : null),
             }}>
             <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={model} modelList={modelList} compactResult={compactResult} />
-            {!isMobile && !isStreaming && onEphemeralChange && (
+            {!isStreaming && onEphemeralChange && (
               <button
                 type="button"
                 onClick={() => onEphemeralChange(!ephemeral)}
@@ -3040,7 +3039,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </button>
             )}
 
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: 4 }}>
+            {isMobile && controlsMenuOpen && (
+              <button
+                type="button"
+                title={t("chat.collapseControls")}
+                aria-label={t("chat.collapseControls")}
+                onClick={() => {
+                  setToolDropdownOpen(false);
+                  setThinkingDropdownOpen(false);
+                  setControlsMenuOpen(false);
+                }}
+                style={{ marginLeft: "auto", width: 32, height: 32, border: "none", borderRadius: 8, background: "var(--bg-hover)", color: "var(--text)", cursor: "pointer" }}
+              >×</button>
+            )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: isMobile ? 0 : 4 }}>
               {isStreaming ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   {onSteer && canQueueStreamingMessage && (
@@ -3140,47 +3153,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   </svg>
                 </button>
               )}
-            </div>
-            {isMobile && controlsMenuOpen && (
-              <button
-                type="button"
-                 title={t("chat.collapseControls")}
-                 aria-label={t("chat.collapseControls")}
-                aria-expanded={true}
-                onClick={() => {
-                  setToolDropdownOpen(false);
-                  setThinkingDropdownOpen(false);
-                  setControlsMenuOpen(false);
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 36,
-                  height: 32,
-                  padding: 0,
-                  marginLeft: 0,
-                  background: "var(--bg-hover)",
-                  border: "none",
-                  borderLeft: "1px solid color-mix(in srgb, var(--border) 72%, transparent)",
-                  borderRadius: "0 9px 9px 0",
-                  color: "var(--text)",
-                  cursor: "pointer",
-                  transition: "background 0.12s, color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-selected)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            )}
             </div>
           </div>
 

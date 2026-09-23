@@ -383,7 +383,8 @@ test("suppresses sounds and browser attention for the active subagent session", 
     appShellSource.indexOf("  const handleAutoName = useCallback"),
   );
 
-  assert.match(chatWindowSource, /completionNotificationsEnabled = session\?\.relation\?\.kind !== "subagent"/);
+  assert.match(chatWindowSource, /isReadOnlySubagent = readOnly \|\| session\?\.relation\?\.kind === "subagent"/);
+  assert.match(chatWindowSource, /completionNotificationsEnabled = !isReadOnlySubagent/);
   assert.match(chatWindowSource, /completionNotificationsEnabled && soundEnabledRef\.current/);
   assert.match(chatWindowSource, /!completionNotificationsEnabled[\s\S]*?!extensionDialog/);
   assert.match(completionSource, /selectedSession\?\.relation\?\.kind === "subagent"\) return/);

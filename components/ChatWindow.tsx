@@ -241,6 +241,7 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
 
   const {
     loading, error, messages, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
+    turnIndex, ensureEntryLoaded,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
@@ -406,11 +407,16 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
   }, [messages]);
   const messageRefs = useMessageRefs(visibleMessages.length);
   const isMobile = useIsMobile();
-  // Expand the rendered-message window so minimap jump targets outside the
-  // virtualized slice become measurable, then the pending jump re-runs.
-  const revealHistoryForMinimap = useCallback(() => {
+  // Jump target for the turn rail: page history in until the turn renders,
+  // then expand the rendered window so the rail can measure and scroll to it.
+  const revealTurnForMinimap = useCallback(async (entryId: string): Promise<boolean> => {
+    const sid = session?.id ?? sessionIdRef.current;
+    if (!sid) return false;
+    const loaded = await ensureEntryLoaded(sid, entryId);
+    if (!loaded) return false;
     setVisibleCount((current) => Math.max(current, messages.length * 2));
-  }, [messages.length]);
+    return true;
+  }, [ensureEntryLoaded, messages.length, session?.id, sessionIdRef]);
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
   const hasStreamingContent = Boolean(streamState.streamingMessage?.content.length);
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
@@ -750,10 +756,12 @@ export function ChatWindow({ session, sessionRunning, newSessionCwd, newSessionD
         {isMobile ? null : (
           <ChatMinimap
             messages={messages}
+            entryIds={entryIds}
+            turnIndex={turnIndex}
             streamingMessage={streamState.streamingMessage}
             scrollContainer={scrollContainerRef}
             messageRefs={messageRefs}
-            onRevealHistory={revealHistoryForMinimap}
+            onRevealTurn={revealTurnForMinimap}
           />
         )}
         <div ref={scrollContainerRef} className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pt-4 [scrollbar-width:none]">

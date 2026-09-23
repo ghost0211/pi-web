@@ -26,6 +26,7 @@ import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { calculateActiveContextTokens } from "@/lib/context-tokens";
 import { resolveModelContextWindow } from "@/lib/context-window";
 import { userMessageKey } from "@/lib/prompt-recovery";
+import type { TurnPreview } from "@/lib/turn-index";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
 import {
@@ -49,6 +50,8 @@ export interface SessionData {
   context: SessionContext;
   /** Raw active-branch messages for display; absent on older servers. */
   history?: SessionHistory;
+  /** Whole-branch turn index for the turn rail; absent on older servers. */
+  turnIndex?: TurnPreview[];
   /** Cumulative usage over ALL session-file entries (incl. compacted history). */
   stats?: SessionFileStats;
 }
@@ -291,6 +294,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [entryIds, setEntryIds] = useState<string[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [hasEarlierMessages, setHasEarlierMessages] = useState(false);
+  /** Whole-branch turn index (server-provided) behind the chat's turn rail. */
+  const [turnIndex, setTurnIndex] = useState<TurnPreview[]>([]);
   // Navigation target for "Edit from here" on the first message (#628).
   const [firstEntryParentId, setFirstEntryParentId] = useState<string | null>(null);
   const [streamState, dispatch] = useReducer(streamReducer, INITIAL_STREAMING_STATE);
@@ -349,6 +354,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const eventStreamGraceGenerationRef = useRef(0);
   const eventStreamGraceActiveRef = useRef(false);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
+  // Latest loaded-page bookkeeping, read inside the paging loop below (React
+  // state updates are not visible to a callback that is already in flight).
+  const entryIdsRef = useRef<string[]>(entryIds);
+  entryIdsRef.current = entryIds;
+  const historyCursorRef = useRef<string | null>(historyCursor);
+  historyCursorRef.current = historyCursor;
+  const hasEarlierMessagesRef = useRef(hasEarlierMessages);
+  hasEarlierMessagesRef.current = hasEarlierMessages;
+  const activeLeafIdRef = useRef<string | null>(activeLeafId);
+  activeLeafIdRef.current = activeLeafId;
   const sessionPropIdRef = useRef<string | null>(session?.id ?? null);
   const sessionRunningRef = useRef(Boolean(sessionRunning));
   const agentRunningRef = useRef(false);
@@ -544,6 +559,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setHistoryCursor(persistedHistory.oldestEntryId);
       setHasEarlierMessages(persistedHistory.hasMore);
       setFirstEntryParentId(persistedHistory.firstEntryParentId ?? null);
+      setTurnIndex(d.turnIndex ?? []);
       if (d.toolNames !== undefined) {
         const matched = matchToolPresetOrCustom(d.toolNames);
         setToolPresetState(matched);
@@ -611,9 +627,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const url = `/api/sessions/${encodeURIComponent(sid)}/context?${params}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const d = await res.json() as { context: SessionContext; history?: SessionHistory };
-      if (sessionIdRef.current !== sid) return;
+      const d = await res.json() as { context: SessionContext; history?: SessionHistory; turnIndex?: TurnPreview[] };
+      if (sessionIdRef.current !== sid) return null;
       const page = d.history ?? d.context;
+      if (d.turnIndex) setTurnIndex(d.turnIndex);
       setHistoryCursor(page.oldestEntryId);
       setHasEarlierMessages(page.hasMore);
       setFirstEntryParentId(page.firstEntryParentId ?? null);
@@ -641,10 +658,32 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setMessages(page.messages);
         setEntryIds(page.entryIds ?? []);
       }
+      return page;
     } catch (e) {
       console.error("Failed to load context:", e);
+      return null;
     }
   }, []);
+
+  /**
+   * Pages history upward until `entryId` is loaded, so the turn rail can jump
+   * to a turn the client never fetched. Bounded — each page is `tail` entries —
+   * and returns false when the entry cannot be reached.
+   */
+  const ensureEntryLoaded = useCallback(async (sid: string, entryId: string): Promise<boolean> => {
+    if (entryIdsRef.current.includes(entryId)) return true;
+    let cursor = historyCursorRef.current;
+    let hasMore = hasEarlierMessagesRef.current;
+    const maxPages = 60;
+    for (let page = 0; page < maxPages && hasMore && cursor; page += 1) {
+      const loaded = await loadContext(sid, activeLeafIdRef.current, cursor);
+      if (!loaded) return false;
+      if (loaded.entryIds.includes(entryId)) return true;
+      cursor = loaded.oldestEntryId;
+      hasMore = loaded.hasMore;
+    }
+    return entryIdsRef.current.includes(entryId);
+  }, [loadContext]);
 
   const loadTools = useCallback(async (sid: string) => {
     try {
@@ -2267,6 +2306,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   return {
     // State
     data, loading, error, activeLeafId, messages, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
+    turnIndex, ensureEntryLoaded,
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats,

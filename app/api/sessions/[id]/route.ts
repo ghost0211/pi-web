@@ -10,6 +10,7 @@ import {
   invalidateSessionListCache,
   buildSessionContext,
   buildSessionHistory,
+  buildSessionTurnIndex,
   readSessionHeader,
 } from "@/lib/session-reader";
 import { sessionPathKey } from "@/lib/session-path";
@@ -54,6 +55,10 @@ export async function GET(
     // active-branch history. The model uses `context`; the UI renders `history`.
     const context = buildSessionContext(entries as never, leafId, contextOptions);
     const history = buildSessionHistory(entries as never, leafId, contextOptions);
+    // Whole-branch turn index for the chat's turn rail: the client only
+    // receives `history`'s page, so the rail needs the full turn list to show
+    // where every turn sits before the user scrolls back.
+    const turnIndex = buildSessionTurnIndex(entries as never, leafId);
     const totalActiveMs = computeSessionTotalActiveMs(entries);
     // Cumulative usage over ALL entries, including history compacted away —
     // the same aggregation the SDK's getSessionStats() uses. Lets the client
@@ -105,6 +110,7 @@ export async function GET(
       tree,
       context,
       history,
+      turnIndex,
       stats,
       totalActiveMs,
       ...(toolNames !== undefined ? { toolNames } : {}),

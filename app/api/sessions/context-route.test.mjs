@@ -23,7 +23,10 @@ test("context route parses ?tail and ?before, excluding the boundary on paging",
   assert.match(routeSrc, /const contextOptions = \{[^}]*excludeLeaf: Boolean\(before\)/);
   assert.match(routeSrc, /buildSessionContext\(entries, targetLeafId, contextOptions\)/);
   assert.match(routeSrc, /buildSessionHistory\(entries, targetLeafId, contextOptions\)/);
-  assert.match(routeSrc, /NextResponse\.json\(\{ context, history, tail,/);
+  // The rail needs the whole-branch turn index on the first page only; paging
+  // upward must not re-send it.
+  assert.match(routeSrc, /const turnIndex = before\s*\?\s*undefined\s*:\s*buildSessionTurnIndex\(entries, targetLeafId\)/);
+  assert.match(routeSrc, /NextResponse\.json\(\{\s*context,\s*history,\s*\.\.\.\(turnIndex \? \{ turnIndex \} : \{\}\),\s*tail,/);
 });
 
 test("context route: ?before pages upward without duplicating the boundary", () => {

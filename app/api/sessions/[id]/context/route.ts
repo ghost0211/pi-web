@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { resolveSessionPath, buildSessionContext, buildSessionHistory } from "@/lib/session-reader";
+import { resolveSessionPath, buildSessionContext, buildSessionHistory, buildSessionTurnIndex } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
 
 export async function GET(
@@ -41,8 +41,19 @@ export async function GET(
     };
     const context = buildSessionContext(entries, targetLeafId, contextOptions);
     const history = buildSessionHistory(entries, targetLeafId, contextOptions);
+    // Paging upward keeps the same turn index; only the first page (and a leaf
+    // switch) needs a fresh one for the turn rail.
+    const turnIndex = before
+      ? undefined
+      : buildSessionTurnIndex(entries, targetLeafId);
 
-    return NextResponse.json({ context, history, tail, before: before ?? null });
+    return NextResponse.json({
+      context,
+      history,
+      ...(turnIndex ? { turnIndex } : {}),
+      tail,
+      before: before ?? null,
+    });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

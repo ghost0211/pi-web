@@ -15,6 +15,7 @@ import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "./tool-res
 import { resolveProject, type ProjectInfo } from "./worktree";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
 import { PLAN_TOOL_NAMES, planItemsFromInput, type PlanItem } from "./plan-items";
+import { buildTurnPreviews, type TurnPreview } from "./turn-index";
 
 export { getAgentDir };
 
@@ -521,6 +522,68 @@ export function buildSessionContext(
     latestPlan: findLatestActivePlan(entries, leafId ?? null),
     ...getSessionSettings(entries, leafId),
   };
+}
+
+/**
+ * Cheap stand-in for `entryToUiMessage` for the turn index. It only needs
+ * prompt and answer text, while the full conversion (tool-call normalization,
+ * base64 media rewriting) costs seconds on sessions with large attachments.
+ * Roles that cannot anchor a turn (tool results, bash) are skipped: they never
+ * change the turn list.
+ */
+function turnIndexMessage(entry: SessionEntry): Partial<AgentMessage> | null {
+  switch (entry.type) {
+    case "message": {
+      const message = entry.message as { role?: string; content?: unknown };
+      if (message.role !== "user" && message.role !== "assistant") return null;
+      const content = message.role === "assistant" && typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : message.content;
+      return { role: message.role, content } as Partial<AgentMessage>;
+    }
+    case "compaction":
+      return {
+        role: "custom",
+        customType: "compaction",
+        content: entry.summary,
+      } as Partial<AgentMessage>;
+    case "branch_summary":
+      if (!entry.summary) return null;
+      return {
+        role: "user",
+        content: `*The conversation briefly explored another branch and returned with this summary:*\n\n${entry.summary}`,
+      } as Partial<AgentMessage>;
+    case "custom_message":
+      return {
+        role: "custom",
+        customType: entry.customType,
+        content: entry.content,
+      } as Partial<AgentMessage>;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Builds the whole-branch turn index behind the chat's turn rail. The client
+ * only lazy-loads a page of history, so without this the rail would know
+ * nothing about earlier turns until the user scrolled back to load them.
+ */
+export function buildSessionTurnIndex(
+  entries: SessionEntry[],
+  leafId?: string | null,
+): TurnPreview[] {
+  if (leafId === null) return [];
+  const branch = sliceActiveBranch(entries, leafId ?? null, Number.MAX_SAFE_INTEGER);
+  const messages: Partial<AgentMessage>[] = [];
+  const entryIds: string[] = [];
+  for (const entry of branch) {
+    const message = turnIndexMessage(entry);
+    if (!message) continue;
+    messages.push(message);
+    entryIds.push(entry.id);
+  }
+  return buildTurnPreviews(messages, entryIds);
 }
 
 /**

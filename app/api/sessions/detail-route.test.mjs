@@ -25,7 +25,10 @@ test("detail route parses ?tail: default 50, NaN-safe, capped at 1000", () => {
   assert.match(routeSrc, /buildSessionHistory\(entries as never, leafId, contextOptions\)/);
   assert.match(routeSrc, /computeSessionStats\(entries as unknown as SessionEntry\[\]\)/);
   assert.match(routeSrc, /messageCount: stats\.totalMessages/);
-  assert.match(routeSrc, /context,\s*history,\s*stats,/);
+  // The turn rail renders the whole-branch turn index, so the detail response
+  // must carry it alongside the bounded history window.
+  assert.match(routeSrc, /buildSessionTurnIndex\(entries as never, leafId\)/);
+  assert.match(routeSrc, /context,\s*history,\s*turnIndex,\s*stats,/);
 });
 
 test("detail route bounds history to the tail window (default 50 over 5000 entries)", () => {

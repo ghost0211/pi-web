@@ -171,6 +171,13 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - While a run is active, `useAgentSession` periodically calls `GET /api/agent/[id]` and also reconciles on `visibilitychange`/`online`. This fixes missed terminal events from background tabs or half-open connections.
 - Prompt runs use a monotonic run id; late SSE or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
 
+### Chat turn rail
+- The rail renders the **whole-branch turn index**, not the loaded window: `GET /api/sessions/[id]` (and the first page of `.../context`) returns `turnIndex` built by `buildSessionTurnIndex()` in `lib/session-reader.ts`. Without it the rail only knew about the turns the client had lazy-loaded, so switching to a session showed just the last one or two.
+- `buildSessionTurnIndex()` must stay cheap: it uses its own text-only extractor instead of `entryToUiMessage()`, which normalizes tool calls and rewrites base64 media (seconds on sessions with large attachments). Roles that cannot anchor a turn are skipped, which keeps the turn list identical — verified against the full conversion path over real sessions.
+- Turn grouping, preview text and answer digests live in `lib/turn-index.ts` and are shared by the server index and the client's window-derived fallback (new sessions, and turns added after the index was fetched). A window that starts mid-turn opens a `head` preview that is never appended to the index.
+- Measured scroll offsets map onto the index by **suffix alignment** (`mapTurnOffsets`): loaded history is always a contiguous suffix of the active branch, so the window's last turn is the index's last turn. This avoids entry-id lookups and keeps optimistic (unpersisted) turns measurable.
+- Clicking a turn outside the loaded window calls `ensureEntryLoaded()` (`hooks/useAgentSession.ts`), which pages `.../context?before=` until the entry is present; `ChatMinimap` then scrolls once the turn measures.
+
 ### Worktrees and project grouping
 - `lib/worktree.ts` resolves linked worktree top-levels back to the main repo `projectRoot`; `listAllSessions()` attaches that to each `SessionInfo` so all worktrees for one repo are grouped together in the sidebar.
 - Worktree operations are served by `/api/worktrees` and guarded by the same allowed-root rules as `/api/files`.

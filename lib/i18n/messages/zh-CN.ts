@@ -21,7 +21,6 @@ export const zhCNLocale: LocalePlugin = {
     "about.appEditionWeb": "网页版",
     "about.version": "版本",
     "about.currentVersion": "当前版本",
-    "about.latestVersion": "最新版本",
     "about.piAgentKernel": "Pi Agent 内核与运行时",
     "about.embeddedKernel": "内置内核 (SDK)",
     "about.globalCli": "全局 CLI (pi)",

@@ -21,7 +21,6 @@ export const enLocale: LocalePlugin = {
     "about.appEditionWeb": "Web Edition",
     "about.version": "Version",
     "about.currentVersion": "Current Version",
-    "about.latestVersion": "Latest Version",
     "about.piAgentKernel": "Pi Agent Core & Runtime",
     "about.embeddedKernel": "Embedded Kernel (SDK)",
     "about.globalCli": "Global CLI (pi)",

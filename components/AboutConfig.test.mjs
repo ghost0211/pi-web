@@ -25,10 +25,13 @@ test("labels the comparison target as the current version", () => {
   assert.match(row, /about\.statusUpToDate/);
 });
 
-test("keeps the latest registry version as a separate, pill-free row", () => {
-  const row = rowFor("about.latestVersion");
-  assert.match(row, /info\?\.piAgent\.latestVersion \? `v\$\{info\.piAgent\.latestVersion\}`/);
-  assert.doesNotMatch(row, /about-status-pill/);
+test("does not repeat the registry version in a row of its own", () => {
+  // The current-version row's pill already names the latest registry version,
+  // so a separate "latest version" row would only restate it.
+  assert.equal(source.includes('t("about.latestVersion")'), false);
+  assert.equal(source.includes("about.latestVersion"), false);
+  const row = rowFor("about.currentVersion");
+  assert.match(row, /t\("about\.statusUpdateAvailable", \{ version: `v\$\{info\.piAgent\.latestVersion\}` \}\)/);
 });
 
 test("reports the source of the current version without new translation keys", () => {

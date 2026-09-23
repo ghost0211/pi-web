@@ -237,13 +237,6 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                     )}
                   </div>
                 </div>
-
-                <div className="about-property-item">
-                  <span className="about-property-label">{t("about.latestVersion")}</span>
-                  <span className="about-property-value">
-                    <code>{info?.piAgent.latestVersion ? `v${info.piAgent.latestVersion}` : "unknown"}</code>
-                  </span>
-                </div>
               </div>
 
               {/* Action and controls for update */}

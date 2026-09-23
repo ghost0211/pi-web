@@ -21,7 +21,6 @@ export const zhTWLocale: LocalePlugin = {
     "about.appEditionWeb": "網頁版",
     "about.version": "版本",
     "about.currentVersion": "目前版本",
-    "about.latestVersion": "最新版本",
     "about.piAgentKernel": "Pi Agent 核心與運行時",
     "about.embeddedKernel": "內建核心 (SDK)",
     "about.globalCli": "全域 CLI (pi)",

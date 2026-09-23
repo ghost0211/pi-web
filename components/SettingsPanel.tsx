@@ -95,6 +95,13 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
   const [desktopApp] = useState(() => isDesktopApp());
   const [closeBehavior, setCloseBehavior] = useState<DesktopCloseBehavior | null>(null);
   const [closeBehaviorSaving, setCloseBehaviorSaving] = useState(false);
+  // The installed desktop app already runs the Web server on this origin.
+  // Show the live port instead of guessing the persisted port, which may have
+  // a temporary fallback when another process occupies it.
+  const desktopWebOrigin = desktopApp && typeof window !== "undefined"
+    ? window.location.origin
+    : null;
+  const desktopWebPort = desktopWebOrigin ? new URL(desktopWebOrigin).port : null;
 
   const themeOptions: { id: ThemePreference; label: string }[] = [
     { id: "light", label: t("settings.themeLight") },
@@ -481,6 +488,15 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
                 );
               })}
             </div>
+            {desktopWebOrigin && desktopWebPort && (
+              <div className="settings-general-section settings-desktop-web-service">
+                <h3 className="settings-general-heading">{t("settings.desktopWebService")}</h3>
+                <p className="settings-general-description">{t("settings.desktopWebServiceDescription")}</p>
+                <code>{desktopWebOrigin}</code>
+                <p className="settings-general-description settings-desktop-tailnet-hint">{t("settings.desktopTailnetHint")}</p>
+                <code>tailscale serve --bg {desktopWebPort}</code>
+              </div>
+            )}
           </section>
         )}
 

@@ -60,6 +60,51 @@ Web app changes hot-reload through the dev server as usual. Rust-side changes
 restart the shell. `cargo check` works for quick validation; on Linux the
 system needs the webkit2gtk-4.1 development packages.
 
+## Phone access through Tailscale
+
+**The installed desktop app already starts the Web server** on a loopback-only,
+per-installation port; it does not need a second `npm run dev` process. Find the
+live URL under Settings → General → Desktop, or the persisted `serverPort` in
+`%APPDATA%\com.github.ghost0211.pi-web\desktop-settings.json`. A temporary
+port conflict can make the live port differ from the saved one. Development
+(`npm run desktop:dev`) is different: start `npm run dev` separately.
+
+For access from a phone in the *same tailnet*, install Tailscale on both devices.
+The desktop app deliberately does **not** expose the unauthenticated agent API
+on LAN or automatically publish it to other tailnet users. On the Windows host,
+opt in once (replace `3029` with the live port displayed in settings):
+
+```powershell
+tailscale serve --bg 3029
+# tailscale serve status                 # shows your tailnet-only HTTPS URL
+```
+
+The command persists across desktop launches; if a port conflict forces a
+fallback port, reconfigure Serve for that launch. The URL uses a MagicDNS
+hostname like `machine.tailnet.ts.net`. If the site responds with **403
+Untrusted request**, add that exact hostname to `PI_WEB_ALLOWED_HOSTS` in the
+Windows user environment and fully quit/restart Pi Web Desktop (not just close
+the window to the tray). For example, *before starting the app* from a terminal:
+
+```powershell
+$env:PI_WEB_ALLOWED_HOSTS = "machine.tailnet.ts.net"
+# Start the desktop executable from this terminal, or persist the variable
+# with setx PI_WEB_ALLOWED_HOSTS "machine.tailnet.ts.net" and restart Desktop.
+```
+
+Restrict who can reach the host with Tailscale ACLs; if your tailnet has other
+users, consider `PI_WEB_PASSWORD` (HTTP Basic Auth, username `pi`) before
+starting Desktop. **Never enable Tailscale Funnel** for an unauthenticated Pi
+Web server: the agent can run shell commands and read files. The HTTPS Serve
+URL is also needed for browser service workers and mobile push notifications.
+
+Once the server accepts a prompt, the agent runs in Desktop's Node sidecar,
+not on the phone. Locking the phone or switching apps can disconnect its SSE
+stream; returning to the page reconnects and reloads missed messages. Keep
+Desktop running (tray is fine), the Windows machine awake, and the network
+available. Quitting Desktop or putting Windows to sleep suspends/stops server
+work; an extension waiting for user confirmation can also pause the agent.
+
 ## Building the installer
 
 ```bash
@@ -136,7 +181,7 @@ separate work item.
 - **SmartScreen warning on first install** — expected until the installer is
   code-signed.
 - **Firewall prompt** — none should appear; the sidecar binds `127.0.0.1`
-  only.
+  only. Tailnet HTTPS access requires the explicit Tailscale Serve setup above.
 
 ## Not included yet
 

@@ -268,20 +268,32 @@ test("post-accept prompt errors do not duplicate the user submission", () => {
   assert.doesNotMatch(promptErrorSource, /restoreSubmission/);
 });
 
-test("delegates event stream readiness and hides an empty agent phase", () => {
-  const ensureSource = source.slice(
-    source.indexOf("const ensureEventsConnected"),
-    source.indexOf("const respondToExtensionUi"),
+test("starts prompts without awaiting SSE and hides an empty agent phase", () => {
+  const sendSource = source.slice(
+    source.indexOf("  const handleSend = useCallback"),
+    source.indexOf("  const executeBash = useCallback"),
   );
 
   assert.match(source, /new AgentEventConnection\(\{/);
   assert.match(source, /shouldMaintain: \(sid\)[\s\S]*?sessionIdRef\.current === sid/);
-  assert.match(ensureSource, /eventConnectionRef\.current!\.ensureConnected\(sid\)/);
-  assert.match(ensureSource, /eventConnectionRef\.current!\.maintain\(sid\)/);
+  assert.match(source, /eventConnectionRef\.current!\.maintain\(sid\)/);
+  assert.match(sendSource, /maintainEventsConnected\(sid\);[\s\S]*?await sendAgentCommand\(sid, \{/);
+  assert.match(sendSource, /maintainEventsConnected\(session\.id\);[\s\S]*?await sendAgentCommand\(session\.id, \{/);
+  assert.doesNotMatch(sendSource, /await ensureEventsConnected/);
   assert.match(chatWindowSource, /const hasStreamingContent = Boolean\(streamState\.streamingMessage\?\.content\.length\)/);
   assert.match(chatWindowSource, /streamState\.isStreaming && hasStreamingContent && streamState\.streamingMessage/);
   assert.match(chatWindowSource, /agentRunning && !hasStreamingContent && agentPhase/);
   assert.match(chatWindowSource, /return null;/);
+});
+
+test("refreshes stale SSE and reloads missed turns after mobile foregrounding", () => {
+  const recoverySource = source.slice(
+    source.indexOf("  // Recovery net for missed SSE events"),
+    source.indexOf("  useEffect(() => {\n    agentRunningRef.current = agentRunning"),
+  );
+  assert.match(recoverySource, /eventConnectionRef\.current\?\.refresh\(sid\)/);
+  assert.match(recoverySource, /void loadSession\(sid\)/);
+  assert.match(recoverySource, /document\.addEventListener\("visibilitychange", onVisible\)/);
 });
 
 test("uses one absolute agent-readiness deadline instead of a five-second transport deadline", () => {

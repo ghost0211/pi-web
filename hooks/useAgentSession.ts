@@ -847,10 +847,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     eventConnectionRef.current?.close();
   }, []);
 
-  const ensureEventsConnected = useCallback((sid: string) => (
-    eventConnectionRef.current!.ensureConnected(sid)
-  ), []);
-
   const maintainEventsConnected = useCallback((sid: string) => {
     eventConnectionRef.current!.maintain(sid);
   }, []);
@@ -1176,17 +1172,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (sid) void reconcileAgentState(sid);
     };
     const onVisible = () => {
-      if (document.visibilityState === "visible") reconcile();
+      if (document.visibilityState !== "visible") return;
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      // A suspended mobile browser can keep a dead EventSource in OPEN state.
+      // Reconnect and reload completed turns missed while the tab was frozen.
+      eventConnectionRef.current?.refresh(sid);
+      void loadSession(sid);
+      reconcile();
     };
     const interval = setInterval(reconcile, AGENT_STATE_RECONCILE_MS);
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("online", reconcile);
+    window.addEventListener("online", onVisible);
+    window.addEventListener("pageshow", onVisible);
     return () => {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("online", reconcile);
+      window.removeEventListener("online", onVisible);
+      window.removeEventListener("pageshow", onVisible);
     };
-  }, [agentRunning, reconcileAgentState]);
+  }, [agentRunning, loadSession, reconcileAgentState]);
 
   useEffect(() => {
     agentRunningRef.current = agentRunning;
@@ -1504,7 +1509,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             await sendAgentCommand(sid, { type: "set_model", provider: selectedModel.provider, modelId: selectedModel.modelId });
           }
         }
-        await ensureEventsConnected(sid);
+        // Do not gate the actual POST on SSE readiness: a locked phone may
+        // suspend EventSource setup before the server ever sees the prompt.
+        maintainEventsConnected(sid);
         promptRequestStarted = true;
         await sendAgentCommand(sid, {
           type: "prompt",
@@ -1514,7 +1521,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         promoteNewSession(1, message);
       } else if (session) {
         sentSessionId = session.id;
-        await ensureEventsConnected(session.id);
+        maintainEventsConnected(session.id);
         promptRequestStarted = true;
         await sendAgentCommand(session.id, {
           type: "prompt",
@@ -1560,7 +1567,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, maintainEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;

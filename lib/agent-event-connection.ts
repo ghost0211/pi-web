@@ -57,6 +57,18 @@ export class AgentEventConnection {
     if (this.current) this.discard(this.current, new AgentEventConnectionError("closed"));
   }
 
+  /** Refresh a previously ready stream after the browser wakes from sleep.
+   * Mobile radios can leave an EventSource reporting OPEN with a dead socket.
+   * Do not discard an unfinished handshake: a pending prompt may still be
+   * waiting on it, and closing it would reject that submission. */
+  refresh(sessionId: string): void {
+    if (!this.options.shouldMaintain(sessionId)) return;
+    if (this.current?.sessionId === sessionId && this.current.attempt.ready) {
+      this.discard(this.current, new AgentEventConnectionError("closed"));
+    }
+    this.maintain(sessionId);
+  }
+
   maintain(sessionId: string): void {
     if (!this.options.shouldMaintain(sessionId)) return;
     const retryGeneration = this.retryGeneration;

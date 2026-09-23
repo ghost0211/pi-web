@@ -1216,6 +1216,15 @@
   padding-right: 12px;
 }
 
+.settings-desktop-web-service {
+  margin-top: 24px;
+  overflow-wrap: anywhere;
+}
+
+.settings-desktop-tailnet-hint {
+  margin-top: 12px;
+}
+
 .settings-general-error {
   margin: 8px 0 0;
   color: #ef4444;

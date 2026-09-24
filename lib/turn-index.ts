@@ -175,25 +175,29 @@ export interface LocalTurnMeasure {
 export function mapTurnOffsets(
   localTurns: LocalTurnMeasure[],
   turnCount: number,
+  endOfHistory?: number,
 ): Map<number, number> {
   const offsets = new Map<number, number>();
   if (localTurns.length === 0) return offsets;
   const firstIndex = turnCount - localTurns.length;
-  let pending: number | null = null;
+  const pending: number[] = [];
 
   localTurns.forEach((turn, ordinal) => {
     const index = firstIndex + ordinal;
     if (index < 0) return;
     if (turn.top !== null) {
       offsets.set(index, turn.top);
-      if (pending !== null) {
-        offsets.set(pending, turn.top);
-        pending = null;
-      }
+      for (const earlier of pending) offsets.set(earlier, turn.top);
+      pending.length = 0;
       return;
     }
-    if (turn.borrowNext) pending = index;
+    if (turn.borrowNext) pending.push(index);
   });
 
+  // A trailing compaction has no following message element to borrow from.
+  // It lives at the end of the chat, not at the previous turn's offset.
+  if (endOfHistory !== undefined) {
+    for (const index of pending) offsets.set(index, endOfHistory);
+  }
   return offsets;
 }

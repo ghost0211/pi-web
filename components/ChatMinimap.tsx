@@ -11,6 +11,7 @@ import type { AgentMessage } from "@/lib/types";
 import styles from "./ChatMinimap.module.css";
 
 interface Props {
+  branchKey: string | null;
   messages: AgentMessage[];
   /** Entry ids parallel to `messages`; undefined for optimistic messages. */
   entryIds: (string | undefined)[];
@@ -250,6 +251,7 @@ export function TurnRailView({
 }
 
 export function ChatMinimap({
+  branchKey,
   messages,
   entryIds,
   turnIndex,
@@ -265,8 +267,18 @@ export function ChatMinimap({
   const offsetsRef = useRef<Map<number, number>>(new Map());
   const activeNodeLockRef = useRef<{ index: number; until: number } | null>(null);
   const pendingJumpRef = useRef<number | null>(null);
+  const jumpGenerationRef = useRef(0);
   const previewHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const measureThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    jumpGenerationRef.current += 1;
+    pendingJumpRef.current = null;
+    offsetsRef.current = new Map();
+    activeNodeLockRef.current = null;
+    setActiveIndex(null);
+    setHoveredIndex(null);
+  }, [branchKey]);
 
   const allMessages = useMemo(
     () => (streamingMessage ? [...messages, streamingMessage] : messages) as (AgentMessage | Partial<AgentMessage>)[],
@@ -359,14 +371,16 @@ export function ChatMinimap({
           : refIndexByMessage.get(turn.messageIndex);
         const element = elementIndex === undefined ? null : refs?.[elementIndex] ?? null;
         if (!element) {
-          // Compaction cards anchor a turn but render no measurable element.
-          return { top: null, borrowNext: true };
+          // Only a compaction card borrows an offset; an unrendered message
+          // must wait for its element instead of jumping to a neighbour.
+          const message = turn.messageIndex === undefined ? null : allMessagesRef.current[turn.messageIndex];
+          return { top: null, borrowNext: message?.role === "custom" && message.customType === "compaction" };
         }
         return {
           top: element.getBoundingClientRect().top - containerRect.top + scrollEl.scrollTop,
         };
       });
-      const nextOffsets = mapTurnOffsets(localMeasures, currentTurns.length);
+      const nextOffsets = mapTurnOffsets(localMeasures, currentTurns.length, scrollEl.scrollHeight);
       offsetsRef.current = nextOffsets;
       setRailHeight(scrollEl.clientHeight);
       setVisible(scrollEl.scrollHeight - scrollEl.clientHeight > 20);
@@ -443,6 +457,8 @@ export function ChatMinimap({
     if (!scrollEl) return;
     const turn = turnsRef.current[index];
     if (!turn) return;
+    const generation = ++jumpGenerationRef.current;
+    pendingJumpRef.current = null;
     lockActiveNode(index);
     const top = offsetsRef.current.get(index);
     if (top !== undefined) {
@@ -457,7 +473,7 @@ export function ChatMinimap({
     if (!turn.entryId) return;
     pendingJumpRef.current = index;
     void onRevealTurn(turn.entryId).then((loaded) => {
-      if (!loaded && pendingJumpRef.current === index) pendingJumpRef.current = null;
+      if (!loaded && jumpGenerationRef.current === generation) pendingJumpRef.current = null;
     });
   }, [lockActiveNode, onRevealTurn, scrollContainer]);
 

@@ -290,6 +290,7 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
   const sentinelRef = useRef<HTMLDivElement>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
   const loadingOlderRef = useRef(false);
+  const railJumpRequestsRef = useRef(0);
   // IntersectionObserver on the sentinel div at the top of the message list.
   // When it becomes visible, load the next page of older messages.
   useEffect(() => {
@@ -302,7 +303,7 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
         // No older history loaded yet: fetch the previous page from the server
         // and prepend it (loadContext handles prepend + scroll anchoring).
         // Skip while a page is already loading or nothing older exists.
-        if (loadingOlderRef.current) return;
+        if (loadingOlderRef.current || railJumpRequestsRef.current > 0) return;
         if (!hasEarlierMessages) return;
         const oldestId = historyCursor;
         if (!oldestId) return;
@@ -329,6 +330,7 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
   // After visibleCount increases (more messages prepended), restore the
   // scroll position so the viewport doesn't jump.
   useEffect(() => {
+    if (railJumpRequestsRef.current > 0) prevScrollDistanceRef.current = null;
     if (prevScrollDistanceRef.current == null) return;
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -416,10 +418,18 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
   const revealTurnForMinimap = useCallback(async (entryId: string): Promise<boolean> => {
     const sid = session?.id ?? sessionIdRef.current;
     if (!sid) return false;
-    const loaded = await ensureEntryLoaded(sid, entryId);
-    if (!loaded) return false;
-    setVisibleCount((current) => Math.max(current, messages.length * 2));
-    return true;
+    // A deliberate rail jump takes priority over the top sentinel's ordinary
+    // scroll restoration while older pages are being prepended.
+    railJumpRequestsRef.current += 1;
+    prevScrollDistanceRef.current = null;
+    try {
+      const loaded = await ensureEntryLoaded(sid, entryId);
+      if (!loaded) return false;
+      setVisibleCount((current) => Math.max(current, messages.length * 2));
+      return true;
+    } finally {
+      railJumpRequestsRef.current -= 1;
+    }
   }, [ensureEntryLoaded, messages.length, session?.id, sessionIdRef]);
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
   const hasStreamingContent = Boolean(streamState.streamingMessage?.content.length);
@@ -764,6 +774,7 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
       <div className="relative flex min-w-0 flex-1 overflow-hidden">
         {isMobile ? null : (
           <ChatMinimap
+            branchKey={activeLeafId}
             messages={messages}
             entryIds={entryIds}
             turnIndex={turnIndex}

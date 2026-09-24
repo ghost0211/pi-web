@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import test from "node:test";
 import React from "react";
@@ -119,6 +120,15 @@ test("renders one bar per turn and the hover preview card", () => {
   const idle = render(null);
   assert.doesNotMatch(idle, /data-turn-preview/);
   assert.equal((idle.match(/width:9px/g) ?? []).length, 3);
+});
+
+test("new or branch-switched jumps invalidate an older pending jump", async () => {
+  const source = await readFile(new URL("./ChatMinimap.tsx", import.meta.url), "utf8");
+  const jump = source.slice(source.indexOf("  const requestJump = useCallback"), source.indexOf("  if (!visible || turns.length === 0)"));
+  assert.match(jump, /jumpGenerationRef\.current/);
+  assert.match(jump, /pendingJumpRef\.current = null;[\s\S]*?const top = offsetsRef/);
+  assert.match(jump, /if \(!loaded && jumpGenerationRef\.current === generation\)/);
+  assert.match(source, /\}, \[branchKey\]\)/);
 });
 
 test("clamps the preview card inside the chat area", () => {

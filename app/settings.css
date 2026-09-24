@@ -1797,6 +1797,48 @@
   color: var(--text-muted);
 }
 
+.desktop-update-prompt {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: min(350px, calc(100vw - 36px));
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.desktop-update-prompt strong { color: var(--text); font-size: 14px; }
+.desktop-update-prompt-actions { display: flex; gap: 10px; }
+.desktop-update-prompt-actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.desktop-update-prompt-actions button:first-child { background: var(--accent); color: var(--bg); }
+.desktop-update-prompt-actions button:disabled { cursor: wait; opacity: 0.65; }
+
+.about-desktop-update-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 8rem;
+  overflow-y: auto;
+}
+
 .about-update-action-box {
   display: flex;
   align-items: center;

@@ -592,6 +592,7 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> Webview
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second launch acts as "restore from tray": focus the window.

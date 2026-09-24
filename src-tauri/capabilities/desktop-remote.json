@@ -13,6 +13,7 @@
     "allow-open-local-path",
     "allow-open-local-path-with",
     "allow-reveal-local-path",
+    "updater:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
   ]

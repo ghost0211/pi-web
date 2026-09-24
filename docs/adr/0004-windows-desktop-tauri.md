@@ -72,5 +72,8 @@ what Ctrl+C does to `pi-web` on the CLI.
 Windows installers can only be produced natively (WebView2 + NSIS), so
 `.github/workflows/desktop-windows.yml` builds on `windows-latest` — manually
 or from `desktop-v*` tags, which also attach the NSIS setup exe to a GitHub
-release. Code signing is intentionally left out of the MVP (SmartScreen will
-warn); auto-update via `tauri-plugin-updater` is the documented next step.
+release. The Tauri updater verifies the release's signed NSIS installer before
+installing it; Windows exits the app and its sidecar during installation. CI
+publishes `.exe.sig` and `desktop-latest.json`, keeping the private updater key
+outside the repository. Authenticode code signing is separate and remains a
+future step (SmartScreen may still warn).

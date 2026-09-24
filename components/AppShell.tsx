@@ -9,6 +9,7 @@ import { ChatWindow } from "./ChatWindow";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
+import { DesktopUpdatePrompt } from "./DesktopUpdatePrompt";
 import { BranchNavigator } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
@@ -2817,6 +2818,7 @@ export function AppShell() {
         </div>
       </div>
     </div>
+    <DesktopUpdatePrompt />
     {settingsSection && (
       <SettingsPanel
         cwd={projectTrustCwd}

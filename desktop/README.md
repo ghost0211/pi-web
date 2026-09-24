@@ -154,6 +154,38 @@ The workflow rejects a tag that does not match all four package versions. Or tri
 the workflow manually and download the artifact (without creating a release).
 Tag pushes create a GitHub release with the installer attached.
 
+### Signed desktop updates
+
+Desktop checks for a newer desktop release when it opens and shows an update
+notice. Settings → About also checks when opened and offers a manual retry.
+Clicking **Download and install update** downloads the signed NSIS installer
+and applies it through Tauri's updater; Windows exits Desktop to run the
+installer. This interrupts running agent sessions. Regular browser and phone
+pages cannot invoke the native updater, even when they access the same server.
+The existing 0.9.20 and older installers do not contain the updater and must be
+upgraded manually **once** to an updater-enabled release.
+
+CI requires the repository Actions secret `TAURI_SIGNING_PRIVATE_KEY` containing
+the Tauri signer private key. Generate one with `npx tauri signer generate
+--ci -w <path-outside-repo>` (or use the securely stored key for this app),
+back it up securely, and add its private contents to that secret. Never commit
+it or expose it to the Next.js server. The corresponding **public** key is in
+`src-tauri/tauri.conf.json`; losing the private key prevents signed updates
+for existing installs. Tauri update signatures are separate from optional
+Windows Authenticode signing (unsigned NSIS installers may still trigger
+SmartScreen warnings). Missing CI signing credentials must fail the release,
+not silently publish an installable but non-updatable bundle.
+
+The tag workflow signs the NSIS `.exe`, publishes its `.exe.sig`, and creates
+`desktop-latest.json` with the exact version, installer URL and signature.
+The updater reads the manifest via
+`https://github.com/ghost0211/pi-web/releases/latest/download/desktop-latest.json`.
+Keep the GitHub **latest** non-prerelease release on this repo a desktop release;
+if other release channels are added, move the updater endpoint to a dedicated
+desktop-only feed first. GitHub release checks and downloads require internet
+access. CI `workflow_dispatch` produces signed artifacts but does not change
+the published update feed.
+
 CI layout: an `ubuntu-latest` job runs `npm test` / `tsc` / `lint` first — the
 web test suite is Linux-validated and several pre-existing tests encode POSIX
 assumptions (CRLF source markers, `PATH` vs `Path` casing). The Windows job then
@@ -185,7 +217,6 @@ separate work item.
 
 ## Not included yet
 
-- `tauri-plugin-updater` auto-updates (needs signing keys + release wiring)
 - code signing certificate
 - native notifications (the in-app sound and web-push still work)
 - localized tray menu labels (the web settings UI is fully localized; the

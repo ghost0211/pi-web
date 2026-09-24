@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { isDesktopApp } from "@/lib/desktop";
+import { checkDesktopUpdate, installDesktopUpdate, type DesktopUpdate } from "@/lib/desktop-update";
 import { useI18n } from "@/hooks/useI18n";
 import { copyText } from "@/lib/clipboard";
 import type {
@@ -29,6 +31,58 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [showLog, setShowLog] = useState(false);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [desktopApp] = useState(isDesktopApp);
+  const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdate | null>(null);
+  const [desktopChecking, setDesktopChecking] = useState(false);
+  const [desktopInstalling, setDesktopInstalling] = useState(false);
+  const [desktopProgress, setDesktopProgress] = useState<number | null>(null);
+  const [desktopInstallPhase, setDesktopInstallPhase] = useState<"downloading" | "installing">("downloading");
+  const [desktopUpdateError, setDesktopUpdateError] = useState<string | null>(null);
+  const [desktopChecked, setDesktopChecked] = useState(false);
+
+  const checkDesktopRelease = useCallback(async () => {
+    if (!desktopApp) return;
+    setDesktopChecking(true);
+    setDesktopUpdateError(null);
+    try {
+      setDesktopUpdate(await checkDesktopUpdate());
+      setDesktopChecked(true);
+    } catch (error) {
+      setDesktopUpdateError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDesktopChecking(false);
+    }
+  }, [desktopApp]);
+
+  useEffect(() => {
+    void checkDesktopRelease();
+  }, [checkDesktopRelease]);
+
+  const handleDesktopInstall = async () => {
+    if (!desktopUpdate || desktopInstalling || !window.confirm(t("about.desktopUpdateConfirm", { version: desktopUpdate.version }))) return;
+    setDesktopInstalling(true);
+    setDesktopUpdateError(null);
+    setDesktopProgress(null);
+    setDesktopInstallPhase("downloading");
+    let total: number | undefined;
+    let downloaded = 0;
+    try {
+      await installDesktopUpdate(desktopUpdate, (event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength;
+          downloaded = 0;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          if (total) setDesktopProgress(Math.min(100, Math.round(downloaded / total * 100)));
+        } else if (event.event === "Finished") {
+          setDesktopInstallPhase("installing");
+        }
+      });
+    } catch (error) {
+      setDesktopUpdateError(error instanceof Error ? error.message : String(error));
+      setDesktopInstalling(false);
+    }
+  };
 
   const fetchInfo = useCallback(async (force = false) => {
     try {
@@ -159,6 +213,43 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
               <div className="about-error-banner" role="alert">
                 <span>{errorMsg}</span>
               </div>
+            )}
+
+            {desktopApp && (
+              <section className="about-section-card">
+                <div className="about-section-header">
+                  <div className="about-section-header-left">
+                    <h3 className="about-section-title">{t("about.desktopUpdateTitle")}</h3>
+                  </div>
+                  <ConfigButton variant="secondary" size="small" disabled={desktopChecking || desktopInstalling} onClick={() => void checkDesktopRelease()}>
+                    {desktopChecking ? t("about.statusChecking") : t("about.checkUpdates")}
+                  </ConfigButton>
+                </div>
+                <p className="about-desktop-update-text">
+                  {desktopUpdate
+                    ? t("about.desktopUpdateAvailable", { version: desktopUpdate.version })
+                    : desktopChecking ? t("about.statusChecking")
+                      : desktopChecked ? t("about.statusUpToDate") : t("about.desktopUpdateNotChecked")}
+                </p>
+                {desktopUpdate?.body && <p className="about-desktop-update-text">{desktopUpdate.body}</p>}
+                {desktopUpdate && (
+                  <div className="about-update-action-box">
+                    <ConfigButton
+                      variant="primary"
+                      size="default"
+                      disabled={desktopInstalling}
+                      onClick={() => void handleDesktopInstall()}
+                    >
+                      {desktopInstalling
+                        ? desktopInstallPhase === "installing" ? t("about.desktopInstalling")
+                          : t("about.desktopDownloading", { progress: desktopProgress === null ? "…" : `${desktopProgress}%` })
+                        : t("about.desktopInstallUpdate")}
+                    </ConfigButton>
+                    <span className="about-desktop-update-text">{t("about.desktopUpdateRestartNote")}</span>
+                  </div>
+                )}
+                {desktopUpdateError && <p className="about-error-banner" role="alert">{t("about.desktopUpdateError", { error: desktopUpdateError })}</p>}
+              </section>
             )}
 
             {/* Pi Agent Core & Version Updates */}

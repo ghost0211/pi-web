@@ -17,7 +17,7 @@ test("regular browsers cannot check or install native desktop updates", async (t
 test("desktop update manifest only names a matching signed NSIS release", () => {
   const version = "0.9.21";
   const tag = `desktop-v${version}`;
-  const installerName = `Pi.Web.Desktop_${version}_x64-setup.exe`;
+  const installerName = `Pi Web Desktop_${version}_x64-setup.exe`;
   const signature = "untrusted comment: signed update\nABC123";
   const manifest = createDesktopUpdateManifest({ version, tag, installerName, signature });
   assert.deepEqual(manifest, {
@@ -25,7 +25,7 @@ test("desktop update manifest only names a matching signed NSIS release", () => 
     platforms: {
       "windows-x86_64": {
         signature,
-        url: `https://github.com/ghost0211/pi-web/releases/download/${tag}/${installerName}`,
+        url: `https://github.com/ghost0211/pi-web/releases/download/${tag}/Pi.Web.Desktop_${version}_x64-setup.exe`,
       },
     },
   });

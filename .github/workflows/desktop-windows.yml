@@ -114,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           dir=src-tauri/target/release/bundle/nsis
-          exe="$dir/Pi.Web.Desktop_${GITHUB_REF_NAME#desktop-v}_x64-setup.exe"
+          exe="$dir/Pi Web Desktop_${GITHUB_REF_NAME#desktop-v}_x64-setup.exe"
           test -s "$exe" && test -s "$exe.sig" && test -s "$dir/desktop-latest.json"
           if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > draft-state.txt 2>/dev/null; then
             if [[ $(cat draft-state.txt) != true ]]; then

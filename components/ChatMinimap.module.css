@@ -8,6 +8,36 @@
   user-select: none;
 }
 
+.rail[data-can-scroll-up="true"]::before,
+.rail[data-can-scroll-down="true"]::after {
+  position: absolute;
+  left: 20px;
+  z-index: 1;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 10px;
+  pointer-events: none;
+}
+
+.rail[data-can-scroll-up="true"]::before { content: "⌃"; top: 0; }
+.rail[data-can-scroll-down="true"]::after { content: "⌄"; bottom: 0; }
+
+.viewport {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+
+.viewport::-webkit-scrollbar { display: none; }
+
+.viewport[data-scrollable="true"] {
+  mask-image: linear-gradient(to bottom, transparent, black 10px, black calc(100% - 10px), transparent);
+}
+
+.track { position: relative; width: 100%; }
+
 .bar {
   position: absolute;
   margin: 0;
@@ -54,6 +84,13 @@
 .card:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 55%, transparent);
   outline-offset: 2px;
+}
+
+.cardOrdinal {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .cardPrompt {

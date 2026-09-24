@@ -7,6 +7,18 @@ const chatWindowSource = (await readFile(new URL("../components/ChatWindow.tsx",
 const chatInputSource = (await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const appShellSource = (await readFile(new URL("../components/AppShell.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
+test("turn-rail jumps can page to the oldest turn without a fixed request limit", () => {
+  const jump = source.slice(
+    source.indexOf("  const ensureEntryLoaded = useCallback"),
+    source.indexOf("  const loadTools = useCallback"),
+  );
+  assert.match(source, /if \(tail\) params\.set\("tail", String\(tail\)\)/);
+  assert.match(jump, /while \(hasMore && cursor\)/);
+  assert.match(jump, /loadContext\(sid, leafId, cursor, 500\)/);
+  assert.match(jump, /loaded\.oldestEntryId === cursor/);
+  assert.doesNotMatch(jump, /maxPages|page < \d+/);
+});
+
 test("keeps the session event stream open through the idle grace window", () => {
   const finishSource = source.slice(
     source.indexOf("const finishPromptWithoutStream"),

@@ -617,10 +617,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [setToolPresetState]);
 
-  const loadContext = useCallback(async (sid: string, leafId: string | null, before?: string | null) => {
+  const loadContext = useCallback(async (sid: string, leafId: string | null, before?: string | null, tail?: number) => {
     try {
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
       if (leafId) params.set("leafId", leafId);
+      if (tail) params.set("tail", String(tail));
       // Page upward: ask the server for the `tail` ancestors preceding `before`,
       // then prepend them. Omitting `before` fetches the most-recent `tail`.
       if (before) params.set("before", before);
@@ -666,19 +667,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   /**
-   * Pages history upward until `entryId` is loaded, so the turn rail can jump
-   * to a turn the client never fetched. Bounded — each page is `tail` entries —
-   * and returns false when the entry cannot be reached.
+   * Page history upward until the requested turn is loaded. Jumping uses
+   * larger pages than ordinary scroll pagination; a fixed page limit would
+   * make older turns visible in the rail but impossible to reach.
    */
   const ensureEntryLoaded = useCallback(async (sid: string, entryId: string): Promise<boolean> => {
     if (entryIdsRef.current.includes(entryId)) return true;
     let cursor = historyCursorRef.current;
     let hasMore = hasEarlierMessagesRef.current;
-    const maxPages = 60;
-    for (let page = 0; page < maxPages && hasMore && cursor; page += 1) {
-      const loaded = await loadContext(sid, activeLeafIdRef.current, cursor);
+    const leafId = activeLeafIdRef.current;
+    while (hasMore && cursor) {
+      if (sessionIdRef.current !== sid || activeLeafIdRef.current !== leafId) return false;
+      const loaded = await loadContext(sid, leafId, cursor, 500);
       if (!loaded) return false;
       if (loaded.entryIds.includes(entryId)) return true;
+      if (!loaded.entryIds.length || loaded.oldestEntryId === cursor) return false;
       cursor = loaded.oldestEntryId;
       hasMore = loaded.hasMore;
     }

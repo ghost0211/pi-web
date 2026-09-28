@@ -124,3 +124,98 @@ export async function setDesktopCloseBehavior(behavior: DesktopCloseBehavior): P
   await invoke("set_close_behavior", { behavior });
   return true;
 }
+
+/*
+ * Native (Windows toast) notifications.
+ *
+ * The desktop shell renders these through `tauri-plugin-notification`, which is
+ * more reliable in WebView2 than the Web Notification API and keeps working
+ * while the window is hidden in the tray. The bridge deliberately accepts only
+ * bounded text and opaque identifiers: it can never open a URL, path, file, or
+ * shell command.
+ *
+ * Click activation is *not* delivered by the plugin's desktop backend (see
+ * desktop/README.md), so `sessionId` is only a best-effort deep-link target for
+ * the main thread to consume when the app is activated by another route.
+ */
+
+// Kept identical to `MAX_NOTIFICATION_*` in src-tauri/src/main.rs; the Rust side
+// re-validates, this is only the fast client-side guard.
+const NOTIFICATION_TITLE_MAX_CHARS = 120;
+const NOTIFICATION_BODY_MAX_CHARS = 400;
+const NOTIFICATION_ID_MAX_CHARS = 128;
+const NOTIFICATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+
+export interface DesktopNotificationInput {
+  title: string;
+  body: string;
+  /** Opaque session id for deep-linking; never a URL or path. */
+  sessionId?: string;
+  /** Stable dedup key; defaults to the session id (then to "pi-web"). */
+  tag?: string;
+}
+
+/**
+ * Collapse whitespace/control characters and truncate to `maxChars` code
+ * points, mirroring the Rust `sanitize_notification_text` helper.
+ */
+export function sanitizeDesktopNotificationText(raw: string, maxChars: number): string {
+  const flattened = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  const collapsed = flattened.split(/\s+/u).filter((part) => part.length > 0).join(" ");
+  const codePoints = Array.from(collapsed);
+  return codePoints.length <= maxChars ? collapsed : codePoints.slice(0, maxChars).join("");
+}
+
+/** Accept only bounded opaque ids; anything path- or URL-shaped returns null. */
+export function normalizeDesktopNotificationId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > NOTIFICATION_ID_MAX_CHARS) return null;
+  return NOTIFICATION_ID_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * Show a native toast. Returns false outside the desktop shell (callers fall
+ * back to the browser notification path) and also when the shell suppressed a
+ * duplicate `tag` inside its dedup window. Shell failures degrade to false
+ * rather than rejecting, because notifications are fire-and-forget UI.
+ */
+export async function showDesktopNotification(input: DesktopNotificationInput): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return false;
+
+  const title = sanitizeDesktopNotificationText(input.title, NOTIFICATION_TITLE_MAX_CHARS);
+  if (!title) return false;
+  const body = sanitizeDesktopNotificationText(input.body, NOTIFICATION_BODY_MAX_CHARS);
+  const sessionId = normalizeDesktopNotificationId(input.sessionId);
+  const tag = normalizeDesktopNotificationId(input.tag) ?? sessionId;
+
+  try {
+    const shown = await invoke<boolean>("send_desktop_notification", {
+      title,
+      body,
+      sessionId,
+      tag,
+    });
+    return shown === true;
+  } catch {
+    // Windows may refuse toasts (focus assist, policy); fall back to quiet.
+    return false;
+  }
+}
+
+/**
+ * Consume the session id remembered by the last native toast. Returns null
+ * outside the desktop shell or when nothing is pending. The shell never returns
+ * a URL, so the caller must still resolve the id through its own session list.
+ */
+export async function takeDesktopNotificationTarget(): Promise<string | null> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return null;
+  try {
+    const value = await invoke<unknown>("take_desktop_notification_target");
+    return normalizeDesktopNotificationId(value);
+  } catch {
+    return null;
+  }
+}

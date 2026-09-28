@@ -1,6 +1,7 @@
 export interface InitialNavigation {
   requestedCwd: string | null;
   sessionId: string | null;
+  entryId: string | null;
 }
 
 export function getInitialNavigation(searchParams: Pick<URLSearchParams, "get">): InitialNavigation {
@@ -9,5 +10,6 @@ export function getInitialNavigation(searchParams: Pick<URLSearchParams, "get">)
   return {
     requestedCwd,
     sessionId: requestedCwd ? null : searchParams.get("session"),
+    entryId: requestedCwd ? null : searchParams.get("entry"),
   };
 }

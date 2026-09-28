@@ -5,6 +5,8 @@
  * path keeps working as a fallback.
  */
 
+import { isDesktopApp } from "./desktop";
+
 let activeSubscriptionPromise: Promise<boolean> | null = null;
 
 // Standard base64url → Uint8Array conversion for applicationServerKey.
@@ -27,6 +29,10 @@ export function isPushSupported(): boolean {
 }
 
 export async function setupPushSubscription(locale: string): Promise<boolean> {
+  // The desktop shell delivers completion/attention events as native toasts
+  // (see lib/desktop.ts). Subscribing there would push a second copy of the
+  // same event through the browser push service, so Web Push stays off.
+  if (isDesktopApp()) return false;
   if (!isPushSupported() || Notification.permission !== "granted") return false;
   if (activeSubscriptionPromise) return activeSubscriptionPromise;
 
@@ -61,4 +67,23 @@ export async function setupPushSubscription(locale: string): Promise<boolean> {
   })();
 
   return activeSubscriptionPromise;
+}
+
+/**
+ * Drop a Web Push subscription that was created before the desktop shell
+ * switched to native toasts. A stale subscription would keep pushing a second
+ * copy of every session-complete event; the push service reports the dead
+ * endpoint on the next send (404/410) and the server prunes it.
+ *
+ * Safe to call unconditionally: it no-ops outside the desktop shell.
+ */
+export async function teardownDesktopPushSubscription(): Promise<void> {
+  if (!isDesktopApp() || !isPushSupported()) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = await registration?.pushManager.getSubscription();
+    await subscription?.unsubscribe();
+  } catch {
+    // Best effort: the native toast path is the primary delivery either way.
+  }
 }

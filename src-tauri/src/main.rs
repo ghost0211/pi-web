@@ -7,10 +7,11 @@
 // Closing the app kills the whole sidecar process tree because agent sessions
 // (and any shells their tools spawned) live in it.
 //
-// The shell also owns the desktop-only behaviors: a system tray icon and the
+// The shell also owns the desktop-only behaviors: a system tray icon, the
 // "what does closing the window mean" setting (minimize to tray vs. quit),
 // persisted in `<app_config>/desktop-settings.json` and editable both from the
-// tray menu and from the web settings UI via IPC commands.
+// tray menu and from the web settings UI via IPC commands, and native Windows
+// toasts for session completion / attention events.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -28,6 +29,7 @@ use tauri::{
     AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 
 /// Matches `npm run dev` (next dev -H 127.0.0.1 -p 30141).
 const DEV_SERVER_URL: &str = "http://127.0.0.1:30141/";
@@ -61,6 +63,31 @@ struct DesktopSettings {
 /// Handle to the tray check item so the IPC command can keep it in sync.
 struct TrayHandles {
     minimize_on_close: CheckMenuItem<tauri::Wry>,
+}
+
+/// Bounds for notification text. The web page is trusted only as far as any
+/// other page on the loopback origin; keeping the payload small stops a broken
+/// or hostile caller from filling the Windows Action Center.
+const MAX_NOTIFICATION_TITLE_CHARS: usize = 120;
+const MAX_NOTIFICATION_BODY_CHARS: usize = 400;
+/// Opaque identifiers (session id / dedup tag) are bounded and character-checked
+/// so they can never be interpreted as a path or URL.
+const MAX_NOTIFICATION_ID_CHARS: usize = 128;
+/// Toasts sharing a dedup tag inside this window are dropped: a re-render or a
+/// retried SSE event must not stack duplicate notifications.
+const NOTIFICATION_DEDUP_WINDOW: Duration = Duration::from_millis(1500);
+
+/// Native-notification bookkeeping: duplicate suppression plus the last
+/// deep-link target handed over from a shown toast.
+///
+/// Click activation itself is NOT available through tauri-plugin-notification on
+/// Windows desktop (its desktop backend forwards only title/body/icon/sound to
+/// notify-rust, which has no activation callback outside XDG). `last_target`
+/// therefore only helps when the app is activated by another route (tray, a
+/// second launch, or a future registered toast activator); see desktop/README.md.
+struct NotificationState {
+    last_shown: Mutex<Option<(String, Instant)>>,
+    last_target: Mutex<Option<String>>,
 }
 
 fn settings_path(app: &AppHandle) -> Option<PathBuf> {
@@ -268,6 +295,107 @@ fn reveal_local_path(path: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|error| format!("failed to reveal {}: {error}", directory.display()))
     }
+}
+
+/// Collapse whitespace/control characters and truncate on a UTF-8 char
+/// boundary. Windows toast XML is picky about control characters, and the page
+/// must not be able to smuggle formatting or oversized payloads into it.
+fn sanitize_notification_text(raw: &str, max_chars: usize) -> String {
+    let flattened: String = raw
+        .chars()
+        .map(|character| if character.is_control() { ' ' } else { character })
+        .collect();
+    let collapsed = flattened.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max_chars {
+        return collapsed;
+    }
+    collapsed.chars().take(max_chars).collect()
+}
+
+/// Opaque id/tag check: ASCII, bounded, and no path or URL syntax at all.
+fn is_safe_notification_identifier(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw.len() <= MAX_NOTIFICATION_ID_CHARS
+        && raw
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':'))
+}
+
+fn sanitize_notification_identifier(raw: Option<&str>) -> Result<Option<String>, String> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if is_safe_notification_identifier(value) => Ok(Some(value.to_string())),
+        Some(_) => Err("notification identifier must be a bounded opaque id".to_string()),
+        None => Ok(None),
+    }
+}
+
+/// Show a native Windows toast for a finished agent session or an extension
+/// attention request.
+///
+/// Returns `true` when a toast was handed to the OS and `false` when an
+/// identical `tag` was already shown inside [`NOTIFICATION_DEDUP_WINDOW`].
+/// `session_id` is an opaque deep-link target (never a URL or path) and is
+/// remembered for [`take_desktop_notification_target`].
+#[tauri::command]
+fn send_desktop_notification(
+    app: AppHandle,
+    title: String,
+    body: String,
+    session_id: Option<String>,
+    tag: Option<String>,
+) -> Result<bool, String> {
+    let title = sanitize_notification_text(&title, MAX_NOTIFICATION_TITLE_CHARS);
+    if title.is_empty() {
+        return Err("notification title is empty".to_string());
+    }
+    let body = sanitize_notification_text(&body, MAX_NOTIFICATION_BODY_CHARS);
+    let session_id = sanitize_notification_identifier(session_id.as_deref())?;
+    // Fall back to the session id so repeated completions of one session replace
+    // each other instead of stacking up.
+    let tag = sanitize_notification_identifier(tag.as_deref())?
+        .or_else(|| session_id.clone())
+        .unwrap_or_else(|| "pi-web".to_string());
+
+    let state = app.state::<NotificationState>();
+    {
+        let mut last_shown = state
+            .last_shown
+            .lock()
+            .map_err(|_| "notification state poisoned".to_string())?;
+        if let Some((previous_tag, shown_at)) = last_shown.as_ref() {
+            if previous_tag == &tag && shown_at.elapsed() < NOTIFICATION_DEDUP_WINDOW {
+                return Ok(false);
+            }
+        }
+        *last_shown = Some((tag, Instant::now()));
+    }
+
+    if session_id.is_some() {
+        if let Ok(mut target) = state.last_target.lock() {
+            *target = session_id;
+        }
+    }
+
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|error| format!("failed to show the desktop notification: {error}"))?;
+    Ok(true)
+}
+
+/// Consume the session id remembered by the most recent native notification.
+/// The web UI calls this when it regains focus so a toast that did manage to
+/// activate the app can open the right session. Returns `null` when there is no
+/// pending target; the value is always an opaque id, never a URL.
+#[tauri::command]
+fn take_desktop_notification_target(app: AppHandle) -> Option<String> {
+    app.state::<NotificationState>()
+        .last_target
+        .lock()
+        .ok()
+        .and_then(|mut target| target.take())
 }
 
 #[tauri::command]
@@ -593,6 +721,7 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> Webview
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second launch acts as "restore from tray": focus the window.
@@ -604,6 +733,10 @@ fn main() {
         }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(Mutex::new(DesktopServer { child: None }))
+        .manage(NotificationState {
+            last_shown: Mutex::new(None),
+            last_target: Mutex::new(None),
+        })
         .invoke_handler(tauri::generate_handler![
             get_close_behavior,
             set_close_behavior,
@@ -611,6 +744,8 @@ fn main() {
             open_local_path,
             open_local_path_with,
             reveal_local_path,
+            send_desktop_notification,
+            take_desktop_notification_target,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -697,7 +832,52 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_external_browser_url, is_loopback_browser_url};
+    use super::{
+        is_external_browser_url, is_loopback_browser_url, is_safe_notification_identifier,
+        sanitize_notification_identifier, sanitize_notification_text, MAX_NOTIFICATION_BODY_CHARS,
+        MAX_NOTIFICATION_ID_CHARS, MAX_NOTIFICATION_TITLE_CHARS,
+    };
+
+    #[test]
+    fn notification_text_strips_control_characters_and_is_bounded() {
+        // Newlines/tabs and NUL are flattened so toast XML cannot be injected.
+        assert_eq!(
+            sanitize_notification_text("Task\nfinished\t\u{0}now", MAX_NOTIFICATION_BODY_CHARS),
+            "Task finished now"
+        );
+        let long = "é".repeat(MAX_NOTIFICATION_TITLE_CHARS + 40);
+        let bounded = sanitize_notification_text(&long, MAX_NOTIFICATION_TITLE_CHARS);
+        assert_eq!(bounded.chars().count(), MAX_NOTIFICATION_TITLE_CHARS);
+        // Truncation must not split a multi-byte character.
+        assert!(bounded.chars().all(|character| character == 'é'));
+    }
+
+    #[test]
+    fn notification_identifiers_reject_paths_and_urls() {
+        assert!(is_safe_notification_identifier("pi-session-complete:0a1b2c3d"));
+        assert!(is_safe_notification_identifier("a.b_c-d:e"));
+        for rejected in [
+            "",
+            "../etc/passwd",
+            "C:\\Users\\me",
+            "https://example.com/",
+            "has space",
+            "sla/sh",
+            "semi;colon",
+        ] {
+            assert!(
+                !is_safe_notification_identifier(rejected),
+                "{rejected} must be rejected"
+            );
+        }
+        // Whitespace-only input is treated as "no id" instead of an error.
+        assert_eq!(sanitize_notification_identifier(Some("  ")), Ok(None));
+        assert_eq!(sanitize_notification_identifier(None), Ok(None));
+        assert!(sanitize_notification_identifier(Some("../escape")).is_err());
+        // Oversized ids are rejected outright rather than truncated.
+        let oversized = "a".repeat(MAX_NOTIFICATION_ID_CHARS + 1);
+        assert!(sanitize_notification_identifier(Some(&oversized)).is_err());
+    }
 
     fn parse(url: &str) -> tauri::Url {
         tauri::Url::parse(url).expect("test URL must parse")

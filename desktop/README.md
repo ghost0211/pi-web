@@ -23,6 +23,67 @@ file manager", and "copy full path". The browser build keeps the download link
 `open_local_path` / `open_local_path_with` / `reveal_local_path` commands, which
 reject relative and missing paths before touching the shell.
 
+## Native notifications
+
+Session-complete and extension-attention events use native Windows toasts via
+`tauri-plugin-notification` instead of the Web Notification API. The shell
+exposes two commands, granted to loopback origins only
+(`src-tauri/capabilities/desktop-remote.json`):
+
+- `send_desktop_notification(title, body, sessionId?, tag?)` — shows a toast.
+  Title/body are whitespace-collapsed and truncated (120/400 chars) and
+  `sessionId`/`tag` must be bounded opaque ids (`[A-Za-z0-9._:-]{1,128}`), so
+  this channel can never pass a URL, path, or shell argument. A toast sharing a
+  `tag` within 1.5 s is suppressed, which absorbs re-renders and retried events.
+- `take_desktop_notification_target()` — consumes the session id remembered by
+  the most recent toast, for the caller to resolve against its own session list.
+
+The JS bridge is `showDesktopNotification` / `takeDesktopNotificationTarget` in
+`lib/desktop.ts`; both no-op outside the desktop shell.
+
+### Wiring plan for the main thread (AppShell)
+
+`components/AppShell.tsx` is intentionally not modified by the notification
+change, so it still needs this wiring:
+
+1. `deliverSessionNotification`: keep the attention/visibility guard, then
+   prefer the native toast inside the desktop shell and fall back to the
+   existing browser path otherwise. The same `tag` should be passed to both so
+   either path replaces the previous notification for that session.
+
+   ```ts
+   const sessionUrl = ...; // unchanged
+   if (isDesktopApp()) {
+     void showDesktopNotification({
+       title,
+       body,
+       sessionId: targetSession?.id,
+       tag,
+     });
+     return;
+   }
+   void showBrowserNotification({ title, body, sessionUrl, tag, onClick: ... });
+   ```
+
+2. Drop the Web Push call on the desktop path. `setupPushSubscription()` now
+   returns `false` inside the shell, and `teardownDesktopPushSubscription()`
+   removes a subscription created by an older install so the server stops
+   pushing a second copy of the same event (it prunes the endpoint after the
+   next 404/410). Call it once from the existing mount effect in `AppShell`,
+   next to `setupPushSubscription(locale)`.
+
+3. Deep-linking a toast click: **not reliably possible on Windows.**
+   `tauri-plugin-notification`'s desktop backend forwards only
+   title/body/icon/sound to `notify-rust`, which has no toast-activation
+   callback outside XDG; clicking an unpackaged app's toast without a registered
+   COM activator does nothing. `take_desktop_notification_target()` is therefore
+   best-effort only: it is useful when the app is activated by another route
+   (tray restore, a second launch through the single-instance plugin, or a
+   future registered toast activator). If `sessionId` deep-linking is required,
+   that needs a WinRT toast backend plus COM activator registration — a larger
+   change than this one. Raising the window itself already works from the tray
+   icon and from a second launch.
+
 See `docs/adr/0004-windows-desktop-tauri.md` for the architecture rationale.
 
 ## Layout
@@ -218,6 +279,7 @@ separate work item.
 ## Not included yet
 
 - code signing certificate
-- native notifications (the in-app sound and web-push still work)
+- notification click activation / session deep-linking on Windows (the native
+  toast itself is implemented; see "Native notifications" above)
 - localized tray menu labels (the web settings UI is fully localized; the
   tray menu is English-only for now)

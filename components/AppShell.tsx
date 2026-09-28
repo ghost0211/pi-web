@@ -14,6 +14,7 @@ import { BranchNavigator } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
+import { RunningTasksPanel, type RunningTaskPhase } from "./RunningTasksPanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
@@ -29,7 +30,8 @@ import {
   shouldShowBrowserNotification,
   showBrowserNotification,
 } from "@/lib/browser-notifications";
-import { setupPushSubscription } from "@/lib/push-client";
+import { setupPushSubscription, teardownDesktopPushSubscription } from "@/lib/push-client";
+import { isDesktopApp, showDesktopNotification, takeDesktopNotificationTarget } from "@/lib/desktop";
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import {
   clearLastOpen,
@@ -89,6 +91,10 @@ export function AppShell() {
   // subscription so the server can notify backgrounded PWAs (notably iOS,
   // which suspends page JS and never receives the SSE completion event).
   useEffect(() => {
+    if (isDesktopApp()) {
+      void teardownDesktopPushSubscription();
+      return;
+    }
     if (typeof window === "undefined" || !("Notification" in window)) return;
     if (Notification.permission !== "granted") return;
     void setupPushSubscription(locale);
@@ -98,9 +104,6 @@ export function AppShell() {
   // is not mounted. ChatWindow receives the audio callbacks as props.
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio, soundEnabledRef } = useAudio();
   const notifiedAttentionRequestIdsRef = useRef(new Set<string>());
-  const handleBackgroundTaskDone = useCallback(() => {
-    if (soundEnabledRef.current) playDoneSound();
-  }, [playDoneSound, soundEnabledRef]);
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   const [sessionCatalog, setSessionCatalog] = useState<SessionInfo[]>([]);
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
@@ -119,7 +122,9 @@ export function AppShell() {
   );
   const hasSubagentSessions = Boolean(activeSessionFamily?.subagents.length);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
-  const handleRunningSessionIdsChange = useCallback((ids: Set<string>) => {
+  const [runningSessionPhases, setRunningSessionPhases] = useState<Record<string, RunningTaskPhase>>({});
+  const handleRunningSessionIdsChange = useCallback((ids: Set<string>, phases: Record<string, RunningTaskPhase>) => {
+    setRunningSessionPhases(phases);
     setRunningSessionIds((previous) => {
       if (previous.size === ids.size && [...ids].every((id) => previous.has(id))) return previous;
       return ids;
@@ -135,6 +140,7 @@ export function AppShell() {
   const [initialCwdError, setInitialCwdError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sessionKey, setSessionKey] = useState(0);
+  const [searchJump, setSearchJump] = useState<{ entryId: string; requestId: number } | null>(null);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
@@ -308,7 +314,7 @@ export function AppShell() {
   }, []);
 
   // Single active panel — only one dropdown open at a time
-  const [activeTopPanel, setActiveTopPanel] = useState<"agents" | "branches" | "system" | "tools" | "session" | "language" | null>(null);
+  const [activeTopPanel, setActiveTopPanel] = useState<"agents" | "tasks" | "branches" | "system" | "tools" | "session" | "language" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   // Close the branches panel when there is no session tree at all (e.g. a
@@ -326,7 +332,7 @@ export function AppShell() {
   }, [hasSubagentSessions]);
 
   const toggleTopPanel = useCallback((
-    panel: "agents" | "branches" | "system" | "tools" | "session" | "language",
+    panel: "agents" | "tasks" | "branches" | "system" | "tools" | "session" | "language",
     keepMobileToolbarOpen = false,
   ) => {
     if (isMobile) setSidebarOpen(false);
@@ -425,7 +431,7 @@ export function AppShell() {
         setTopPanelPos({ top: topBarRect.bottom, left, width });
         return;
       }
-      if (activeTopPanel === "agents") {
+      if (activeTopPanel === "agents" || activeTopPanel === "tasks") {
         setTopPanelPos({
           top: topBarRect.bottom,
           left: topBarRect.left,
@@ -640,8 +646,10 @@ export function AppShell() {
     router.replace("/", { scroll: false });
   }, [activeCwd, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
-  const handleSelectSession = useCallback((session: SessionInfo, isRestore = false) => {
+  const handleSelectSession = useCallback((session: SessionInfo, isRestore = false, entryId?: string) => {
     invalidateWorkspaceRestore();
+    const targetEntryId = entryId ?? (isRestore && session.id === initialNavigation.sessionId ? initialNavigation.entryId : null);
+    setSearchJump(targetEntryId ? { entryId: targetEntryId, requestId: Date.now() } : null);
     activeNewSessionDraftKeyRef.current = null;
     // Re-clicking the already-open session must not remount the chat and
     // re-run the full load/positioning cycle. Only skip when the effective
@@ -651,6 +659,7 @@ export function AppShell() {
       const sameProject =
         workspaceKeyOf(selectedSession) === workspaceKeyOf(session);
       if (selectedSession.id === session.id && sameProject) {
+        if (targetEntryId) router.replace(`?session=${encodeURIComponent(session.id)}&entry=${encodeURIComponent(targetEntryId)}`, { scroll: false });
         if (isMobile) setSidebarOpen(false);
         return;
       }
@@ -676,9 +685,26 @@ export function AppShell() {
     // Skip router.replace when restoring from URL — the param is already correct
     // and calling replace in production Next.js triggers a Suspense remount loop
     if (!isRestore) {
-      router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
+      router.replace(`?session=${encodeURIComponent(session.id)}${targetEntryId ? `&entry=${encodeURIComponent(targetEntryId)}` : ""}`, { scroll: false });
     }
-  }, [invalidateWorkspaceRestore, router, isMobile, selectedSession]);
+  }, [invalidateWorkspaceRestore, router, isMobile, selectedSession, initialNavigation]);
+
+  // Native toasts cannot deep-link on Windows (no activation callback); when
+  // the user returns to the Desktop window by any route, consume the session
+  // remembered by the last toast so completion still lands on the right chat.
+  useEffect(() => {
+    if (!isDesktopApp()) return;
+    const consume = () => {
+      void takeDesktopNotificationTarget().then((sessionId) => {
+        if (!sessionId) return;
+        const target = sessionCatalog.find((session) => session.id === sessionId);
+        if (target) handleSelectSession(target);
+      });
+    };
+    consume();
+    window.addEventListener("focus", consume);
+    return () => window.removeEventListener("focus", consume);
+  }, [sessionCatalog, handleSelectSession]);
 
   const handleNewSession = useCallback((sessionId: string, cwd: string) => {
     invalidateWorkspaceRestore();
@@ -792,6 +818,12 @@ export function AppShell() {
     body: string;
     tag?: string;
   }) => {
+    if (isDesktopApp()) {
+      // Desktop uses Windows toast, never Web Push/browser notifications as a
+      // second delivery path. Rust validates title/body and deduplicates tags.
+      void showDesktopNotification({ title, body, sessionId: targetSession?.id, tag });
+      return;
+    }
     if (!("Notification" in window)) return;
 
     const fire = () => {
@@ -820,6 +852,21 @@ export function AppShell() {
       });
     }
   }, [handleSelectSession, locale]);
+
+  const handleBackgroundTaskDone = useCallback((sessionIds: string[]) => {
+    if (soundEnabledRef.current) playDoneSound();
+    if (!isDesktopApp() || !shouldShowBrowserNotification()) return;
+    for (const id of sessionIds) {
+      const target = sessionCatalog.find((session) => session.id === id);
+      if (!target) continue;
+      deliverSessionNotification({
+        targetSession: target,
+        title: target.name ?? translate("i18n.sessionComplete"),
+        body: translate("i18n.taskFinished"),
+        tag: `pi-session-complete:${id}`,
+      });
+    }
+  }, [deliverSessionNotification, playDoneSound, sessionCatalog, soundEnabledRef, translate]);
 
   const handleAgentEnd = useCallback(() => {
     setRefreshKey((k) => k + 1);
@@ -958,6 +1005,10 @@ export function AppShell() {
 
   const handleOpenLinkedFile = useCallback((filePath: string) => {
     handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null });
+  }, [handleOpenFile, selectedSession?.id]);
+
+  const handleOpenLinkedDiff = useCallback((filePath: string) => {
+    handleOpenFile(filePath, getFileName(filePath), { sourceSessionId: selectedSession?.id ?? null, modeHint: "diff" });
   }, [handleOpenFile, selectedSession?.id]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
@@ -1522,6 +1573,19 @@ export function AppShell() {
             </button>
           );
         })()}
+        <button
+          type="button"
+          onClick={() => toggleTopPanel("tasks", mobile)}
+          title={translate("runningTasks.title")}
+          aria-label={translate("runningTasks.title")}
+          aria-pressed={activeTopPanel === "tasks"}
+          data-mobile-toolbar-action={mobile ? "tasks" : undefined}
+          style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined, height: "100%", padding: mobile ? 0 : "0 12px", border: "none", borderRight: "1px solid var(--border)", borderTop: activeTopPanel === "tasks" ? "2px solid var(--accent)" : "2px solid transparent", background: activeTopPanel === "tasks" ? "var(--bg-selected)" : "none", color: activeTopPanel === "tasks" ? "var(--text)" : "var(--text-muted)", cursor: "pointer", flexShrink: 0, fontSize: 11 }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9h10M7 14h7" /></svg>
+          {!mobile && <span>{translate("runningTasks.title")}</span>}
+          {runningSessionIds.size > 0 && <span style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}>{runningSessionIds.size}</span>}
+        </button>
         {hasSubagentSessions && (
           <button
             type="button"
@@ -2369,6 +2433,17 @@ export function AppShell() {
                   ))}
                 </div>
               )}
+              {activeTopPanel === "tasks" && (
+                <RunningTasksPanel
+                  sessions={sessionCatalog}
+                  runningSessionIds={runningSessionIds}
+                  runningSessionPhases={runningSessionPhases}
+                  selectedSessionId={selectedSession?.id}
+                  onSelectSession={(session) => { handleAgentSessionSelect(session); setActiveTopPanel(null); }}
+                  locale={locale}
+                  translate={translate}
+                />
+              )}
               {activeTopPanel === "agents" && activeSessionFamily && selectedSession && (
                 <AgentSessionPanel
                   rootSession={activeSessionFamily.root}
@@ -2616,6 +2691,7 @@ export function AppShell() {
             <ChatWindow
               key={sessionKey}
               session={selectedSession}
+              searchJump={searchJump}
               sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
               newSessionCwd={effectiveNewSessionCwd}
               newSessionDraftKey={newSessionDraftKey}
@@ -2636,6 +2712,7 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
+              onOpenGitDiff={handleOpenLinkedDiff}
               onOpenSession={handleOpenSession}
               subagentSessions={activeSessionFamily?.subagents ?? []}
               runningSessionIds={runningSessionIds}

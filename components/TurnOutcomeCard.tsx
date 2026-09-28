@@ -4,9 +4,22 @@ import { useI18n } from "@/hooks/useI18n";
 import type { TurnOutcome } from "@/lib/turn-outcome";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 
-export function TurnOutcomeCard({ outcome, onOpenFile }: {
+/**
+ * Per-turn review card: the files this turn's `write`/`edit` calls actually
+ * wrote, plus the recorded command results.
+ *
+ * `onOpenGitDiff` enables the per-file diff entry. The host (ChatWindow /
+ * AppShell) owns that wiring and should open the file with FileViewer's
+ * `initialDisplayMode="diff"`, i.e. FileViewer's own working-tree-vs-HEAD diff
+ * request — see `TurnWrittenFiles` for the accompanying scope notice.
+ */
+export function TurnOutcomeCard({ outcome, onOpenFile, onOpenGitDiff, diffNotice }: {
   outcome: TurnOutcome;
   onOpenFile?: (filePath: string) => void;
+  /** Open a written file in the viewer's repository-level git-diff mode. */
+  onOpenGitDiff?: (filePath: string) => void;
+  /** Localized replacement for the default repository-level diff notice. */
+  diffNotice?: string;
 }) {
   const { t } = useI18n();
   if (!outcome.files.length && !outcome.commands.length) return null;
@@ -15,7 +28,12 @@ export function TurnOutcomeCard({ outcome, onOpenFile }: {
       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>
         {t("chat.turnOutcome")}
       </div>
-      <TurnWrittenFiles files={outcome.files} onOpenFile={onOpenFile} />
+      <TurnWrittenFiles
+        files={outcome.files}
+        onOpenFile={onOpenFile}
+        onOpenGitDiff={onOpenGitDiff}
+        diffNotice={diffNotice}
+      />
       {outcome.commands.length > 0 && (
         <details style={{ marginTop: outcome.files.length ? 12 : 0, fontSize: 12 }}>
           <summary style={{ cursor: "pointer", color: "var(--text-muted)" }}>

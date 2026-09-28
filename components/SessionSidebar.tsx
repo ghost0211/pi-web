@@ -13,6 +13,8 @@ import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { isDesktopApp } from "@/lib/desktop";
+import type { RunningTaskPhase } from "./RunningTasksPanel";
 
 declare global {
   interface Window {
@@ -24,7 +26,7 @@ declare global {
 
 interface Props {
   selectedSessionId: string | null;
-  onSelectSession: (session: SessionInfo, isRestore?: boolean) => void;
+  onSelectSession: (session: SessionInfo, isRestore?: boolean, entryId?: string) => void;
   onNewSession?: (sessionId: string, cwd: string) => void;
   initialSessionId?: string | null;
   skipInitialProjectSelection?: boolean;
@@ -44,8 +46,8 @@ interface Props {
   onAtMentions?: (relativePaths: string[]) => void;
   /** Fired when a session that is not currently selected finishes running.
    *  Lets the app play a cross-workspace completion tone. */
-  onBackgroundTaskDone?: () => void;
-  onRunningSessionIdsChange?: (ids: Set<string>) => void;
+  onBackgroundTaskDone?: (sessionIds: string[]) => void;
+  onRunningSessionIdsChange?: (ids: Set<string>, phases: Record<string, RunningTaskPhase>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
   onToggleSidebar?: () => void;
 }
@@ -242,6 +244,33 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const wtDropdownRef = useRef<HTMLDivElement>(null);
   const wtNewInputRef = useRef<HTMLInputElement>(null);
   const [sessionSearch, setSessionSearch] = useState("");
+  const [contentMatches, setContentMatches] = useState<{ sessionId: string; entryId: string; turnEntryId: string; role: string; snippet: string }[]>([]);
+  const [contentSearchBusy, setContentSearchBusy] = useState(false);
+  const [contentSearchError, setContentSearchError] = useState(false);
+  const [contentSearchPartial, setContentSearchPartial] = useState(false);
+  useEffect(() => {
+    const q = sessionSearch.trim();
+    if (q.length < 2) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setContentSearchBusy(true);
+      setContentSearchError(false);
+      try {
+        const response = await fetch(`/api/sessions/search?q=${encodeURIComponent(q)}`, { signal: controller.signal, cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json() as { results: typeof contentMatches; truncated?: boolean; partial?: boolean };
+        if (!controller.signal.aborted) {
+          setContentMatches(data.results);
+          setContentSearchPartial(Boolean(data.truncated || data.partial));
+        }
+      } catch {
+        if (!controller.signal.aborted) setContentSearchError(true);
+      } finally {
+        if (!controller.signal.aborted) setContentSearchBusy(false);
+      }
+    }, 350);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [sessionSearch]);
   const [expandedProjectSessions, setExpandedProjectSessions] = useState<Set<string>>(() => new Set());
   const [sessionRefreshDone, setSessionRefreshDone] = useState(false);
   const [listMenuOpen, setListMenuOpen] = useState(false);
@@ -260,6 +289,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     return () => document.removeEventListener("mousedown", handleOutside);
   }, [listMenuOpen]);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const [runningSessionPhases, setRunningSessionPhases] = useState<Record<string, RunningTaskPhase>>({});
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -337,6 +367,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   useEffect(() => {
     let stopped = false;
+    // The Desktop window keeps running in the tray; continue polling there so
+    // background completions can trigger native notifications.
+    const desktop = isDesktopApp();
+    const shouldPoll = () => desktop || document.visibilityState === "visible";
     let timer: ReturnType<typeof setTimeout> | null = null;
     let controller: AbortController | null = null;
 
@@ -347,12 +381,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
     const schedule = () => {
       clearTimer();
-      if (stopped || document.visibilityState !== "visible") return;
+      if (stopped || !shouldPoll()) return;
       timer = setTimeout(() => void poll(), RUNNING_SESSIONS_POLL_MS);
     };
 
     const poll = async () => {
-      if (stopped || document.visibilityState !== "visible") return;
+      if (stopped || !shouldPoll()) return;
       const current = new AbortController();
       controller?.abort();
       controller = current;
@@ -364,6 +398,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         if (!res.ok) return;
         const data = await res.json() as {
           runningSessionIds?: string[];
+          runningSessionPhases?: Record<string, RunningTaskPhase>;
           completionNotificationSuppressedSessionIds?: string[];
         };
         if (stopped || controller !== current) return;
@@ -372,8 +407,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           data.completionNotificationSuppressedSessionIds ?? [],
         );
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
+        setRunningSessionPhases(data.runningSessionPhases ?? {});
       } catch {
-        // Keep the last known state; the next visible-tab poll retries.
+        // Keep the last known state; the next permitted poll retries.
       } finally {
         if (controller === current) controller = null;
         schedule();
@@ -381,8 +417,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void poll();
+      if (shouldPoll()) {
+        if (!desktop) void poll();
         return;
       }
       clearTimer();
@@ -401,8 +437,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, []);
 
   useEffect(() => {
-    onRunningSessionIdsChange?.(runningSessionIds);
-  }, [onRunningSessionIdsChange, runningSessionIds]);
+    onRunningSessionIdsChange?.(runningSessionIds, runningSessionPhases);
+  }, [onRunningSessionIdsChange, runningSessionIds, runningSessionPhases]);
 
   useEffect(() => {
     onSessionsChange?.(allSessions);
@@ -436,7 +472,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       loadSessions(false, true);
     }
     if (completedWithNotifications.length > 0) {
-      onBackgroundTaskDone?.();
+      onBackgroundTaskDone?.(completedWithNotifications);
     }
 
     previousRunningSessionIdsRef.current = runningSessionIds;
@@ -725,9 +761,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Done on the click path (not via the selectedCwd prop sync) so it also
   // works when the prop value won't change — e.g. re-clicking the already
   // open session after manually switching worktrees.
-  const handleSelectSessionFromList = useCallback((s: SessionInfo) => {
+  const handleSelectSessionFromList = useCallback((s: SessionInfo, entryId?: string) => {
     if (s.cwd) setSelectedCwd(s.cwd);
-    onSelectSession(s);
+    onSelectSession(s, false, entryId);
   }, [onSelectSession]);
 
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
@@ -1119,7 +1155,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           </svg>
           <input
             value={sessionSearch}
-            onChange={(e) => setSessionSearch(e.target.value)}
+            onChange={(e) => { setSessionSearch(e.target.value); setContentMatches([]); setContentSearchBusy(false); setContentSearchPartial(false); }}
             placeholder={t("sidebar.searchSessions")}
             style={{
               width: "100%",
@@ -1147,6 +1183,33 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </button>
           )}
         </div>
+
+        {sessionSearch.trim().length >= 2 && (
+          <div aria-live="polite" style={{ margin: "4px 0 8px", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ padding: "5px 9px", color: "var(--text-muted)", fontSize: 11 }}>
+              {t("sidebar.contentMatches")}{contentSearchBusy ? ` · ${t("sidebar.searchingFiles")}` : ""}
+              {contentSearchPartial ? ` · ${t("sidebar.searchPartial")}` : ""}
+              {contentSearchError ? ` · ${t("sidebar.searchFailed")}` : ""}
+            </div>
+            {!contentSearchBusy && !contentSearchError && contentMatches.length === 0 && (
+              <div style={{ padding: "4px 9px 9px", color: "var(--text-dim)", fontSize: 11 }}>{t("sidebar.noContentMatches")}</div>
+            )}
+            {contentMatches.filter((match) => !hiddenSessions.has(match.sessionId)).map((match) => {
+              const found = allSessions.find((s) => s.id === match.sessionId);
+              if (!found) return null;
+              return (
+                <button key={`${match.sessionId}:${match.entryId}`} type="button"
+                  onClick={() => handleSelectSessionFromList(found, match.turnEntryId || match.entryId)}
+                  style={{ display: "block", width: "100%", padding: "7px 9px", border: 0, borderRadius: 5, background: "transparent", color: "var(--text)", textAlign: "left", cursor: "pointer" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                  <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: "var(--text-muted)" }}>{found.name || found.firstMessage || found.id}</span>
+                  <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", fontSize: 12, overflowWrap: "anywhere" }}>{match.snippet}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {showWorktreeSwitcher && worktreeState && (() => {
           const showFilter = worktreeState.worktrees.length >= 8;

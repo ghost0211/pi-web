@@ -21,16 +21,19 @@ test("does not register row-level session deletion shortcuts", () => {
   assert.doesNotMatch(sessionItemSource, /tabIndex=\{0\}/);
 });
 
-test("polls running sessions only while the tab is visible", () => {
+test("polls running sessions while visible, and keeps polling in the desktop tray window", () => {
   assert.doesNotMatch(source, /new EventSource\("\/api\/agent\/running\/events"\)/);
   assert.match(source, /fetch\("\/api\/agent\/running"/);
-  assert.match(source, /document\.visibilityState !== "visible"/);
+  // Hidden browser tabs stop polling; the Desktop shell keeps polling while
+  // minimized to the tray so background completions can raise native toasts.
+  assert.match(source, /const desktop = isDesktopApp\(\)/);
+  assert.match(source, /desktop \|\| document\.visibilityState === "visible"/);
   assert.match(source, /document\.addEventListener\("visibilitychange", onVisibilityChange\)/);
 });
 
 test("exposes the polled running-session set to the shell", () => {
-  assert.match(source, /onRunningSessionIdsChange\?: \(ids: Set<string>\) => void/);
-  assert.match(source, /onRunningSessionIdsChange\?\.\(runningSessionIds\)/);
+  assert.match(source, /onRunningSessionIdsChange\?: \(ids: Set<string>, phases: Record<string, RunningTaskPhase>\) => void/);
+  assert.match(source, /onRunningSessionIdsChange\?\.\(runningSessionIds, runningSessionPhases\)/);
 });
 
 test("exposes the loaded session catalog to the shell", () => {
@@ -45,7 +48,7 @@ test("subagent completion stays silent and never becomes unread", () => {
     /completedWithNotifications = completedInBackground\.filter\([\s\S]*?!previousSuppressedCompletionSessionIdsRef\.current\.has\(id\)[\s\S]*?!knownSubagentIds\.has\(id\)/,
   );
   assert.match(source, /completedWithNotifications\.forEach\(\(id\) => next\.add\(id\)\)/);
-  assert.match(source, /if \(completedWithNotifications\.length > 0\) \{\s*onBackgroundTaskDone\?\.\(\)/);
+  assert.match(source, /if \(completedWithNotifications\.length > 0\) \{\s*onBackgroundTaskDone\?\.\(completedWithNotifications\)/);
   assert.match(
     source,
     /filter\(\(session\) => session\.relation\?\.kind !== "subagent"\)[\s\S]*?unreadEligibleIds\.has\(id\)/,

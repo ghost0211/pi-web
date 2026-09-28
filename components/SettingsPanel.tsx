@@ -19,6 +19,7 @@ import {
 import { ModelsConfig } from "./ModelsConfig";
 import { ModelScopeConfig } from "./ModelScopeConfig";
 import { SessionsConfig } from "./SessionsConfig";
+import { UsagePanel } from "./UsagePanel";
 import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
 import { PluginsConfig } from "./PluginsConfig";
@@ -51,6 +52,7 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   if (section === "models") return <svg {...common}><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" /></svg>;
   if (section === "model-scope") return <svg {...common}><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z" /></svg>;
   if (section === "sessions") return <svg {...common}><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></svg>;
+  if (section === "usage") return <svg {...common}><path d="M3 20V10M9 20V4M15 20v-7M21 20V7" /><path d="M2 20h20" /></svg>;
   if (section === "skills") return <svg {...common}><path d="m12 2-10 5 10 5 10-5-10-5Z" /><path d="m2 12 10 5 10-5M2 17l10 5 10-5" /></svg>;
   if (section === "agents") return <svg {...common} className="settings-section-icon is-agent"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>;
   if (section === "about") return <svg {...common}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>;
@@ -517,6 +519,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
     { id: "models", label: t("common.models"), requiresProject: false },
     { id: "model-scope", label: t("settings.modelScope"), requiresProject: false },
     { id: "sessions", label: t("common.sessions"), requiresProject: false },
+    { id: "usage", label: t("usage.title"), requiresProject: false },
     { id: "skills", label: t("common.skills"), requiresProject: true },
     { id: "agents", label: t("common.agents"), requiresProject: true },
     { id: "plugins", label: t("common.plugins"), requiresProject: true },
@@ -615,6 +618,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
             {sectionHost("models", <ModelsConfig embedded onClose={onClose} />)}
             {sectionHost("model-scope", <ModelScopeConfig embedded onClose={onClose} />)}
             {sectionHost("sessions", <SessionsConfig embedded onClose={onClose} />)}
+            {sectionHost("usage", <UsagePanel translate={t} />)}
             {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} onClose={onClose} />)}
             {cwd && sectionHost("agents", <AgentsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}
             {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}

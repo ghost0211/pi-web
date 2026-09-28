@@ -25,7 +25,7 @@ import type { SessionSystemPromptCustomization } from "@/lib/session-system-prom
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { calculateActiveContextTokens } from "@/lib/context-tokens";
 import { resolveModelContextWindow } from "@/lib/context-window";
-import { userMessageKey } from "@/lib/prompt-recovery";
+import { mergeDeliveredUserMessage, userMessageKey } from "@/lib/prompt-recovery";
 import type { TurnPreview } from "@/lib/turn-index";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
@@ -1337,19 +1337,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // messages. The run's initial prompt also emits one, but handleSend
           // already appended it optimistically. Consume only the still-adjacent
           // optimistic bubble; later same-text queue deliveries must render.
-          const delivered = normalizeToolCalls(completed);
-          const deliveredKey = userMessageKey(delivered);
+          const delivered = normalizeToolCalls(completed) as UserMessage;
           const optimisticKey = optimisticUserMessageKeyRef.current;
           optimisticUserMessageKeyRef.current = null;
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (optimisticKey && last?.role === "user" && userMessageKey(last) === optimisticKey) {
-              return optimisticKey === deliveredKey
-                ? prev
-                : [...prev.slice(0, -1), delivered];
-            }
-            return [...prev, delivered];
-          });
+          setMessages((prev) => mergeDeliveredUserMessage(prev, delivered, optimisticKey));
         } else if (completed) {
           const normalized = normalizeToolCalls(completed);
           estimateContextAfterMessageRef.current = true;

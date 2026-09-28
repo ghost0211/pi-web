@@ -34,6 +34,7 @@ import {
 
 interface Props {
   session: SessionInfo | null;
+  searchJump?: { entryId: string; requestId: number } | null;
   sessionRunning?: boolean;
   /** Sub-agent tabs are observational: only their parent agent can send commands. */
   readOnly?: boolean;
@@ -56,6 +57,7 @@ interface Props {
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+  onOpenGitDiff?: (filePath: string) => void;
   onOpenSession?: (sessionId: string) => void;
   subagentSessions?: readonly SessionInfo[];
   runningSessionIds?: ReadonlySet<string>;
@@ -202,7 +204,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, sessionRunning, readOnly = false, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
+export function ChatWindow({ session, searchJump, sessionRunning, readOnly = false, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenGitDiff, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
@@ -412,6 +414,39 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
     return history.reverse();
   }, [messages]);
   const messageRefs = useMessageRefs(visibleMessages.length);
+  const [jumpToScroll, setJumpToScroll] = useState<{ entryId: string; requestId: number } | null>(null);
+  useEffect(() => {
+    if (!searchJump || loading || !session) return;
+    let cancelled = false;
+    void ensureEntryLoaded(session.id, searchJump.entryId).then((found) => {
+      if (!cancelled && found) setJumpToScroll(searchJump);
+    });
+    return () => { cancelled = true; };
+  }, [searchJump, loading, session, ensureEntryLoaded]);
+
+  useLayoutEffect(() => {
+    if (!jumpToScroll) return;
+    const index = entryIds.indexOf(jumpToScroll.entryId);
+    if (index < 0) return;
+    const visibleIndex = messages[index]?.role === "user" || messages[index]?.role === "assistant"
+      ? index
+      : messages.findIndex((message, i) => i > index && (message.role === "user" || message.role === "assistant"));
+    if (visibleIndex < 0) { setJumpToScroll(null); return; }
+    const needed = messages.length - visibleIndex + 1;
+    if (visibleCount < needed) { setVisibleCount(needed); return; }
+    const refIndex = messages.slice(0, visibleIndex).filter((message) => message.role === "user" || message.role === "assistant").length;
+    const element = messageRefs.current[refIndex];
+    if (!element) return;
+    // Let session-load scroll restoration finish before positioning a search hit.
+    const frame = requestAnimationFrame(() => {
+      element.scrollIntoView({ block: "center", behavior: "smooth" });
+      element.style.outline = "2px solid var(--accent)";
+      element.style.outlineOffset = "4px";
+      window.setTimeout(() => { element.style.outline = ""; element.style.outlineOffset = ""; }, 2200);
+      setJumpToScroll(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [jumpToScroll, entryIds, messages, visibleCount, messageRefs]);
   const isMobile = useIsMobile();
   // Jump target for the turn rail: page history in until the turn renders,
   // then expand the rendered window so the rail can measure and scroll to it.
@@ -957,6 +992,8 @@ export function ChatWindow({ session, sessionRunning, readOnly = false, newSessi
                     key={`outcome-${entryIds[userIdx] ?? userIdx}`}
                     outcome={buildTurnOutcome(messages.slice(userIdx + 1, endIdx), messageCwd)}
                     onOpenFile={onOpenFile}
+                    onOpenGitDiff={onOpenGitDiff}
+                    diffNotice={t("chat.reviewDiffNotice")}
                   />,
                 );
                 idx = endIdx;

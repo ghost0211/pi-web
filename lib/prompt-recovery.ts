@@ -45,3 +45,31 @@ export function userMessageKey(message: Partial<AgentMessage>): string {
     images: content.map(imageSignature).filter(Boolean),
   });
 }
+
+/**
+ * Merge an SSE user-message completion with the optimistic bubble or a disk
+ * snapshot. A background reconciliation can read the persisted prompt before
+ * its message_end arrives; appending that event again briefly shows two prompts.
+ * Timestamp + content identify the persisted entry, while the optimistic key
+ * only applies to the run's initial prompt. Later identical queue deliveries
+ * with different timestamps remain separate messages.
+ */
+export function mergeDeliveredUserMessage(
+  messages: AgentMessage[],
+  delivered: AgentMessage & { role: "user" },
+  optimisticKey: string | null,
+): AgentMessage[] {
+  const deliveredKey = userMessageKey(delivered);
+  const last = messages.at(-1);
+  if (optimisticKey && last?.role === "user" && userMessageKey(last) === optimisticKey) {
+    return optimisticKey === deliveredKey
+      ? messages
+      : [...messages.slice(0, -1), delivered];
+  }
+  if (typeof delivered.timestamp === "number" && messages.some((message) => (
+    message.role === "user"
+    && message.timestamp === delivered.timestamp
+    && userMessageKey(message) === deliveredKey
+  ))) return messages;
+  return [...messages, delivered];
+}

@@ -350,6 +350,19 @@ export class AgentSessionWrapper {
     return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning);
   }
 
+  /**
+   * Coarse, server-derived phase for the running-tasks board. Returns null
+   * while idle so callers never report a step for a session that is not
+   * actually running. Based purely on SDK-reported flags — no guessing.
+   */
+  getRunningPhase(): RunningRpcSessionPhase | null {
+    if (!this.isRunning()) return null;
+    if (this.inner.isCompacting) return "compacting";
+    if (this.inner.isBashRunning) return "command";
+    if (this.inner.isStreaming) return "streaming";
+    return "thinking";
+  }
+
   isChatOnly(): boolean {
     return this.chatOnly;
   }
@@ -1991,6 +2004,23 @@ export function getCompletionNotificationSuppressedRpcSessionIds(): string[] {
     }
   }
   return [...ids];
+}
+
+/** Coarse phase of a currently-running session, mirrored by the client board. */
+export type RunningRpcSessionPhase = "thinking" | "streaming" | "command" | "compacting";
+
+/**
+ * Per-session phase for every currently-running session, keyed by real session
+ * id. Sessions whose wrapper cannot report a phase are omitted rather than
+ * fabricating a placeholder step.
+ */
+export function getRunningRpcSessionPhases(): Record<string, RunningRpcSessionPhase> {
+  const phases: Record<string, RunningRpcSessionPhase> = {};
+  for (const [sessionId, session] of getRegistry()) {
+    const phase = session.getRunningPhase();
+    if (phase) phases[session.sessionId || sessionId] = phase;
+  }
+  return phases;
 }
 
 /**

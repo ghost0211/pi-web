@@ -14,12 +14,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  formatUsageCost,
-  formatUsageTokens,
   type ModelUsage,
   type ProjectUsage,
   type UsageResponse,
 } from "@/lib/session-usage";
+import { formatUsageCost, formatUsageTokens } from "@/lib/usage-format";
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 

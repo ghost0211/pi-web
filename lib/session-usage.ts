@@ -658,23 +658,9 @@ function yieldToEventLoop(): Promise<void> {
 // ============================================================================
 // Display formatting
 //
-// Kept next to the aggregation so the API and the panel agree on the units, and
-// so the pure formatters can be unit-tested without mounting the component.
+// Re-exported from a client-safe module: `UsagePanel` is a client component and
+// must not pull this server-only file (session file access) into the browser
+// bundle just to format numbers.
 // ============================================================================
 
-/** Compact, bounded cost string. Keeps sub-cent amounts visible. */
-export function formatUsageCost(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "$0.00";
-  if (value < 0.001) return `$${value.toFixed(6)}`;
-  if (value < 1) return `$${value.toFixed(4)}`;
-  return `$${value.toFixed(2)}`;
-}
-
-/** Compact token string (1.2K / 3.40M / 1.00B). */
-export function formatUsageTokens(value: number): string {
-  const n = Number.isFinite(value) ? Math.max(0, value) : 0;
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(Math.round(n));
-}
+export { formatUsageCost, formatUsageTokens } from "./usage-format";

@@ -142,9 +142,9 @@ function SafeMarkdownBody({ children, className, ...props }: React.ComponentProp
   );
 }
 
-// Cap the user "sent" bubble's height so an abnormally long message does not
-// push the conversation off screen; overflow scrolls inside the bubble.
-const USER_BUBBLE_MAX_HEIGHT = 300;
+// User bubbles grow with their content; the page itself scrolls. Capping the
+// bubble height produced a scrollbar inside a single message, which read as
+// a bug with long text or attachments.
 
 function loadThinkingContent(sessionId: string, entryId: string, blockIndex: number): Promise<string> {
   const key = `${sessionId}:${entryId}:${blockIndex}`;
@@ -384,8 +384,6 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             lineHeight: 1.6,
             color: "var(--text)",
             wordBreak: "break-word",
-            maxHeight: USER_BUBBLE_MAX_HEIGHT,
-            overflowY: "auto",
           }}
         >
           {commandText ? (

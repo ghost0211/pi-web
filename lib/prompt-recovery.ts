@@ -15,6 +15,15 @@ function extractMessageText(message: Partial<AgentMessage>): string {
     .join("\n");
 }
 
+/**
+ * Pi may normalize prompt text when persisting (trim, CRLF→LF), while the
+ * optimistic bubble keeps the composer's raw string. Normalize before
+ * keying so the two representations of the same prompt compare equal.
+ */
+function normalizeMessageText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").trim();
+}
+
 function imageSignature(block: unknown): string {
   if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "image") return "";
   const source = (block as { source?: unknown }).source;
@@ -38,10 +47,10 @@ function imageSignature(block: unknown): string {
 
 export function userMessageKey(message: Partial<AgentMessage>): string {
   const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return JSON.stringify({ text: content, images: [] });
+  if (typeof content === "string") return JSON.stringify({ text: normalizeMessageText(content), images: [] });
   if (!Array.isArray(content)) return JSON.stringify({ text: "", images: [] });
   return JSON.stringify({
-    text: extractMessageText(message),
+    text: normalizeMessageText(extractMessageText(message)),
     images: content.map(imageSignature).filter(Boolean),
   });
 }
@@ -60,11 +69,22 @@ export function mergeDeliveredUserMessage(
   optimisticKey: string | null,
 ): AgentMessage[] {
   const deliveredKey = userMessageKey(delivered);
-  const last = messages.at(-1);
-  if (optimisticKey && last?.role === "user" && userMessageKey(last) === optimisticKey) {
-    return optimisticKey === deliveredKey
-      ? messages
-      : [...messages.slice(0, -1), delivered];
+  // The optimistic bubble is not necessarily the last message: with long text
+  // or attachments the assistant can start streaming (message_start snapshot)
+  // before the prompt's own message_end arrives. Find it wherever it is.
+  if (optimisticKey) {
+    const optimisticIndex = messages.findLastIndex((message) => (
+      message.role === "user" && userMessageKey(message) === optimisticKey
+    ));
+    if (optimisticIndex !== -1) {
+      return optimisticKey === deliveredKey
+        ? messages
+        : [
+          ...messages.slice(0, optimisticIndex),
+          delivered,
+          ...messages.slice(optimisticIndex + 1),
+        ];
+    }
   }
   if (typeof delivered.timestamp === "number" && messages.some((message) => (
     message.role === "user"

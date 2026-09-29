@@ -1411,9 +1411,18 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
   }, [provider.id, onRefresh]);
 
   const handleLogout = useCallback(async () => {
-    await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
-    setLoginState({ phase: "idle" });
-    onRefresh();
+    try {
+      const res = await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setLoginState({ phase: "error", message: data.error ?? `Disconnect failed (HTTP ${res.status})` });
+        return;
+      }
+      setLoginState({ phase: "idle" });
+      onRefresh();
+    } catch (e) {
+      setLoginState({ phase: "error", message: e instanceof Error ? e.message : "Network error" });
+    }
   }, [provider.id, onRefresh]);
 
   const submitCode = useCallback(async (token: string, code: string) => {

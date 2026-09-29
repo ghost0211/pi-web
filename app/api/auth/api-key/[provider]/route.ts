@@ -1,7 +1,8 @@
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentSessionServices, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { NextResponse } from "next/server";
 import { invalidateModelsCache } from "@/lib/models-cache";
 import { removeStoredCredentialIfType, storeProviderCredential } from "@/lib/provider-credential-store";
+import { projectTrustReloadOptions } from "@/lib/project-trust";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,17 @@ export async function POST(req: Request, { params }: Params) {
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
       return NextResponse.json({ error: "apiKey is required" }, { status: 400 });
     }
-    const modelRuntime = await ModelRuntime.create();
+    // Extension-registered providers only expose their auth methods through
+    // the full services runtime (see /api/auth/providers).
+    const cwd = process.cwd() || process.env.PI_WEB_CWD || "";
+    const agentDir = getAgentDir();
+    const trustReloadOptions = projectTrustReloadOptions(cwd, agentDir);
+    const services = await createAgentSessionServices({
+      cwd,
+      agentDir,
+      ...(trustReloadOptions ? { resourceLoaderReloadOptions: trustReloadOptions } : {}),
+    });
+    const modelRuntime = services.modelRuntime;
     const apiKeyAuth = modelRuntime.getProvider(provider)?.auth.apiKey;
     if (!apiKeyAuth?.login) {
       throw new Error(`${provider} does not support API key login`);

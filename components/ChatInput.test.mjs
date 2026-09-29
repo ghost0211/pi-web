@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { Script } from "node:vm";
+import ts from "typescript";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, {
@@ -280,8 +283,10 @@ test("locks built-in command submission until it settles", async () => {
   const callback = new Script(ts.transpileModule(findCallback(source).getText(source), {
     compilerOptions: { target: ts.ScriptTarget.ES2020 },
   }).outputText).runInNewContext({
-    attachedImages: [],
     attachedImagesRef: { current: [] },
+    attachedTextFilesRef: { current: [] },
+    attachedBinaryFilesRef: { current: [] },
+    attachedLocalFilesRef: { current: [] },
     builtinCommandPendingRef: { current: false },
     canClearBuiltinCommandInput,
     clearInput() {},

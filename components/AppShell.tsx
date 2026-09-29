@@ -31,7 +31,7 @@ import {
   showBrowserNotification,
 } from "@/lib/browser-notifications";
 import { setupPushSubscription, teardownDesktopPushSubscription } from "@/lib/push-client";
-import { isDesktopApp, showDesktopNotification, takeDesktopNotificationTarget } from "@/lib/desktop";
+import { isDesktopApp, showDesktopNotification } from "@/lib/desktop";
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import {
   clearLastOpen,
@@ -690,23 +690,6 @@ export function AppShell() {
       router.replace(`?session=${encodeURIComponent(session.id)}${targetEntryId ? `&entry=${encodeURIComponent(targetEntryId)}` : ""}`, { scroll: false });
     }
   }, [invalidateWorkspaceRestore, router, isMobile, selectedSession, initialNavigation]);
-
-  // Native toasts cannot deep-link on Windows (no activation callback); when
-  // the user returns to the Desktop window by any route, consume the session
-  // remembered by the last toast so completion still lands on the right chat.
-  useEffect(() => {
-    if (!isDesktopApp()) return;
-    const consume = () => {
-      void takeDesktopNotificationTarget().then((sessionId) => {
-        if (!sessionId) return;
-        const target = sessionCatalog.find((session) => session.id === sessionId);
-        if (target) handleSelectSession(target);
-      });
-    };
-    consume();
-    window.addEventListener("focus", consume);
-    return () => window.removeEventListener("focus", consume);
-  }, [sessionCatalog, handleSelectSession]);
 
   const handleNewSession = useCallback((sessionId: string, cwd: string) => {
     invalidateWorkspaceRestore();

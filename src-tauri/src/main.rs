@@ -77,17 +77,14 @@ const MAX_NOTIFICATION_ID_CHARS: usize = 128;
 /// retried SSE event must not stack duplicate notifications.
 const NOTIFICATION_DEDUP_WINDOW: Duration = Duration::from_millis(1500);
 
-/// Native-notification bookkeeping: duplicate suppression plus the last
-/// deep-link target handed over from a shown toast.
+/// Native-notification bookkeeping: duplicate suppression for repeated tags.
 ///
-/// Click activation itself is NOT available through tauri-plugin-notification on
+/// Click activation is NOT available through tauri-plugin-notification on
 /// Windows desktop (its desktop backend forwards only title/body/icon/sound to
-/// notify-rust, which has no activation callback outside XDG). `last_target`
-/// therefore only helps when the app is activated by another route (tray, a
-/// second launch, or a future registered toast activator); see desktop/README.md.
+/// notify-rust, which has no activation callback outside XDG), so toasts are
+/// informational only; see desktop/README.md.
 struct NotificationState {
     last_shown: Mutex<Option<(String, Instant)>>,
-    last_target: Mutex<Option<String>>,
 }
 
 fn settings_path(app: &AppHandle) -> Option<PathBuf> {
@@ -334,8 +331,8 @@ fn sanitize_notification_identifier(raw: Option<&str>) -> Result<Option<String>,
 ///
 /// Returns `true` when a toast was handed to the OS and `false` when an
 /// identical `tag` was already shown inside [`NOTIFICATION_DEDUP_WINDOW`].
-/// `session_id` is an opaque deep-link target (never a URL or path) and is
-/// remembered for [`take_desktop_notification_target`].
+/// `session_id` is an opaque deep-link target (never a URL or path) used only
+/// as the dedup-tag fallback.
 #[tauri::command]
 fn send_desktop_notification(
     app: AppHandle,
@@ -370,12 +367,6 @@ fn send_desktop_notification(
         *last_shown = Some((tag, Instant::now()));
     }
 
-    if session_id.is_some() {
-        if let Ok(mut target) = state.last_target.lock() {
-            *target = session_id;
-        }
-    }
-
     app.notification()
         .builder()
         .title(title)
@@ -383,19 +374,6 @@ fn send_desktop_notification(
         .show()
         .map_err(|error| format!("failed to show the desktop notification: {error}"))?;
     Ok(true)
-}
-
-/// Consume the session id remembered by the most recent native notification.
-/// The web UI calls this when it regains focus so a toast that did manage to
-/// activate the app can open the right session. Returns `null` when there is no
-/// pending target; the value is always an opaque id, never a URL.
-#[tauri::command]
-fn take_desktop_notification_target(app: AppHandle) -> Option<String> {
-    app.state::<NotificationState>()
-        .last_target
-        .lock()
-        .ok()
-        .and_then(|mut target| target.take())
 }
 
 #[tauri::command]
@@ -771,7 +749,6 @@ fn main() {
         .manage(Mutex::new(DesktopServer { child: None }))
         .manage(NotificationState {
             last_shown: Mutex::new(None),
-            last_target: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_close_behavior,
@@ -781,7 +758,6 @@ fn main() {
             open_local_path_with,
             reveal_local_path,
             send_desktop_notification,
-            take_desktop_notification_target,
             prepare_desktop_update,
             get_lan_access,
             set_lan_access,

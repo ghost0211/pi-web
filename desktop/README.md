@@ -27,7 +27,7 @@ reject relative and missing paths before touching the shell.
 
 Session-complete and extension-attention events use native Windows toasts via
 `tauri-plugin-notification` instead of the Web Notification API. The shell
-exposes two commands, granted to loopback origins only
+exposes one command, granted to loopback origins only
 (`src-tauri/capabilities/desktop-remote.json`):
 
 - `send_desktop_notification(title, body, sessionId?, tag?)` — shows a toast.
@@ -35,11 +35,9 @@ exposes two commands, granted to loopback origins only
   `sessionId`/`tag` must be bounded opaque ids (`[A-Za-z0-9._:-]{1,128}`), so
   this channel can never pass a URL, path, or shell argument. A toast sharing a
   `tag` within 1.5 s is suppressed, which absorbs re-renders and retried events.
-- `take_desktop_notification_target()` — consumes the session id remembered by
-  the most recent toast, for the caller to resolve against its own session list.
 
-The JS bridge is `showDesktopNotification` / `takeDesktopNotificationTarget` in
-`lib/desktop.ts`; both no-op outside the desktop shell.
+The JS bridge is `showDesktopNotification` in
+`lib/desktop.ts`; it no-ops outside the desktop shell.
 
 ### Wiring plan for the main thread (AppShell)
 
@@ -76,13 +74,13 @@ change, so it still needs this wiring:
    `tauri-plugin-notification`'s desktop backend forwards only
    title/body/icon/sound to `notify-rust`, which has no toast-activation
    callback outside XDG; clicking an unpackaged app's toast without a registered
-   COM activator does nothing. `take_desktop_notification_target()` is therefore
-   best-effort only: it is useful when the app is activated by another route
-   (tray restore, a second launch through the single-instance plugin, or a
-   future registered toast activator). If `sessionId` deep-linking is required,
-   that needs a WinRT toast backend plus COM activator registration — a larger
-   change than this one. Raising the window itself already works from the tray
-   icon and from a second launch.
+   COM activator does nothing. An earlier iteration consumed the last toast's
+   session id on every window-focus event and opened it — but any unrelated
+   focus (alt-tab, tray restore) triggered the jump and cleared the session's
+   unread marker, so that bridge was removed again. If `sessionId` deep-linking
+   is required, that needs a WinRT toast backend plus COM activator registration
+   — a larger change than this one. Raising the window itself already works
+   from the tray icon and from a second launch.
 
 See `docs/adr/0004-windows-desktop-tauri.md` for the architecture rationale.
 

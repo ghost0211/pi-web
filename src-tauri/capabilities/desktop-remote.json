@@ -14,7 +14,6 @@
     "allow-open-local-path-with",
     "allow-reveal-local-path",
     "allow-send-desktop-notification",
-    "allow-take-desktop-notification-target",
     "allow-prepare-desktop-update",
     "allow-get-lan-access",
     "allow-set-lan-access",

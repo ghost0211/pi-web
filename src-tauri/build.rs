@@ -11,7 +11,6 @@ fn main() {
             "open_local_path_with",
             "reveal_local_path",
             "send_desktop_notification",
-            "take_desktop_notification_target",
             "prepare_desktop_update",
             "get_lan_access",
             "set_lan_access",

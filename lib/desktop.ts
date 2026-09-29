@@ -205,22 +205,6 @@ export async function showDesktopNotification(input: DesktopNotificationInput): 
 }
 
 /**
- * Consume the session id remembered by the last native toast. Returns null
- * outside the desktop shell or when nothing is pending. The shell never returns
- * a URL, so the caller must still resolve the id through its own session list.
- */
-export async function takeDesktopNotificationTarget(): Promise<string | null> {
-  const invoke = tauriBridge()?.core?.invoke;
-  if (!invoke) return null;
-  try {
-    const value = await invoke<unknown>("take_desktop_notification_target");
-    return normalizeDesktopNotificationId(value);
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Stop the bundled Node sidecar before the updater runs. The NSIS installer
  * force-quits the app process, which can orphan node.exe and leave install-dir
  * files locked ("file in use" update failures). The shell kills and reaps the

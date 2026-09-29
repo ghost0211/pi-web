@@ -145,8 +145,8 @@ export function ModelSelector({
         gap: 6,
         width: isMobile ? "100%" : undefined,
         maxWidth: isMobile ? "100%" : 220,
-        height: 28,
-        padding: isMobile ? "0 8px" : "0 10px",
+        minHeight: 28,
+        padding: isMobile ? "0 8px" : "1px 10px",
         overflow: "hidden",
         border: "1px solid var(--border)",
         borderRadius: 8,
@@ -225,12 +225,25 @@ export function ModelSelector({
             <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
           </svg>
         )}
-        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {currentProvider?.trim() && (
-            <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>{currentProvider} › </span>
-          )}
-          {currentName}
-        </span>
+        {currentProvider?.trim() && variant !== "field" && !isMobile ? (
+          // Two-line chip: model name primary, provider id secondary — no more
+          // overlong "provider › model" single line in the composer.
+          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.2, overflow: "hidden" }}>
+            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {currentName}
+            </span>
+            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, fontWeight: 400, color: "var(--text-dim)" }}>
+              {currentProvider}
+            </span>
+          </span>
+        ) : (
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {currentProvider?.trim() && (
+              <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>{currentProvider} › </span>
+            )}
+            {currentName}
+          </span>
+        )}
         {variant === "field" && (
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}>
             <polyline points="6 9 12 15 18 9" />

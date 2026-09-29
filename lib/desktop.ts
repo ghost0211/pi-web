@@ -34,6 +34,48 @@ export interface DesktopFileDropHandlers {
   onDrop: (paths: string[]) => void;
 }
 
+/* ── Custom titlebar window controls ───────────────────────────────────────
+ * The desktop window is undecorated (see `build_main_window` in main.rs), so
+ * the web UI renders its own minimize/maximize/close buttons. All of these
+ * no-op outside the desktop shell.
+ */
+
+export async function desktopWindowMinimize(): Promise<void> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return;
+  try { await invoke("plugin:window|minimize"); } catch { /* shell gone */ }
+}
+
+export async function desktopWindowToggleMaximize(): Promise<void> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return;
+  try { await invoke("plugin:window|toggle_maximize"); } catch { /* shell gone */ }
+}
+
+/** Close goes through CloseRequested, so the close-behavior setting applies. */
+export async function desktopWindowClose(): Promise<void> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return;
+  try { await invoke("plugin:window|close"); } catch { /* shell gone */ }
+}
+
+export async function desktopWindowIsMaximized(): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return false;
+  try { return (await invoke<boolean>("plugin:window|is_maximized")) === true; } catch { return false; }
+}
+
+/** Fires on every window resize; maximize state changes are observed through it. */
+export async function listenDesktopWindowResize(handler: () => void): Promise<DesktopUnlisten | null> {
+  const listen = tauriBridge()?.event?.listen;
+  if (!listen) return null;
+  try {
+    return await listen("tauri://resize", () => handler());
+  } catch {
+    return null;
+  }
+}
+
 function tauriBridge(): TauriBridge | null {
   if (typeof window === "undefined") return null;
   const candidate = (window as unknown as { __TAURI__?: unknown }).__TAURI__;

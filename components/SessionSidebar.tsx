@@ -23,7 +23,7 @@ import type { RunningTaskPhase } from "./RunningTasksPanel";
 const SESSION_LIST_ITEM_HEIGHT = 34;
 const PROJECT_HEADER_HEIGHT = 34;
 const PROJECT_EMPTY_HEIGHT = 28;
-const SHOW_MORE_HEIGHT = 33;
+const SHOW_MORE_HEIGHT = 30;
 const PROJECT_TRAILING_HEIGHT = 4;
 const VIRTUAL_OVERSCAN_PX = SESSION_LIST_ITEM_HEIGHT * 8;
 
@@ -277,7 +277,7 @@ function AnimatedDropdown({ open, children, style }: { open: boolean; children: 
 
 function PiWebTitle() {
   return (
-    <div className="kimi-sidebar-brand" title={`Pi Web ${process.env.NEXT_PUBLIC_APP_VERSION ?? ""}`}>
+    <div className="kimi-sidebar-brand" data-tauri-drag-region title={`Pi Web ${process.env.NEXT_PUBLIC_APP_VERSION ?? ""}`}>
       <span className="kimi-sidebar-brand-mark pi-brand-logo">
         <span className="pi-brand-symbol">π</span>
       </span>

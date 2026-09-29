@@ -32,6 +32,7 @@ import {
 } from "@/lib/browser-notifications";
 import { setupPushSubscription, teardownDesktopPushSubscription } from "@/lib/push-client";
 import { isDesktopApp, showDesktopNotification } from "@/lib/desktop";
+import { DesktopWindowControls } from "./DesktopWindowControls";
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import {
   clearLastOpen,
@@ -2229,7 +2230,7 @@ export function AppShell() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
         {/* Top bar with sidebar toggle */}
         <div ref={topBarRef} style={{ flexShrink: 0, background: "var(--bg)" }}>
-        <div style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(48px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
+        <div data-tauri-drag-region style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(48px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
           <button
             onClick={handleSidebarToggle}
              title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
@@ -2359,11 +2360,15 @@ export function AppShell() {
                 {runningSessionIds.size > 0 && <span style={{ fontVariantNumeric: "tabular-nums" }}>{runningSessionIds.size}</span>}
               </button>
               {selectedSession?.branch && (
-                <div className="kimi-chat-head-branch" title={selectedSession.branch}>
+                <div
+                  className={`kimi-chat-head-branch${isDesktopApp() ? " has-window-controls" : ""}`}
+                  title={selectedSession.branch}
+                >
                   <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="4" r="1.6"/><circle cx="5" cy="15.5" r="1.6"/><circle cx="14.5" cy="7" r="1.6"/><path d="M5 5.6v8.3M6.6 6.5h3.4a4.5 4.5 0 0 0 4.5-4.5v3.4"/></svg>
                   <span>{selectedSession.branch}</span>
                 </div>
               )}
+              <DesktopWindowControls />
             </>
           )}
           {isMobile && branchTree.length > 0 && (

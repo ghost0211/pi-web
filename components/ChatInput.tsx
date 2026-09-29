@@ -2936,7 +2936,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 isAutoSelection={isAutoModelSelection}
               />
             )}
-            {!isStreaming && onThinkingLevelChange && (!availableThinkingLevels || availableThinkingLevels.length > 0) && (
+            {onThinkingLevelChange && (!availableThinkingLevels || availableThinkingLevels.length > 0) && (
               <div ref={thinkingDropdownRef} style={{ position: "relative" }}>
                 <button
                   type="button"

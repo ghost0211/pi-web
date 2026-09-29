@@ -704,6 +704,11 @@ fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> Webview
         .title("Pi Web Desktop")
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
+        // Undecorated: the web UI draws its own titlebar controls (see
+        // components/DesktopWindowControls.tsx). Keep the native shadow so the
+        // window still reads as a window on the desktop.
+        .decorations(false)
+        .shadow(true)
         .visible(visible)
         // The window starts hidden on the bundled loading page; reveal it once
         // the real UI has loaded, so that page is never what the user sees when

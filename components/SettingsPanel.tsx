@@ -11,6 +11,8 @@ import {
   setDesktopCloseBehavior,
   type DesktopCloseBehavior,
 } from "@/lib/desktop";
+import { setTaskNotificationsEnabled, taskNotificationsEnabled } from "@/lib/task-notifications";
+import { getDesktopLanAccess, setDesktopLanAccess } from "@/lib/desktop";
 import type { ShellToolSettingsResponse } from "@/lib/api-types";
 import {
   setLastSettingsSection,
@@ -97,6 +99,10 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
   const [desktopApp] = useState(() => isDesktopApp());
   const [closeBehavior, setCloseBehavior] = useState<DesktopCloseBehavior | null>(null);
   const [closeBehaviorSaving, setCloseBehaviorSaving] = useState(false);
+  const [taskNotify, setTaskNotify] = useState(() => taskNotificationsEnabled());
+  const [lanAccess, setLanAccess] = useState<boolean | null>(null);
+  const [lanAccessSaving, setLanAccessSaving] = useState(false);
+  const [lanAccessDirty, setLanAccessDirty] = useState(false);
   // The installed desktop app already runs the Web server on this origin.
   // Show the live port instead of guessing the persisted port, which may have
   // a temporary fallback when another process occupies it.
@@ -144,6 +150,9 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
       void getDesktopCloseBehavior()
         .then((behavior) => { if (!cancelled) setCloseBehavior(behavior); })
         .catch((cause) => { if (!cancelled) setErrorMsg(cause instanceof Error ? cause.message : String(cause)); });
+      void getDesktopLanAccess()
+        .then((enabled) => { if (!cancelled && enabled !== null) setLanAccess(enabled); })
+        .catch(() => { /* LAN access is desktop-only; ignore */ });
     }
     return () => { cancelled = true; };
   }, [desktopApp]);
@@ -167,14 +176,16 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
     }
   };
 
-  const togglePowerShell = async (enabled: boolean) => {
+  const applyShellOption = async (optionId: string) => {
+    const option = shellSettings?.options.find((entry) => entry.id === optionId);
+    if (!option) return;
     setShellSaving(true);
     setErrorMsg(null);
     try {
       const response = await fetch("/api/tools/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ tool: option.tool, shellPath: option.path }),
       });
       const data = await response.json() as ShellToolSettingsResponse & { error?: string };
       if (!response.ok || data.error) throw new Error(data.error ?? `HTTP ${response.status}`);
@@ -200,6 +211,21 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
       setErrorMsg(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setCloseBehaviorSaving(false);
+    }
+  };
+
+  const updateLanAccess = async (enabled: boolean) => {
+    setLanAccessSaving(true);
+    setErrorMsg(null);
+    try {
+      const applied = await setDesktopLanAccess(enabled);
+      setLanAccess(applied);
+      // The bind address is chosen when the sidecar spawns.
+      if (applied !== lanAccess) setLanAccessDirty(true);
+    } catch (cause) {
+      setErrorMsg(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLanAccessSaving(false);
     }
   };
 
@@ -387,6 +413,23 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
             <section className="settings-general-section">
               <div className="settings-card-row">
                 <div className="settings-card-row-info">
+                  <h4 className="settings-card-row-title">{t("settings.taskNotifications")}</h4>
+                  <p className="settings-card-row-desc">{t("settings.taskNotificationsDescription")}</p>
+                </div>
+                <ConfigSwitch
+                  checked={taskNotify}
+                  label={t("settings.taskNotifications")}
+                  onChange={(val) => {
+                    setTaskNotificationsEnabled(val);
+                    setTaskNotify(val);
+                  }}
+                />
+              </div>
+            </section>
+
+            <section className="settings-general-section">
+              <div className="settings-card-row">
+                <div className="settings-card-row-info">
                   <h4 className="settings-card-row-title">{t("settings.quietStartup")}</h4>
                   <p className="settings-card-row-desc">{t("settings.quietStartupDescription")}</p>
                 </div>
@@ -407,15 +450,30 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
               <section className="settings-general-section">
                 <h3 className="settings-general-heading">{t("settings.shellTool")}</h3>
                 <p className="settings-general-description">{t("settings.shellToolDescription")}</p>
-                <div className="settings-shell-option">
-                  <span>{t("settings.usePowerShell")}</span>
-                  <ConfigSwitch
-                    checked={shellSettings.powerShellEnabled}
-                    loading={shellSaving}
-                    label={t("settings.usePowerShell")}
-                    onChange={(enabled) => void togglePowerShell(enabled)}
-                  />
-                </div>
+                <select
+                  className="settings-shell-select"
+                  aria-label={t("settings.shellTool")}
+                  disabled={shellSaving}
+                  value={shellSettings.tool === "powershell"
+                    ? "powershell"
+                    : shellSettings.shellPath
+                      ? `bash:${shellSettings.shellPath}`
+                      : "bash-auto"}
+                  onChange={(event) => void applyShellOption(event.target.value)}
+                >
+                  {shellSettings.options.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {t(`settings.shellOption.${option.labelKey}`)}{option.path ? ` — ${option.path}` : ""}
+                    </option>
+                  ))}
+                  {/* Keep a previously stored custom path selectable even when detection missed it. */}
+                  {shellSettings.tool === "bash" && shellSettings.shellPath
+                    && !shellSettings.options.some((option) => option.id === `bash:${shellSettings.shellPath}`) && (
+                    <option value={`bash:${shellSettings.shellPath}`}>
+                      {t("settings.shellOption.custom")} — {shellSettings.shellPath}
+                    </option>
+                  )}
+                </select>
               </section>
             )}
 
@@ -495,8 +553,24 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
                 <h3 className="settings-general-heading">{t("settings.desktopWebService")}</h3>
                 <p className="settings-general-description">{t("settings.desktopWebServiceDescription")}</p>
                 <code>{desktopWebOrigin}</code>
-                <p className="settings-general-description settings-desktop-tailnet-hint">{t("settings.desktopTailnetHint")}</p>
-                <code>tailscale serve --bg {desktopWebPort}</code>
+                <div className="settings-card-row settings-desktop-lan-row">
+                  <div className="settings-card-row-info">
+                    <h4 className="settings-card-row-title">{t("settings.desktopLanAccess")}</h4>
+                    <p className="settings-card-row-desc">{t("settings.desktopLanAccessDescription")}</p>
+                  </div>
+                  <ConfigSwitch
+                    checked={lanAccess ?? false}
+                    loading={lanAccessSaving}
+                    label={t("settings.desktopLanAccess")}
+                    onChange={(val) => void updateLanAccess(val)}
+                  />
+                </div>
+                {lanAccess && (
+                  <p className="settings-general-description settings-desktop-lan-warning">{t("settings.desktopLanAccessWarning")}</p>
+                )}
+                {lanAccessDirty && (
+                  <p className="settings-general-description">{t("settings.desktopRestartRequired")}</p>
+                )}
               </div>
             )}
           </section>

@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
 
@@ -42,6 +42,12 @@ export function resolveShellTools(
 
 export function getPowerShellSettingsPath(agentDir = getAgentDir()): string {
   return join(agentDir, "settings.json");
+}
+
+export interface ShellToolSelection {
+  tool: "bash" | "powershell";
+  /** Explicit bash executable (settings.json `shellPath`); null = auto. */
+  shellPath: string | null;
 }
 
 function parseSettings(path: string): Record<string, unknown> {
@@ -103,4 +109,67 @@ export async function writePowerShellToolEnabled(
     await release();
   }
   return enabled;
+}
+
+/** Current shell-tool selection: which tool plus the optional bash path. */
+export async function readShellToolSelection(
+  settingsPath = getPowerShellSettingsPath(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<ShellToolSelection> {
+  if (!existsSync(settingsPath)) return { tool: "bash", shellPath: null };
+  const release = await lockfile.lock(settingsPath, { realpath: false, retries: 10 });
+  try {
+    const settings = parseSettings(settingsPath);
+    const tool = isPowerShellToolEnabled(configuredTools(settings), platform) ? "powershell" : "bash";
+    const shellPath = typeof settings.shellPath === "string" && settings.shellPath.trim()
+      ? settings.shellPath
+      : null;
+    return { tool, shellPath };
+  } finally {
+    await release();
+  }
+}
+
+/**
+ * Switch the shell tool and (for bash) the explicit executable path. When the
+ * powershell tool is selected, any stored shellPath is kept untouched — pi
+ * only applies it to the bash tool, and the user may switch back.
+ */
+export async function writeShellToolSelection(
+  selection: ShellToolSelection,
+  settingsPath = getPowerShellSettingsPath(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<ShellToolSelection> {
+  if (platform !== "win32") throw new Error("Shell tool settings are only available on Windows");
+  if (selection.tool === "bash" && selection.shellPath) {
+    const normalized = selection.shellPath.trim();
+    if (!isAbsolute(normalized)) throw new Error("shellPath must be an absolute path");
+    if (!existsSync(normalized)) throw new Error(`shellPath does not exist: ${normalized}`);
+  }
+
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  try {
+    writeFileSync(settingsPath, "{}", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const release = await lockfile.lock(settingsPath, { realpath: false, retries: 10 });
+  try {
+    const settings = parseSettings(settingsPath);
+    const currentTools = configuredTools(settings) ?? DEFAULT_TOOLS;
+    const nextTools = replaceShellTool(currentTools, selection.tool === "powershell");
+    if (!currentTools.some((name) => SHELL_TOOLS.has(name))) {
+      nextTools.push(selection.tool);
+    }
+    settings.defaultTools = nextTools;
+    if (selection.tool === "bash") {
+      if (selection.shellPath) settings.shellPath = selection.shellPath.trim();
+      else delete settings.shellPath;
+    }
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf8");
+    chmodSync(settingsPath, 0o600);
+  } finally {
+    await release();
+  }
+  return selection;
 }

@@ -50,7 +50,9 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
 } from "@/lib/panel-layout";
-import type { BlockingExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
+import type { AgentEndInfo, BlockingExtensionUiRequest, SessionInfo, SessionTreeNode } from "@/lib/types";
+import { plainNotificationText } from "@/lib/notification-text";
+import { taskNotificationsEnabled } from "@/lib/task-notifications";
 import type { ProjectTrustStatus } from "@/lib/api-types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -855,31 +857,44 @@ export function AppShell() {
 
   const handleBackgroundTaskDone = useCallback((sessionIds: string[]) => {
     if (soundEnabledRef.current) playDoneSound();
+    if (!taskNotificationsEnabled()) return;
     if (!isDesktopApp() || !shouldShowBrowserNotification()) return;
     for (const id of sessionIds) {
       const target = sessionCatalog.find((session) => session.id === id);
       if (!target) continue;
+      // Codex-style: the toast names the task and previews what it was about.
+      const title = target.name ?? translate("i18n.sessionComplete");
+      const requestPreview = target.firstMessage ? plainNotificationText(target.firstMessage) : "";
       deliverSessionNotification({
         targetSession: target,
-        title: target.name ?? translate("i18n.sessionComplete"),
-        body: translate("i18n.taskFinished"),
+        title,
+        body: requestPreview || translate("i18n.taskFinished"),
         tag: `pi-session-complete:${id}`,
       });
     }
   }, [deliverSessionNotification, playDoneSound, sessionCatalog, soundEnabledRef, translate]);
 
-  const handleAgentEnd = useCallback(() => {
+  const handleAgentEnd = useCallback((info?: AgentEndInfo) => {
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
     if (selectedSession) hydrateSelectedSession(selectedSession.id);
 
     if (selectedSession?.relation?.kind === "subagent") return;
+    if (!taskNotificationsEnabled()) return;
     if (!shouldShowBrowserNotification()) return;
     const targetSession = selectedSession;
+    // Title names the task; body shows the tail of the assistant's reply so
+    // the notification itself answers "what happened".
+    const title = targetSession?.name
+      ?? (targetSession?.firstMessage ? plainNotificationText(targetSession.firstMessage, 80) : null)
+      ?? translate("i18n.sessionComplete");
+    const body = info?.snippet
+      ?? (targetSession?.name && targetSession.firstMessage ? plainNotificationText(targetSession.firstMessage) : null)
+      ?? translate("i18n.taskFinished");
     deliverSessionNotification({
       targetSession,
-      title: targetSession?.name ?? translate("i18n.sessionComplete"),
-      body: translate("i18n.taskFinished"),
+      title,
+      body,
       tag: targetSession ? `pi-session-complete:${targetSession.id}` : "pi-session-complete",
     });
   }, [deliverSessionNotification, hydrateSelectedSession, selectedSession, translate]);

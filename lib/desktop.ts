@@ -236,3 +236,28 @@ export async function prepareDesktopUpdate(): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Whether the desktop web service listens on all interfaces (LAN-reachable)
+ * instead of loopback only. Persisted by the shell; applied on next launch.
+ * Returns null outside the desktop app.
+ */
+export async function getDesktopLanAccess(): Promise<boolean | null> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return null;
+  try {
+    return (await invoke<boolean>("get_lan_access")) === true;
+  } catch {
+    return null;
+  }
+}
+
+export async function setDesktopLanAccess(enabled: boolean): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return false;
+  try {
+    return (await invoke<boolean>("set_lan_access", { enabled })) === true;
+  } catch {
+    return false;
+  }
+}

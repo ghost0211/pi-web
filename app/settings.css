@@ -1188,6 +1188,25 @@
   font-size: 10px;
 }
 
+.settings-shell-select {
+  width: 100%;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-shell-select:disabled {
+  opacity: 0.6;
+}
+
 .settings-shell-option {
   display: flex;
   align-items: center;
@@ -1221,7 +1240,12 @@
   overflow-wrap: anywhere;
 }
 
-.settings-desktop-tailnet-hint {
+.settings-desktop-lan-warning {
+  margin-top: 8px;
+  color: #b45309;
+}
+
+.settings-desktop-lan-row {
   margin-top: 12px;
 }
 

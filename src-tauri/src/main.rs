@@ -412,6 +412,28 @@ fn set_close_behavior(app: AppHandle, behavior: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the sidecar binds all interfaces (LAN-reachable) instead of
+/// loopback only. Default false: an unauthenticated agent server must not be
+/// exposed to the network unless the user explicitly opts in. Applied at
+/// process spawn, so toggling requires an app restart.
+fn read_lan_access(app: &AppHandle) -> bool {
+    read_settings_object(app)
+        .get("lanAccess")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn get_lan_access(app: AppHandle) -> bool {
+    read_lan_access(&app)
+}
+
+#[tauri::command]
+fn set_lan_access(app: AppHandle, enabled: bool) -> bool {
+    update_setting(&app, "lanAccess", serde_json::Value::Bool(enabled));
+    enabled
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -582,6 +604,9 @@ fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, ServerPortSelection,
     let port_selection = desktop_server_port(app);
     let port = port_selection.port;
     let health_token = new_health_token();
+    // Loopback-only by default; LAN opt-in binds all interfaces. The WebView
+    // and the readiness probe keep using 127.0.0.1 either way.
+    let bind_host: &str = if read_lan_access(app) { "0.0.0.0" } else { "127.0.0.1" };
 
     // Persist server logs so startup failures on user machines are debuggable.
     let log_dir = app.path().app_log_dir().unwrap_or_else(|_| server_dir.clone());
@@ -598,7 +623,7 @@ fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, ServerPortSelection,
     command
         .arg("server.js")
         .current_dir(&server_dir)
-        .env("HOSTNAME", "127.0.0.1")
+        .env("HOSTNAME", bind_host)
         .env("PORT", port.to_string())
         // Marker for future desktop-only server behavior.
         .env("PI_WEB_DESKTOP", "1")
@@ -758,6 +783,8 @@ fn main() {
             send_desktop_notification,
             take_desktop_notification_target,
             prepare_desktop_update,
+            get_lan_access,
+            set_lan_access,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

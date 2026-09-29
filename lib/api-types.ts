@@ -12,6 +12,17 @@ export interface SubagentSettingsResponse {
 export interface ShellToolSettingsResponse {
   isWindows: boolean;
   powerShellEnabled: boolean;
+  /** Current shell tool; equals "powershell" when powerShellEnabled. */
+  tool: "bash" | "powershell";
+  /** Explicit bash executable (settings.json shellPath); null = auto. */
+  shellPath: string | null;
+  /** Shells detected on this machine, in display order. */
+  options: {
+    id: string;
+    tool: "bash" | "powershell";
+    path: string | null;
+    labelKey: "powershell" | "bashAuto" | "gitBash" | "wslBash" | "bashPath";
+  }[];
 }
 
 export interface SkillSearchResult {

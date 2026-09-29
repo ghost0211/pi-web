@@ -116,6 +116,12 @@ export interface BashExecutionMessage {
 
 export type AgentMessage = UserMessage | AssistantMessage | ToolResultMessage | CustomMessage | BashExecutionMessage;
 
+/** Payload handed to the onAgentEnd callback for completion notifications. */
+export interface AgentEndInfo {
+  /** Plain-text snippet of the last assistant reply, if any. */
+  snippet?: string | null;
+}
+
 export type ExtensionUiRequest =
   | {
       type: "extension_ui_request";

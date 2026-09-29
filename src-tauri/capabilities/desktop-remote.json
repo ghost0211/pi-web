@@ -16,6 +16,8 @@
     "allow-send-desktop-notification",
     "allow-take-desktop-notification-target",
     "allow-prepare-desktop-update",
+    "allow-get-lan-access",
+    "allow-set-lan-access",
     "updater:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten"

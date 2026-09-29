@@ -265,7 +265,8 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           align-items: center;
           justify-content: space-between;
           gap: 8px;
-          padding: 7px 14px;
+          /* Leave room for the settings dialog close button at the top-right. */
+          padding: 7px 48px 7px 14px;
           border-bottom: 1px solid var(--border);
         }
         .usage-heading {

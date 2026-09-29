@@ -16,6 +16,7 @@ import { ChatScrollbar } from "./ChatScrollbar";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
 import { KimiTaskDock } from "./KimiTaskDock";
 import { DirectoryPicker } from "./DirectoryPicker";
+import { RemoteDirPicker } from "./RemoteDirPicker";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
@@ -209,6 +210,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
   const { t, locale } = useI18n();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
+  const [remotePickerOpen, setRemotePickerOpen] = useState(false);
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -793,6 +795,21 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                       </svg>
                       <span className="min-w-0 flex-1 truncate">{t("sidebar.openDirectory")}</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProjectMenuOpen(false);
+                        setRemotePickerOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text hover:bg-bg-hover"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                        <rect x="2" y="3" width="20" height="7" rx="2" />
+                        <rect x="2" y="14" width="20" height="7" rx="2" />
+                        <path d="M6 6.5h.01M6 17.5h.01" />
+                      </svg>
+                      <span className="min-w-0 flex-1 truncate">{t("sidebar.openRemoteDirectory")}</span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -805,6 +822,16 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 onSelect={(chosenPath) => {
                   setDirPickerOpen(false);
                   onSelectCwd?.(chosenPath);
+                }}
+              />
+            )}
+
+            {remotePickerOpen && (
+              <RemoteDirPicker
+                onCancel={() => setRemotePickerOpen(false)}
+                onSelect={(localPath) => {
+                  setRemotePickerOpen(false);
+                  onSelectCwd?.(localPath);
                 }}
               />
             )}

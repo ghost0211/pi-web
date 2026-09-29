@@ -3,6 +3,7 @@ export const SETTINGS_SECTION_VALUES = [
   "models",
   "model-scope",
   "sessions",
+  "ssh",
   "usage",
   "skills",
   "agents",

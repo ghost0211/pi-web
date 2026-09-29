@@ -279,7 +279,16 @@ function PiWebTitle() {
   return (
     <div className="kimi-sidebar-brand" data-tauri-drag-region title={`Pi Web ${process.env.NEXT_PUBLIC_APP_VERSION ?? ""}`}>
       <span className="kimi-sidebar-brand-mark pi-brand-logo">
-        <span className="pi-brand-symbol">π</span>
+        <svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <rect width="48" height="48" rx="12" fill="var(--bg)" stroke="var(--border)" strokeWidth="2.4" />
+          <path
+            d="M14 16h20M19 16v18M29 16v18c0 2 2 3 4 2"
+            stroke="var(--accent)"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </span>
       <span>Pi Web</span>
     </div>

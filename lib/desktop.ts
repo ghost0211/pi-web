@@ -219,3 +219,20 @@ export async function takeDesktopNotificationTarget(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Stop the bundled Node sidecar before the updater runs. The NSIS installer
+ * force-quits the app process, which can orphan node.exe and leave install-dir
+ * files locked ("file in use" update failures). The shell kills and reaps the
+ * child synchronously, so by the time the installer starts nothing holds the
+ * files open. No-op outside the desktop shell.
+ */
+export async function prepareDesktopUpdate(): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return false;
+  try {
+    return (await invoke<boolean>("prepare_desktop_update")) === true;
+  } catch {
+    return false;
+  }
+}

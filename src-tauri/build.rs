@@ -12,6 +12,7 @@ fn main() {
             "reveal_local_path",
             "send_desktop_notification",
             "take_desktop_notification_target",
+            "prepare_desktop_update",
         ]),
     ))
     .expect("error while running tauri-build");

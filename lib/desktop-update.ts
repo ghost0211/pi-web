@@ -1,5 +1,5 @@
 import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
-import { isDesktopApp } from "./desktop";
+import { isDesktopApp, prepareDesktopUpdate } from "./desktop";
 
 export type DesktopUpdate = Update;
 export type DesktopUpdateProgress = DownloadEvent;
@@ -16,5 +16,11 @@ export async function installDesktopUpdate(
   update: DesktopUpdate,
   onProgress: (event: DesktopUpdateProgress) => void,
 ): Promise<void> {
-  await update.downloadAndInstall(onProgress);
+  // Download first, while the app is fully alive — a failed download leaves
+  // the running server untouched. Then kill the sidecar: the NSIS installer
+  // force-quits the app process, which can orphan node.exe and leave the
+  // install directory locked ("file in use") until killed manually.
+  await update.download(onProgress);
+  await prepareDesktopUpdate();
+  await update.install();
 }

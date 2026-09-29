@@ -622,6 +622,17 @@ fn spawn_server(app: &AppHandle) -> std::io::Result<(Child, ServerPortSelection,
         .map(|child| (child, port_selection, health_token))
 }
 
+/// Stop the sidecar before the updater replaces bundled files. The NSIS
+/// installer force-quits the app process, which can leave the bundled
+/// node.exe orphaned and locking the install directory (updates fail with
+/// "file in use" until the user kills it manually). Killing it here, before
+/// `downloadAndInstall` launches the installer, makes that impossible.
+#[tauri::command]
+fn prepare_desktop_update(app: AppHandle) -> bool {
+    kill_server(&app);
+    true
+}
+
 fn kill_server(app: &AppHandle) {
     let Some(mut child) = app
         .state::<Mutex<DesktopServer>>()
@@ -746,6 +757,7 @@ fn main() {
             reveal_local_path,
             send_desktop_notification,
             take_desktop_notification_target,
+            prepare_desktop_update,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

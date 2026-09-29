@@ -2348,6 +2348,18 @@ export function AppShell() {
               >
                 <span /> <span /> <span />
               </button>
+              <button
+                type="button"
+                onClick={() => toggleTopPanel("tasks")}
+                title={translate("runningTasks.title")}
+                aria-label={translate("runningTasks.title")}
+                aria-pressed={activeTopPanel === "tasks"}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginLeft: 8, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 7, background: activeTopPanel === "tasks" ? "var(--bg-selected)" : "var(--bg-panel)", color: runningSessionIds.size > 0 ? "var(--accent)" : "var(--text-muted)", cursor: "pointer", fontSize: 11, flexShrink: 0 }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9h10M7 14h7" /></svg>
+                <span>{translate("runningTasks.title")}</span>
+                {runningSessionIds.size > 0 && <span style={{ fontVariantNumeric: "tabular-nums" }}>{runningSessionIds.size}</span>}
+              </button>
               {selectedSession?.branch && (
                 <div className="kimi-chat-head-branch" title={selectedSession.branch}>
                   <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="4" r="1.6"/><circle cx="5" cy="15.5" r="1.6"/><circle cx="14.5" cy="7" r="1.6"/><path d="M5 5.6v8.3M6.6 6.5h3.4a4.5 4.5 0 0 0 4.5-4.5v3.4"/></svg>

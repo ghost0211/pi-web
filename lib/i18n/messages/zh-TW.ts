@@ -636,6 +636,7 @@ export const zhTWLocale: LocalePlugin = {
     "ssh.mounting": "正在掛載遠端目錄…",
     "ssh.openRemote": "開啟",
     "ssh.noHostsForPicker": "尚未設定遠端主機。請先到 設定 → 遠端主機 新增。",
+    "ssh.installSshfsWin": "請先安裝 SSHFS-Win",
     "i18n.save": "儲存",
     "i18n.saving": "儲存中…",
     "i18n.saved": "已儲存",

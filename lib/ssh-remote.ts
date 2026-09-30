@@ -261,16 +261,17 @@ export function toShPath(remotePath: string): string {
 
 /**
  * Remote command for directory browsing: cd into the directory, print the
- * resolved absolute path behind a marker, then list entries with a trailing
- * slash on directories. `--group-directories-first` is GNU-only, so fall
- * back to plain ls. Symlinked directories are not marked by `ls -p` and are
- * therefore not listed (acceptable browse limitation).
+ * resolved absolute path behind a marker, then list every entry that is a
+ * directory. The `[ -d "$f" ]` test follows symlinks, so symlinked
+ * directories ARE listed (unlike `ls -p`, which only marks real dirs).
+ * `$PWD` after a plain `cd` keeps the logical path, so navigating into a
+ * symlink shows the symlink path rather than its resolved target.
  */
 export function buildSshLsArgs(
   host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">,
   remotePath: string,
 ): string[] {
-  const command = `cd -- ${toShPath(remotePath)} || exit $?; printf '__PI_PWD__%s\\n' "$PWD"; command ls -1Ap --group-directories-first 2>/dev/null || command ls -1Ap`;
+  const command = `cd -- ${toShPath(remotePath)} || exit $?; printf '__PI_PWD__%s\\n' "$PWD"; for f in .[!.]* ..?* *; do [ -d "$f" ] && printf '%s\\n' "$f"; done; true`;
   const args = [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=8",
@@ -300,15 +301,41 @@ export function parseSshLsOutput(stdout: string): RemoteLsResult {
   const path = lines[markerIdx].slice("__PI_PWD__".length).trim() || "/";
   const directories: RemoteDirEntry[] = [];
   for (const line of lines.slice(markerIdx + 1)) {
-    if (!line.endsWith("/") || line === "./" || line === "../") continue;
-    const name = line.slice(0, -1);
-    if (!name) continue;
+    // Every listed line is a directory; tolerate a legacy trailing slash.
+    const name = line.endsWith("/") ? line.slice(0, -1) : line;
+    if (!name || name === "." || name === "..") continue;
     directories.push({ name, path: joinRemotePath(path, name) });
   }
   return { ok: true, path, parentPath: remoteParentPath(path), directories };
 }
 
-/** List one remote directory over SFTP for password-auth hosts (ssh2). */
+/**
+ * Normalize a user-entered remote path into an absolute LOGICAL path:
+ * `~` and relative paths resolve against the login home, `.`/`..`/duplicate
+ * slashes collapse textually, and symlink components are NOT resolved, so
+ * the picker keeps showing the path the user navigated to.
+ */
+export function normalizeLogicalRemotePath(input: string, home: string): string {
+  let p = input.trim();
+  if (!p || p === "~") return home;
+  if (p.startsWith("~/")) p = `${home}/${p.slice(2)}`;
+  else if (!p.startsWith("/")) p = `${home}/${p}`;
+  const out: string[] = [];
+  for (const segment of p.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") out.pop();
+    else out.push(segment);
+  }
+  return `/${out.join("/")}`;
+}
+
+/**
+ * List one remote directory over SFTP for password-auth hosts (ssh2).
+ * The entered path is normalized logically (symlinks stay as typed) — only
+ * the login home itself is discovered via realpath("."). SFTP `readdir`
+ * attributes come from lstat, so symlinked directories are detected with a
+ * follow-up `stat` per symlink entry.
+ */
 export async function listRemotePasswordDir(
   host: Pick<SshHostEntry, "host" | "port" | "user">,
   password: string,
@@ -338,22 +365,42 @@ export async function listRemotePasswordDir(
               finish({ ok: false, error: sftpErr.message });
               return;
             }
-            const target = remotePath || ".";
-            sftp.realpath(target, (realErr, absPath) => {
-              if (realErr || !absPath) {
-                finish({ ok: false, error: realErr?.message ?? `Path not found: ${target}` });
+            sftp.realpath(".", (homeErr, home) => {
+              if (homeErr || !home) {
+                finish({ ok: false, error: homeErr?.message ?? "Could not resolve the remote home directory" });
                 return;
               }
-              sftp.readdir(absPath, (readErr, list) => {
+              const abs = normalizeLogicalRemotePath(remotePath, home);
+              sftp.readdir(abs, (readErr, list) => {
                 if (readErr) {
                   finish({ ok: false, error: readErr.message });
                   return;
                 }
-                const directories: RemoteDirEntry[] = list
-                  .filter((entry) => entry.attrs.isDirectory() && entry.filename !== "." && entry.filename !== "..")
-                  .map((entry) => ({ name: entry.filename, path: joinRemotePath(absPath, entry.filename) }))
-                  .sort((a, b) => a.name.localeCompare(b.name));
-                finish({ ok: true, path: absPath, parentPath: remoteParentPath(absPath), directories });
+                const names: string[] = [];
+                const symlinks: string[] = [];
+                for (const entry of list) {
+                  if (entry.filename === "." || entry.filename === "..") continue;
+                  if (entry.attrs.isDirectory()) names.push(entry.filename);
+                  else if (entry.attrs.isSymbolicLink()) symlinks.push(entry.filename);
+                }
+                // A symlink that points at a directory counts as browsable.
+                const checkSymlink = (index: number) => {
+                  if (index >= symlinks.length) {
+                    names.sort((a, b) => a.localeCompare(b));
+                    finish({
+                      ok: true,
+                      path: abs,
+                      parentPath: remoteParentPath(abs),
+                      directories: names.map((name) => ({ name, path: joinRemotePath(abs, name) })),
+                    });
+                    return;
+                  }
+                  sftp.stat(joinRemotePath(abs, symlinks[index]), (statErr, stats) => {
+                    if (!statErr && stats.isDirectory()) names.push(symlinks[index]);
+                    checkSymlink(index + 1);
+                  });
+                };
+                checkSymlink(0);
               });
             });
           });

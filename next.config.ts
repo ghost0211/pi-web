@@ -46,6 +46,11 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "undici",
     "web-push",
+    // ssh2 ships an optional native addon (build/Release/sshcrypto.node) that
+    // webpack tries to parse as JavaScript when the addon was compiled on the
+    // build host. Keep the package external so it resolves from node_modules
+    // at runtime.
+    "ssh2",
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-agent-core",
     "@earendil-works/pi-ai",

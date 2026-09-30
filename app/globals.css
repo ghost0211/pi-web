@@ -774,10 +774,9 @@ body {
   font-size: 13px;
 }
 
-/* Custom titlebar for the undecorated desktop window */
-[data-tauri-drag-region] {
-  app-region: drag;
-}
+/* Custom titlebar for the undecorated desktop window.
+   NOTE: no `app-region: drag` here — Tauri handles data-tauri-drag-region in
+   JS, and Chromium's app-region would swallow child buttons' pointer cursor. */
 
 .kimi-chat-head-branch.has-window-controls {
   margin-left: 0;

@@ -17,8 +17,12 @@ export interface SshHostEntry {
   host: string;
   port: number;
   user: string;
-  /** Optional absolute path to a private key; null = ssh default/agent. */
+  /** "key" = system OpenSSH keys/agent; "password" = stored password. */
+  authType: "key" | "password";
+  /** Optional absolute path to a private key (key auth); null = ssh default/agent. */
   identityFile: string | null;
+  /** Stored password (password auth). Plaintext on disk — the UI warns about this. */
+  password: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +51,15 @@ export function validateSshHostInput(input: unknown): string | null {
   if (!USER_RE.test(user)) return "user may only contain letters, digits, . _ -";
   const port = typeof input.port === "number" ? input.port : Number(input.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return "port must be an integer between 1 and 65535";
+  if (input.authType !== undefined && input.authType !== null && input.authType !== "key" && input.authType !== "password") {
+    return "authType must be \"key\" or \"password\"";
+  }
+  if (input.authType === "password") {
+    if (typeof input.password !== "string" || input.password.length === 0) return "password is required for password auth";
+  }
+  if (input.password !== null && input.password !== undefined && typeof input.password !== "string") {
+    return "password must be a string";
+  }
   if (input.identityFile !== null && input.identityFile !== undefined) {
     if (typeof input.identityFile !== "string") return "identityFile must be a path string";
     const trimmed = input.identityFile.trim();
@@ -56,12 +69,15 @@ export function validateSshHostInput(input: unknown): string | null {
 }
 
 export function normalizeSshHostInput(input: SshHostInput): SshHostInput {
+  const passwordAuth = input.authType === "password";
   return {
     name: input.name.trim(),
     host: input.host.trim(),
     user: input.user.trim(),
     port: Number(input.port),
-    identityFile: input.identityFile?.trim() ? input.identityFile.trim() : null,
+    authType: passwordAuth ? "password" : "key",
+    identityFile: passwordAuth ? null : (input.identityFile?.trim() ? input.identityFile.trim() : null),
+    password: passwordAuth ? (input.password ?? null) : null,
   };
 }
 
@@ -78,7 +94,9 @@ function parseHostEntry(value: unknown): SshHostEntry | null {
     host: (value.host as string).trim(),
     user: (value.user as string).trim(),
     port: Number(value.port),
+    authType: value.authType === "password" ? "password" : "key",
     identityFile: identity,
+    password: typeof value.password === "string" && value.password ? value.password : null,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date(0).toISOString(),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
   };

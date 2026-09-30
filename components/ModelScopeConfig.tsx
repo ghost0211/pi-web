@@ -49,6 +49,8 @@ export function ModelScopeConfig({ embedded = false, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = useCallback(async (signal: AbortSignal) => {
     setLoading(true);
@@ -78,6 +80,28 @@ export function ModelScopeConfig({ embedded = false, onClose }: Props) {
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  /** `pi update --models` — pull the latest shared model catalogs, then reload. */
+  const refreshCatalogs = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      const response = await fetch("/api/models-config/refresh-catalogs", { method: "POST" });
+      const data = (await response.json()) as { success?: boolean; output?: string; error?: string };
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      setRefreshNote({ ok: true, text: data.output?.trim() || t("modelScope.refreshOk") });
+      const controller = new AbortController();
+      await load(controller.signal);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      setRefreshNote({ ok: false, text: `${t("modelScope.refreshFailed")}: ${detail}` });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, load, t]);
 
   const allIds = useMemo(() => models.map(modelKey), [models]);
   const dirty = !sameSelection(selected, baseline);
@@ -183,6 +207,14 @@ export function ModelScopeConfig({ embedded = false, onClose }: Props) {
           </ConfigButton>
           <ConfigButton
             size="small"
+            onClick={() => void refreshCatalogs()}
+            disabled={loading || saving || refreshing}
+            title={t("modelScope.refreshCatalogsHint")}
+          >
+            {refreshing ? t("modelScope.refreshingCatalogs") : t("modelScope.refreshCatalogs")}
+          </ConfigButton>
+          <ConfigButton
+            size="small"
             variant="primary"
             onClick={() => void save()}
             disabled={loading || saving || !dirty || emptySelection}
@@ -191,6 +223,12 @@ export function ModelScopeConfig({ embedded = false, onClose }: Props) {
             {saving ? t("modelScope.saving") : savedOk && !dirty ? t("modelScope.saved") : t("modelScope.save")}
           </ConfigButton>
         </div>
+
+        {refreshNote && (
+          <div className="model-scope-warnings" role="status" style={refreshNote.ok ? { color: "#16a34a" } : undefined}>
+            {refreshNote.text}
+          </div>
+        )}
 
         {warnings.length > 0 && (
           <div className="model-scope-warnings" role="alert">

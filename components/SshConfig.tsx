@@ -22,7 +22,9 @@ export interface SshHost {
   host: string;
   port: number;
   user: string;
+  authType: "key" | "password";
   identityFile: string | null;
+  password: string | null;
 }
 
 interface HostFormState {
@@ -30,10 +32,12 @@ interface HostFormState {
   host: string;
   port: string;
   user: string;
+  authType: "key" | "password";
   identityFile: string;
+  password: string;
 }
 
-const EMPTY_FORM: HostFormState = { name: "", host: "", port: "22", user: "", identityFile: "" };
+const EMPTY_FORM: HostFormState = { name: "", host: "", port: "22", user: "", authType: "key", identityFile: "", password: "" };
 
 const inputStyle = {
   padding: "6px 9px",
@@ -101,7 +105,9 @@ export function SshConfig({ onClose, embedded = false }: { onClose: () => void; 
         host: host.host,
         port: String(host.port),
         user: host.user,
+        authType: host.authType,
         identityFile: host.identityFile ?? "",
+        password: host.password ?? "",
       });
     }
   };
@@ -111,7 +117,9 @@ export function SshConfig({ onClose, embedded = false }: { onClose: () => void; 
     host: form.host.trim(),
     port: Number(form.port) || 22,
     user: form.user.trim(),
-    identityFile: form.identityFile.trim() || null,
+    authType: form.authType,
+    identityFile: form.authType === "key" ? form.identityFile.trim() || null : null,
+    password: form.authType === "password" ? form.password : null,
   });
 
   const saveHost = async (event: FormEvent) => {
@@ -190,10 +198,31 @@ export function SshConfig({ onClose, embedded = false }: { onClose: () => void; 
                 <input style={inputStyle} required inputMode="numeric" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value })} placeholder="22" />
               </ConfigField>
             </div>
-            <ConfigField label={t("ssh.fieldIdentity")}>
-              <input style={{ ...inputStyle, fontFamily: "var(--font-mono)" }} value={form.identityFile} onChange={(e) => setForm({ ...form, identityFile: e.target.value })} placeholder={t("ssh.fieldIdentityPlaceholder")} />
+            <ConfigField label={t("ssh.fieldAuthType")}>
+              <select
+                style={{ ...inputStyle, width: "auto" }}
+                value={form.authType}
+                onChange={(e) => setForm({ ...form, authType: e.target.value === "password" ? "password" : "key" })}
+              >
+                <option value="key">{t("ssh.authKey")}</option>
+                <option value="password">{t("ssh.authPassword")}</option>
+              </select>
             </ConfigField>
-            <div style={noteStyle}>{t("ssh.keyAuthNote")}</div>
+            {form.authType === "key" ? (
+              <>
+                <ConfigField label={t("ssh.fieldIdentity")}>
+                  <input style={{ ...inputStyle, fontFamily: "var(--font-mono)" }} value={form.identityFile} onChange={(e) => setForm({ ...form, identityFile: e.target.value })} placeholder={t("ssh.fieldIdentityPlaceholder")} />
+                </ConfigField>
+                <div style={noteStyle}>{t("ssh.keyAuthNote")}</div>
+              </>
+            ) : (
+              <>
+                <ConfigField label={t("ssh.fieldPassword")}>
+                  <input style={inputStyle} type="password" required autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                </ConfigField>
+                <div style={noteStyle}>{t("ssh.passwordNote")}</div>
+              </>
+            )}
             {formError && <div style={errorStyle}>{formError}</div>}
             {testResult && (
               <div style={testResult.ok ? okStyle : errorStyle}>{testResult.message}</div>

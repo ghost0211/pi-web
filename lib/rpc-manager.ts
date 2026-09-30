@@ -724,11 +724,10 @@ export class AgentSessionWrapper {
               ...(streamingBehavior ? { streamingBehavior } : {}),
               source: "rpc",
               // Match pi's RPC contract: acknowledge only after synchronous prompt
-              // validation and extension preflight have accepted the submission.
-              preflightResult: (success) => {
-                if (success) {
-                  acceptPreflight();
-                }
+              // validation and extension preflight have accepted the submission
+              // (SDK >=0.99: the hook fires only on acceptance, with the disposition).
+              preflightResult: () => {
+                acceptPreflight();
               },
             });
           } catch (error) {

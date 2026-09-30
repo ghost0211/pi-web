@@ -1,6 +1,6 @@
 import { jsonResponse } from "@/lib/json-response";
 import { loadSshHosts, validateSshHostInput, type SshHostEntry } from "@/lib/ssh-hosts";
-import { buildSshTestArgs, runCommand, SSH_TEST_MARKER } from "@/lib/ssh-remote";
+import { buildSshTestArgs, runCommand, SSH_TEST_MARKER, testSshPasswordAuth } from "@/lib/ssh-remote";
 
 export const dynamic = "force-dynamic";
 
@@ -31,10 +31,17 @@ export async function POST(request: Request) {
       host: String(c.host).trim(),
       user: String(c.user).trim(),
       port: Number(c.port),
+      authType: c.authType === "password" ? "password" : "key",
       identityFile: typeof c.identityFile === "string" && c.identityFile.trim() ? c.identityFile.trim() : null,
+      password: typeof c.password === "string" && c.password ? c.password : null,
       createdAt: "",
       updatedAt: "",
     };
+  }
+  if (host.authType === "password") {
+    if (!host.password) return jsonResponse(request, { ok: false, error: "No password stored for this host" });
+    const probe = await testSshPasswordAuth(host, host.password, TEST_TIMEOUT_MS);
+    return jsonResponse(request, probe.ok ? { ok: true } : { ok: false, error: probe.error ?? "Authentication failed" });
   }
   if (host.identityFile) {
     const { existsSync } = await import("node:fs");

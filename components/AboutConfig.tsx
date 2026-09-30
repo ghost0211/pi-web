@@ -26,7 +26,6 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [updateTarget, setUpdateTarget] = useState<"global" | "local">("global");
   const [updateResult, setUpdateResult] = useState<UpdatePiAgentResponse | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -107,7 +106,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
     void fetchInfo();
   }, [fetchInfo]);
 
-  const handleUpdate = async () => {
+  const handleUpdate = async (target: "global" | "local") => {
     if (updating) return;
     setUpdating(true);
     setUpdateResult(null);
@@ -118,7 +117,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
       const res = await fetch("/api/about", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: updateTarget }),
+        body: JSON.stringify({ target }),
       });
       const data = (await res.json()) as UpdatePiAgentResponse;
       setUpdateResult(data);
@@ -134,7 +133,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
         error: "Update request failed",
         previousVersion: null,
         newVersion: null,
-        target: updateTarget,
+        target,
       });
     } finally {
       setUpdating(false);
@@ -332,28 +331,13 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
 
               {/* Action and controls for update */}
               <div className="about-update-action-box">
-                <div className="about-update-target-select">
-                  <label htmlFor="pi-agent-update-target" className="about-target-label">
-                    {t("about.updateTargetLabel")}:
-                  </label>
-                  <select
-                    id="pi-agent-update-target"
-                    value={updateTarget}
-                    disabled={updating}
-                    onChange={(e) => setUpdateTarget(e.target.value as "global" | "local")}
-                    className="about-select-control"
-                  >
-                    <option value="global">{t("about.updateScopeGlobal")}</option>
-                    <option value="local">{t("about.updateScopeLocal")}</option>
-                  </select>
-                </div>
-
                 <ConfigButton
                   variant={info?.piAgent.updateAvailable ? "primary" : "secondary"}
                   size="default"
                   disabled={updating}
-                  onClick={() => void handleUpdate()}
+                  onClick={() => void handleUpdate("global")}
                   className="about-update-button"
+                  title={t("about.updateScopeGlobal")}
                 >
                   {updating ? (
                     <>
@@ -367,11 +351,31 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                         <polyline points="7 10 12 15 17 10" />
                         <line x1="12" y1="15" x2="12" y2="3" />
                       </svg>
-                      <span>{t("about.updatePiAgent")}</span>
+                      <span>{t("about.updateCli")}</span>
                     </>
                   )}
                 </ConfigButton>
+                <ConfigButton
+                  variant="secondary"
+                  size="default"
+                  disabled={updating}
+                  onClick={() => void handleUpdate("local")}
+                  className="about-update-button"
+                  title={desktopApp ? t("about.updateSdkDesktopHint") : t("about.updateScopeLocal")}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="4" y="4" width="16" height="16" rx="2" />
+                    <rect x="9" y="9" width="6" height="6" />
+                    <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" />
+                  </svg>
+                  <span>{t("about.updateSdk")}</span>
+                </ConfigButton>
               </div>
+              {desktopApp && (
+                <div className="about-text-dim" style={{ fontSize: 11, marginTop: 6 }}>
+                  {t("about.updateSdkDesktopHint")}
+                </div>
+              )}
 
               {/* Result & Log feedback */}
               {updateResult && (

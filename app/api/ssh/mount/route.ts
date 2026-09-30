@@ -3,7 +3,10 @@ import { jsonResponse } from "@/lib/json-response";
 import { allowFileRoot } from "@/lib/file-access";
 import { loadSshHosts } from "@/lib/ssh-hosts";
 import {
+  buildPasswordNetUseArgs,
+  buildPasswordUncTarget,
   buildSshfsArgs,
+  buildSshfsPasswordArgs,
   buildUncTarget,
   findFreeDriveLetter,
   findSshfsBinary,
@@ -51,6 +54,10 @@ export async function POST(request: Request) {
   if (!parts) {
     return jsonResponse(request, { error: "Invalid remote path (no backslashes, commas or exclamation marks)" }, { status: 400 });
   }
+  const passwordAuth = host.authType === "password";
+  if (passwordAuth && !host.password) {
+    return jsonResponse(request, { error: "No password stored for this host" }, { status: 400 });
+  }
 
   const sshfsBinary = findSshfsBinary();
   if (!sshfsBinary && !hasSshfsWinInstalled()) {
@@ -59,7 +66,7 @@ export async function POST(request: Request) {
 
   // Reuse an existing mount for the same UNC target when possible (sshfs.exe
   // mounts are registered under the same sshfs UNC prefix by WinFsp).
-  const uncTarget = buildUncTarget(host, parts);
+  const uncTarget = passwordAuth ? buildPasswordUncTarget(host, parts) : buildUncTarget(host, parts);
   const netUse = await runCommand("net", ["use"], 10_000);
   const existing = parseNetUse(netUse.stdout).filter((entry) => /^[A-Z]$/.test(entry.letter));
   const reused = existing.find((entry) => entry.remote.toLowerCase() === uncTarget.toLowerCase());
@@ -73,7 +80,15 @@ export async function POST(request: Request) {
   if (!letter) return jsonResponse(request, { error: "No free drive letter available" }, { status: 400 });
 
   if (sshfsBinary) {
-    const result = await runCommand(sshfsBinary, buildSshfsArgs(host, parts, letter), SSHFS_TIMEOUT_MS);
+    const args = passwordAuth
+      ? buildSshfsPasswordArgs(host, parts, letter)
+      : buildSshfsArgs(host, parts, letter);
+    const result = await runCommand(
+      sshfsBinary,
+      args,
+      SSHFS_TIMEOUT_MS,
+      passwordAuth ? `${host.password}\n` : undefined,
+    );
     const ready = await waitForDrive(letter);
     if (!ready) {
       const detail = (result.stderr || result.stdout).trim().split(/\r?\n/).slice(-3).join("\n");
@@ -84,7 +99,10 @@ export async function POST(request: Request) {
       }, { status: 502 });
     }
   } else {
-    const result = await runCommand("net", ["use", `${letter}:`, uncTarget, "/persistent:no"], NET_USE_TIMEOUT_MS);
+    const args = passwordAuth
+      ? buildPasswordNetUseArgs(uncTarget, host.user, host.password as string, letter)
+      : ["use", `${letter}:`, uncTarget, "/persistent:no"];
+    const result = await runCommand("net", args, NET_USE_TIMEOUT_MS);
     const ready = await waitForDrive(letter);
     if (!ready) {
       const detail = (result.stdout || result.stderr).trim().split(/\r?\n/).slice(-3).join("\n");

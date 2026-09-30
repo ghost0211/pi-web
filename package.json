@@ -43,10 +43,10 @@
     "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.87.1",
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
-    "@earendil-works/pi-tui": "0.87.1",
+    "@earendil-works/pi-agent-core": "^0.99.1",
+    "@earendil-works/pi-ai": "^0.99.1",
+    "@earendil-works/pi-coding-agent": "^0.99.1",
+    "@earendil-works/pi-tui": "^0.99.1",
     "@tauri-apps/plugin-updater": "^2.12.0",
     "js-yaml": "^5.2.3",
     "next": "16.3.6",
@@ -55,6 +55,7 @@
     "react-dom": "^19.2.4",
     "remark-breaks": "^4.0.0",
     "semver": "7.8.5",
+    "ssh2": "^1.17.0",
     "undici": "8.11.0",
     "web-push": "^3.6.7"
   },
@@ -67,6 +68,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@types/ssh2": "^1.15.6",
     "@types/web-push": "^3.6.4",
     "ansi_up": "^6.0.6",
     "eslint": "^9",

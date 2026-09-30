@@ -26,6 +26,7 @@ export function runCommand(
   command: string,
   args: string[],
   timeoutMs: number,
+  stdinText?: string,
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let child;
@@ -52,6 +53,12 @@ export function runCommand(
     child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
     child.on("error", (error) => finish({ code: null, timedOut: false, spawnError: String(error) }));
     child.on("close", (code) => finish({ code, timedOut: false }));
+    if (stdinText !== undefined) {
+      try {
+        child.stdin?.write(stdinText);
+        child.stdin?.end();
+      } catch { /* process already closed stdin */ }
+    }
   });
 }
 
@@ -69,6 +76,44 @@ export function buildSshTestArgs(host: Pick<SshHostEntry, "host" | "port" | "use
 }
 
 export const SSH_TEST_MARKER = "__pi_ssh_ok__";
+
+/** Probe a password-auth host via the ssh2 library (no system ssh involved). */
+export async function testSshPasswordAuth(
+  host: Pick<SshHostEntry, "host" | "port" | "user">,
+  password: string,
+  timeoutMs = 15_000,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { Client } = await import("ssh2");
+    return await new Promise((resolve) => {
+      const client = new Client();
+      const timer = setTimeout(() => {
+        client.end();
+        resolve({ ok: false, error: `Connection timed out (${Math.round(timeoutMs / 1000)}s)` });
+      }, timeoutMs);
+      client
+        .on("ready", () => {
+          clearTimeout(timer);
+          client.end();
+          resolve({ ok: true });
+        })
+        .on("error", (error) => {
+          clearTimeout(timer);
+          const message = error instanceof Error ? error.message : String(error);
+          resolve({ ok: false, error: message });
+        })
+        .connect({
+          host: host.host,
+          port: host.port,
+          username: host.user,
+          password,
+          readyTimeout: Math.round(timeoutMs * 0.7),
+        });
+    });
+  } catch (error) {
+    return { ok: false, error: `ssh2 unavailable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
 
 export interface RemotePathParts {
   /** true when the path must be resolved from the remote filesystem root. */
@@ -117,6 +162,22 @@ export function buildSshfsArgs(
   return ["-o", options.join(","), remote, `${driveLetter}:`];
 }
 
+/** UNC target for password auth (`\\sshfs\` prefix — credentials via net use). */
+export function buildPasswordUncTarget(
+  host: Pick<SshHostEntry, "host" | "port" | "user">,
+  parts: RemotePathParts,
+): string {
+  const provider = parts.absolute ? "sshfs.r" : "sshfs";
+  const base = `\\${provider}\\${host.user}@${host.host}${host.port === 22 ? "" : `!${host.port}`}`;
+  const suffix = parts.path.replace(/^\/+/, "").replace(/\//g, "\\");
+  return suffix ? `${base}\\${suffix}` : base;
+}
+
+/** `net use` argument vector that carries the credentials for password auth. */
+export function buildPasswordNetUseArgs(uncTarget: string, user: string, password: string, driveLetter: string): string[] {
+  return ["use", `${driveLetter}:`, uncTarget, password, `/user:${user}`, "/persistent:no"];
+}
+
 export function findFreeDriveLetter(used: ReadonlySet<string>): string | null {
   for (let code = "Z".charCodeAt(0); code >= "D".charCodeAt(0); code--) {
     const letter = String.fromCharCode(code);
@@ -146,6 +207,19 @@ export function findSshfsBinary(candidates: string[] = SSHFS_INSTALL_DIRS): stri
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+/** sshfs.exe args for password auth: the password is piped via stdin. */
+export function buildSshfsPasswordArgs(
+  host: Pick<SshHostEntry, "host" | "port" | "user">,
+  parts: RemotePathParts,
+  driveLetter: string,
+): string[] {
+  const remote = parts.absolute
+    ? `${host.user}@${host.host}:${parts.path || "/"}`
+    : `${host.user}@${host.host}:${parts.path}`;
+  const options = ["idmap=user", `port=${host.port}`, "reconnect", "password_stdin"];
+  return ["-o", options.join(","), remote, `${driveLetter}:`];
 }
 
 export function hasSshfsWinInstalled(

@@ -636,6 +636,7 @@ export const enLocale: LocalePlugin = {
     "ssh.mounting": "Mounting remote directory…",
     "ssh.openRemote": "Open",
     "ssh.noHostsForPicker": "No remote hosts configured yet. Add one under Settings → Remote hosts first.",
+    "ssh.installSshfsWin": "Install SSHFS-Win first",
     "i18n.save": "Save",
     "i18n.saving": "Saving…",
     "i18n.saved": "Saved",

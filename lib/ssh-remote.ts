@@ -227,3 +227,150 @@ export function hasSshfsWinInstalled(
 ): boolean {
   return installDirs.some((dir) => existsSync(dir));
 }
+
+/* ------------------------------------------------------------------ */
+/* Remote directory browsing (for the SSH directory picker)            */
+/* ------------------------------------------------------------------ */
+
+export interface RemoteDirEntry {
+  name: string;
+  path: string;
+}
+
+export interface RemoteLsResult {
+  ok: boolean;
+  path?: string;
+  parentPath?: string | null;
+  directories?: RemoteDirEntry[];
+  error?: string;
+}
+
+function shQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Convert a parseRemotePath-validated path into a shell word. Home-relative
+ * paths must keep ~ expansion working, hence the "$HOME" prefix form.
+ */
+export function toShPath(remotePath: string): string {
+  if (!remotePath || remotePath === "~") return '"$HOME"';
+  if (remotePath.startsWith("~/")) return `"$HOME"/${shQuote(remotePath.slice(2))}`;
+  return shQuote(remotePath);
+}
+
+/**
+ * Remote command for directory browsing: cd into the directory, print the
+ * resolved absolute path behind a marker, then list entries with a trailing
+ * slash on directories. `--group-directories-first` is GNU-only, so fall
+ * back to plain ls. Symlinked directories are not marked by `ls -p` and are
+ * therefore not listed (acceptable browse limitation).
+ */
+export function buildSshLsArgs(
+  host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">,
+  remotePath: string,
+): string[] {
+  const command = `cd -- ${toShPath(remotePath)} || exit $?; printf '__PI_PWD__%s\\n' "$PWD"; command ls -1Ap --group-directories-first 2>/dev/null || command ls -1Ap`;
+  const args = [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=8",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-p", String(host.port),
+  ];
+  if (host.identityFile) args.push("-i", host.identityFile, "-o", "IdentitiesOnly=yes");
+  args.push(`${host.user}@${host.host}`, command);
+  return args;
+}
+
+function joinRemotePath(base: string, name: string): string {
+  return base === "/" ? `/${name}` : `${base}/${name}`;
+}
+
+export function remoteParentPath(path: string): string | null {
+  if (!path || path === "/") return null;
+  const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
+  const idx = trimmed.lastIndexOf("/");
+  return idx <= 0 ? "/" : trimmed.slice(0, idx);
+}
+
+export function parseSshLsOutput(stdout: string): RemoteLsResult {
+  const lines = stdout.split(/\r?\n/);
+  const markerIdx = lines.findIndex((line) => line.startsWith("__PI_PWD__"));
+  if (markerIdx < 0) return { ok: false, error: "Unexpected remote ls output (path marker missing)" };
+  const path = lines[markerIdx].slice("__PI_PWD__".length).trim() || "/";
+  const directories: RemoteDirEntry[] = [];
+  for (const line of lines.slice(markerIdx + 1)) {
+    if (!line.endsWith("/") || line === "./" || line === "../") continue;
+    const name = line.slice(0, -1);
+    if (!name) continue;
+    directories.push({ name, path: joinRemotePath(path, name) });
+  }
+  return { ok: true, path, parentPath: remoteParentPath(path), directories };
+}
+
+/** List one remote directory over SFTP for password-auth hosts (ssh2). */
+export async function listRemotePasswordDir(
+  host: Pick<SshHostEntry, "host" | "port" | "user">,
+  password: string,
+  remotePath: string,
+  timeoutMs = 15_000,
+): Promise<RemoteLsResult> {
+  try {
+    const { Client } = await import("ssh2");
+    return await new Promise<RemoteLsResult>((resolve) => {
+      const client = new Client();
+      let settled = false;
+      const finish = (result: RemoteLsResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        client.end();
+        resolve(result);
+      };
+      const timer = setTimeout(
+        () => finish({ ok: false, error: `Connection timed out (${Math.round(timeoutMs / 1000)}s)` }),
+        timeoutMs,
+      );
+      client
+        .on("ready", () => {
+          client.sftp((sftpErr, sftp) => {
+            if (sftpErr) {
+              finish({ ok: false, error: sftpErr.message });
+              return;
+            }
+            const target = remotePath || ".";
+            sftp.realpath(target, (realErr, absPath) => {
+              if (realErr || !absPath) {
+                finish({ ok: false, error: realErr?.message ?? `Path not found: ${target}` });
+                return;
+              }
+              sftp.readdir(absPath, (readErr, list) => {
+                if (readErr) {
+                  finish({ ok: false, error: readErr.message });
+                  return;
+                }
+                const directories: RemoteDirEntry[] = list
+                  .filter((entry) => entry.attrs.isDirectory() && entry.filename !== "." && entry.filename !== "..")
+                  .map((entry) => ({ name: entry.filename, path: joinRemotePath(absPath, entry.filename) }))
+                  .sort((a, b) => a.name.localeCompare(b.name));
+                finish({ ok: true, path: absPath, parentPath: remoteParentPath(absPath), directories });
+              });
+            });
+          });
+        })
+        .on("error", (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          finish({ ok: false, error: /authentication|auth methods|permission denied/i.test(message) ? `Authentication failed: ${message}` : message });
+        })
+        .connect({
+          host: host.host,
+          port: host.port,
+          username: host.user,
+          password,
+          readyTimeout: Math.round(timeoutMs * 0.7),
+        });
+    });
+  } catch (error) {
+    return { ok: false, error: `ssh2 unavailable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}

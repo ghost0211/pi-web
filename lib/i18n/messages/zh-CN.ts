@@ -636,6 +636,7 @@ export const zhCNLocale: LocalePlugin = {
     "ssh.mounting": "正在挂载远程目录…",
     "ssh.openRemote": "打开",
     "ssh.noHostsForPicker": "还没有配置远程主机。请先到 设置 → 远程主机 添加。",
+    "ssh.installSshfsWin": "请先安装 SSHFS-Win",
     "i18n.save": "保存",
     "i18n.saving": "保存中…",
     "i18n.saved": "已保存",

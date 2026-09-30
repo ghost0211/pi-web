@@ -65,9 +65,11 @@ export function DesktopWindowControls() {
         aria-label={maximized ? t("window.restore") : t("window.maximize")}
       >
         {maximized ? (
+          // Standard Windows restore glyph: front square bottom-left (full),
+          // back square top-right (only the visible top/right stubs drawn).
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.1" aria-hidden="true">
-            <rect x="4.5" y="1.5" width="10" height="10" rx="1.5" />
-            <path d="M11.5 4.5v-1a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h1" />
+            <path d="M5 5V3.5A1.5 1.5 0 0 1 6.5 2h6A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H11" />
+            <rect x="2" y="5" width="9" height="9" rx="1.5" />
           </svg>
         ) : (
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.1" aria-hidden="true">

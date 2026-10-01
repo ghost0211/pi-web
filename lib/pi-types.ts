@@ -5,6 +5,7 @@ import type {
   SettingsManager,
   SlashCommandInfo,
   Theme,
+  ToolInfo as PiToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import type {
   AgentLoopTurnUpdate,
@@ -30,6 +31,9 @@ export interface ToolInfo {
   parameters?: unknown;
   promptGuidelines?: string[];
   sourceInfo?: unknown;
+  exposure?: PiToolInfo["exposure"];
+  namespace?: PiToolInfo["namespace"];
+  annotations?: PiToolInfo["annotations"];
 }
 
 export interface NavigateTreeResult {

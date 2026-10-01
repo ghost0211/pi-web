@@ -459,6 +459,7 @@ function getSessionSettings(entries: SessionEntry[], leafId?: string | null): Pi
   current ??= entries[entries.length - 1];
   let thinkingLevel: string | undefined;
   let model: SessionContext["model"] | undefined;
+  let assistantFallback: SessionContext["model"] | undefined;
 
   while (current && (thinkingLevel === undefined || model === undefined)) {
     if (thinkingLevel === undefined && current.type === "thinking_level_change") {
@@ -466,16 +467,18 @@ function getSessionSettings(entries: SessionEntry[], leafId?: string | null): Pi
     }
     if (model === undefined && current.type === "model_change") {
       model = { provider: current.provider, modelId: current.modelId };
-    } else if (model === undefined && current.type === "message" && current.message.role === "assistant") {
+    } else if (assistantFallback === undefined && current.type === "message" && current.message.role === "assistant") {
       const message = current.message as { provider?: unknown; model?: unknown };
       if (typeof message.provider === "string" && typeof message.model === "string") {
-        model = { provider: message.provider, modelId: message.model };
+        assistantFallback = { provider: message.provider, modelId: message.model };
       }
     }
     current = current.parentId ? byId.get(current.parentId) : undefined;
   }
 
-  return { thinkingLevel: thinkingLevel ?? "off", model: model ?? null };
+  // A virtual selection lives in model_change; assistant messages record its
+  // physical dispatch. Only use the latter for legacy branches without a pick.
+  return { thinkingLevel: thinkingLevel ?? "off", model: model ?? assistantFallback ?? null };
 }
 
 export interface BuildSessionContextOptions {

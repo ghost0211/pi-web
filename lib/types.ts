@@ -1,4 +1,5 @@
 // Types mirrored from pi-mono coding-agent session-manager
+import type { NestedToolCalls } from "@earendil-works/pi-ai";
 
 export interface SessionHeader {
   type: "session";
@@ -91,6 +92,8 @@ export interface ToolResultMessage {
   details?: unknown;
   timestamp?: number;
   usage?: AgentUsage;
+  /** Bounded metadata only; nested results are not separate transcript messages. */
+  nestedCalls?: NestedToolCalls;
 }
 
 export interface CustomMessage {

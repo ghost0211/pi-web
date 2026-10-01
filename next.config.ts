@@ -30,6 +30,10 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": [
       "./node_modules/@earendil-works/pi-coding-agent/dist/**/*",
+      // Codemode resolves QuickJS through createRequire(...).resolve(), which
+      // traces its JS wrapper but misses the separately loaded WASM payload.
+      "./node_modules/quickjs-wasi/quickjs.wasm",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/quickjs-wasi/quickjs.wasm",
       // pi-ai intentionally hides OAuth/Bedrock flow imports behind variable
       // specifiers. npm currently installs this runtime as a nested dependency
       // of pi-coding-agent, so the top-level pi-ai include below is not enough.

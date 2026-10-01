@@ -3,6 +3,7 @@
 import { memo, useState, useRef, useEffect, useMemo } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { ImagePreview } from "./ImagePreview";
+import { NestedToolCallsView } from "./NestedToolCallsView";
 import { copyText } from "@/lib/clipboard";
 import { useI18n } from "@/hooks/useI18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
@@ -1076,6 +1077,11 @@ function ToolCallBlock({ block, result, duration, onOpenSession }: { block: Tool
           <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
             {isStreamingInput ? t("chat.generatingToolInput") : (patchLabel ?? getToolPreview(block))}
           </span>
+          {result?.nestedCalls && (
+            <span style={{ fontSize: 10, color: "var(--text-dim)", flexShrink: 0 }}>
+              {t("chat.nestedCalls", { count: result.nestedCalls.calls.length })}{!result.nestedCalls.complete && " +"}
+            </span>
+          )}
           {duration !== undefined && (
             <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
           )}
@@ -1146,6 +1152,7 @@ function ToolCallBlock({ block, result, duration, onOpenSession }: { block: Tool
           />
         )
       )}
+      {expanded && result?.nestedCalls && <NestedToolCallsView record={result.nestedCalls} />}
     </div>
   );
 }

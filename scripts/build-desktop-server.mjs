@@ -36,7 +36,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { validatePiAiOAuthModules } from "./desktop-bundle-validation.mjs";
+import { validatePiAiOAuthModules, validatePiCodemodeAssets } from "./desktop-bundle-validation.mjs";
 
 const DESKTOP_NODE_VERSION = "22.19.0";
 
@@ -141,6 +141,10 @@ function copyStandaloneServer() {
   // hide a wholly missing nested runtime (the openai-codex desktop regression).
   try {
     validatePiAiOAuthModules({
+      sourceNodeModulesDir: join(repoRoot, "node_modules"),
+      bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
+    });
+    validatePiCodemodeAssets({
       sourceNodeModulesDir: join(repoRoot, "node_modules"),
       bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
     });

@@ -14,10 +14,9 @@ export const PRESET_READ_ONLY: string[] = ["read", "grep", "find", "ls"];
 export const PRESET_DEFAULT: string[] = ["read", "bash", "edit", "write"];
 export const PRESET_FULL: string[] = ["bash", "read", "edit", "write", "grep", "find", "ls"];
 
-export const BUILTIN_TOOL_NAMES = new Set([...PRESET_FULL, "powershell"]);
-
-/** Every built-in tool the custom picker can toggle individually. */
-export const BUILTIN_SELECTABLE_TOOLS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"] as const;
+/** Optional SDK extension tools remain opt-in; ordinary presets are unchanged. */
+export const BUILTIN_SELECTABLE_TOOLS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls", "codemode", "tool_search"] as const;
+export const BUILTIN_TOOL_NAMES = new Set<string>(BUILTIN_SELECTABLE_TOOLS);
 
 /** "custom": an arbitrary user-picked combination that matches no preset. */
 export const CUSTOM_TOOL_PRESET = "custom" as const;

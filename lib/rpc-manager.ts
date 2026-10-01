@@ -59,6 +59,8 @@ import {
   type SessionSystemPromptCustomization,
 } from "./session-system-prompt";
 import { calculateActiveContextTokens } from "./context-tokens";
+import { createPiBuiltinExtensions } from "./pi-builtin-extensions";
+import { BUILTIN_TOOL_NAMES } from "./tool-presets";
 
 // ============================================================================
 // Types
@@ -166,7 +168,6 @@ export interface RpcSessionStartOptions {
   ephemeral?: boolean;
 }
 
-const CODING_TOOL_NAMES = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 const THINKING_LEVEL_NAMES = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -262,12 +263,15 @@ const CUSTOM_UI_KEYBINDINGS = new TuiKeybindingsManager(TUI_KEYBINDINGS);
 function withExtensionTools(session: AgentSessionLike, toolNames: string[]): string[] {
   if (toolNames.length === 0) return [];
 
-  const codingToolNames = new Set(CODING_TOOL_NAMES);
   const selectedToolNames = resolveShellTools(toolNames, session.settingsManager.getDefaultTools());
+  const active = new Set(session.getActiveToolNames());
+  // Preserve extension-selected declarations, including tools loaded by search,
+  // but never promote every registered MCP/deferred tool to a declaration.
+  // codemode/tool_search are explicitly selectable builtins, not always-on tools.
   const extensionToolNames = session
     .getAllTools()
-    .map((t) => t.name)
-    .filter((name) => !codingToolNames.has(name));
+    .filter((tool) => !BUILTIN_TOOL_NAMES.has(tool.name) && active.has(tool.name) && tool.exposure !== "hidden")
+    .map((tool) => tool.name);
 
   return [...new Set([...selectedToolNames, ...extensionToolNames])];
 }
@@ -1048,13 +1052,14 @@ export class AgentSessionWrapper {
         if (this.inner.isStreaming) {
           throw new Error("Cannot reload while the session is running; wait for the current run to finish and try again.");
         }
-        const activeToolNames = this.inner.getActiveToolNames();
         await this.waitForExtensionsBound();
         this.extensionStatuses.clear();
         this.resetExtensionWidgetsForReload();
         this.syncProjectTrust();
         await this.inner.reload();
-        this.setActiveToolSelection(activeToolNames);
+        // Pi 0.99.2 adds newly configured defaultTools during reload. Preserve
+        // that effective selection rather than restoring the pre-reload snapshot.
+        this.setActiveToolSelection(this.inner.getActiveToolNames());
         if (typeof this.inner.bindExtensions !== "function") {
           this.inner.extensionRunner.setUIContext?.(this.createExtensionUiContext(), "rpc");
         }
@@ -2126,7 +2131,7 @@ export async function startRpcSession(
     let toolsOption: string[] | undefined = subagentResources?.tools;
     if (!subagentResources && selectedToolNames !== undefined) {
       // toolNames === [] -> "all off" (an empty allow-list disables every tool).
-      // Otherwise DO NOT pass a builtin-only allow-list: passing CODING_TOOL_NAMES
+      // Otherwise DO NOT pass a builtin-only allow-list: passing PRESET_DEFAULT
       // set allowedToolNames to coding builtins only, which filtered every
       // extension/package-provided tool (e.g. subagents, web access) out of the
       // tool registry — so they were unavailable in Pi Web sessions even though the
@@ -2181,6 +2186,7 @@ export async function startRpcSession(
             }
         : {
             extensionFactories: [
+              ...createPiBuiltinExtensions(),
               systemPromptExtension,
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
@@ -2245,9 +2251,9 @@ export async function startRpcSession(
     );
     if (persistedPreferences.modelDefaultChanged) invalidateModelsCache();
 
-    // If specific tool names were requested (non-empty), set the active tools to the
-    // requested builtin coding tools PLUS all extension/package tools, so installed
-    // extensions stay usable in Pi Web just like in the `pi` CLI.
+    // Apply requested builtins without dropping SDK-activated extension tools.
+    // Inactive Codemode/search and indirect MCP tools must remain inactive until
+    // selected by the user, configured defaults, or the SDK's discovery logic.
     if (!subagentResources && !chatOnly) {
       inner.setActiveToolsByName(withExtensionTools(inner, selectedToolNames ?? inner.getActiveToolNames()));
     }

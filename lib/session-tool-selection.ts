@@ -1,5 +1,5 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { PRESET_FULL } from "./tool-presets";
+import { BUILTIN_TOOL_NAMES } from "./tool-presets";
 import type { SessionEntry } from "./types";
 
 export const TOOL_SELECTION_TYPE = "pi-web:tool-selection";
@@ -8,8 +8,6 @@ export interface SessionToolSelectionData {
   version: 1;
   tools: string[];
 }
-
-const BUILTIN_TOOL_NAMES = new Set(PRESET_FULL);
 
 function parseToolSelectionData(data: unknown): string[] | undefined {
   if (typeof data !== "object" || data === null || Array.isArray(data)) return undefined;

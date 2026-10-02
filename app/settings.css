@@ -1203,6 +1203,12 @@
   text-overflow: ellipsis;
 }
 
+.settings-startup-select {
+  width: auto;
+  max-width: 50%;
+  flex-shrink: 0;
+}
+
 .settings-shell-select:disabled {
   opacity: 0.6;
 }

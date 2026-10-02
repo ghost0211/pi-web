@@ -83,7 +83,7 @@ interface GeneralSettingsData {
   defaultThinkingLevel?: string;
   compactionEnabled?: boolean;
   retryEnabled?: boolean;
-  quietStartup?: boolean;
+  quietStartup?: boolean | "header";
   hideThinkingBlock?: boolean;
   defaultProjectTrust?: string;
   enableSkillCommands?: boolean;
@@ -438,12 +438,17 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
                   <h4 className="settings-card-row-title">{t("settings.quietStartup")}</h4>
                   <p className="settings-card-row-desc">{t("settings.quietStartupDescription")}</p>
                 </div>
-                <ConfigSwitch
-                  checked={generalSettings?.quietStartup ?? false}
-                  loading={savingField === "quietStartup"}
-                  label={t("settings.quietStartup")}
-                  onChange={(val) => void updateSetting("quietStartup", val)}
-                />
+                <select
+                  aria-label={t("settings.quietStartup")}
+                  className="settings-shell-select settings-startup-select"
+                  value={String(generalSettings?.quietStartup ?? false)}
+                  disabled={generalSettings === null || savingField === "quietStartup"}
+                  onChange={(event) => void updateSetting("quietStartup", event.target.value === "header" ? "header" : event.target.value === "true")}
+                >
+                  <option value="false">{t("settings.startupFull")}</option>
+                  <option value="header">{t("settings.startupHeader")}</option>
+                  <option value="true">{t("settings.startupQuiet")}</option>
+                </select>
               </div>
             </section>
             <CodemodeSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} />

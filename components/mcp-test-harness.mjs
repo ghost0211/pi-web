@@ -11,6 +11,12 @@ export function componentHarness(Component, initialProps) {
       return [slots[index], (value) => { slots[index] = typeof value === "function" ? value(slots[index]) : value; }];
     },
     useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useMemo(callback, deps) {
+      const index = cursor++; const old = slots[index];
+      if (old && deps?.every((value, i) => Object.is(value, old.deps?.[i]))) return old.value;
+      return (slots[index] = { deps, value: callback() }).value;
+    },
+    useCallback(callback, deps) { return hooks.useMemo(() => callback, deps); },
     useEffect(callback, deps) {
       const index = cursor++; const old = slots[index];
       if (old && deps?.every((value, i) => Object.is(value, old.deps?.[i]))) return;
@@ -23,6 +29,7 @@ export function componentHarness(Component, initialProps) {
     if (Array.isArray(value)) return value.flatMap(expand);
     if (!value || typeof value !== "object") return value;
     if (typeof value.type === "function") return expand(value.type(value.props));
+    if (value.type?.$$typeof === Symbol.for("react.memo")) return expand(React.createElement(value.type.type, value.props));
     return { ...value, props: { ...value.props, children: expand(value.props?.children) } };
   };
   const nodes = (value) => {
@@ -47,6 +54,7 @@ export function componentHarness(Component, initialProps) {
   };
   return {
     render,
+    find(predicate) { return nodes(tree).find(predicate); },
     button(label) { return nodes(tree).find((node) => node.type === "button" && text(node) === label); },
     input(label) { return nodes(tree).find((node) => ["input", "textarea"].includes(node.type) && node.props["aria-label"] === label); },
     text: () => text(tree),

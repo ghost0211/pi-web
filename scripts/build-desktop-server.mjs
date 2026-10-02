@@ -36,7 +36,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { validatePiAiOAuthModules, validatePiCodemodeAssets } from "./desktop-bundle-validation.mjs";
+import {
+  validatePiAiOAuthModules,
+  validatePiCodemodeAssets,
+  validatePiDocs,
+  validatePiDynamicWorkers,
+  validatePiRuntimePackages,
+  validatePiWasmAssets,
+} from "./desktop-bundle-validation.mjs";
 
 const DESKTOP_NODE_VERSION = "22.19.0";
 
@@ -145,6 +152,22 @@ function copyStandaloneServer() {
       bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
     });
     validatePiCodemodeAssets({
+      sourceNodeModulesDir: join(repoRoot, "node_modules"),
+      bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
+    });
+    validatePiDynamicWorkers({
+      sourceNodeModulesDir: join(repoRoot, "node_modules"),
+      bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
+    });
+    validatePiDocs({
+      sourceNodeModulesDir: join(repoRoot, "node_modules"),
+      bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
+    });
+    validatePiWasmAssets({
+      sourceNodeModulesDir: join(repoRoot, "node_modules"),
+      bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
+    });
+    validatePiRuntimePackages({
       sourceNodeModulesDir: join(repoRoot, "node_modules"),
       bundleNodeModulesDir: join(serverResourceDir, "node_modules"),
     });

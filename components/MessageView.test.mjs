@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createJiti } from "jiti";
+import { componentHarness } from "./mcp-test-harness.mjs";
 
 const jiti = createJiti(import.meta.url, {
   jsx: { runtime: "automatic" },
@@ -25,6 +26,25 @@ function renderMessage(message, props = {}) {
     ),
   );
 }
+
+test("expands Codemode image output as preview media, never base64 plaintext", () => {
+  const result = { role: "toolResult", toolCallId: "image-call", toolName: "codemode",
+    content: [{ type: "text", text: "Generated locally" }, { type: "image", data: "YWJj", mimeType: "image/png" }],
+    usage: { totalTokens: 7, cost: { total: 0.03 } }, isError: false };
+  const harness = componentHarness((props) => React.createElement(MessageView, props), {
+    message: { role: "assistant", content: [{ type: "toolCall", toolCallId: "image-call", toolName: "codemode", input: { code: "image(block)" } }] },
+    toolResults: new Map([["image-call", result]]),
+  });
+  try {
+    harness.render();
+    assert.equal(harness.find((node) => node.type === "img"), undefined);
+    harness.find((node) => node.props.onClick && node.props.style?.cursor === "pointer").props.onClick();
+    harness.render();
+    assert.equal(harness.find((node) => node.type === "img").props.src, "data:image/png;base64,YWJj");
+    assert.ok(harness.find((node) => node.type === "button" && node.props["aria-label"] === "chat.previewImage"));
+    assert.doesNotMatch(harness.text(), /YWJj/);
+  } finally { harness.cleanup(); }
+});
 
 test("renders compaction summaries collapsed by default", () => {
   const html = renderMessage({

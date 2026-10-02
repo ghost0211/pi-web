@@ -2,6 +2,7 @@
 
 Pi Web embeds the SDK in-process. Updating the global `pi` CLI does **not** update
 that embedded SDK or automatically install the CLI's built-in extensions.
+For the current SDK upgrade, see [Pi SDK 1.0 integration](pi-sdk-1.0-adaptation.md).
 
 ## Supported in normal sessions
 

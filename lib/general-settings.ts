@@ -12,7 +12,7 @@ export interface GeneralSettings {
   defaultThinkingLevel: string;
   compactionEnabled: boolean;
   retryEnabled: boolean;
-  quietStartup: boolean;
+  quietStartup: boolean | "header";
   hideThinkingBlock: boolean;
   defaultProjectTrust: "prompt" | "auto" | "never";
   enableSkillCommands: boolean;
@@ -60,7 +60,7 @@ export function toGeneralSettings(settings: Record<string, unknown>): GeneralSet
       : "auto",
     compactionEnabled: nestedEnabled(settings, "compaction", "compactionEnabled"),
     retryEnabled: nestedEnabled(settings, "retry", "retryEnabled"),
-    quietStartup: settings.quietStartup === true,
+    quietStartup: settings.quietStartup === "header" ? "header" : settings.quietStartup === true,
     hideThinkingBlock: settings.hideThinkingBlock === true,
     defaultProjectTrust: storedTrust === "always" || storedTrust === "auto"
       ? "auto"
@@ -115,10 +115,16 @@ export function parseGeneralSettingsPatch(value: unknown): GeneralSettingsPatch 
     patch.codemodeInlineBudget = value.codemodeInlineBudget;
   }
 
+  if (value.quietStartup !== undefined) {
+    if (typeof value.quietStartup !== "boolean" && value.quietStartup !== "header") {
+      throw new Error('quietStartup must be a boolean or "header"');
+    }
+    patch.quietStartup = value.quietStartup;
+  }
+
   for (const key of [
     "compactionEnabled",
     "retryEnabled",
-    "quietStartup",
     "hideThinkingBlock",
     "enableSkillCommands",
   ] as const) {

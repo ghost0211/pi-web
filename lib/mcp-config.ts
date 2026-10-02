@@ -72,6 +72,7 @@ const KNOWN_OAUTH_KEYS = new Set([
   "callbackUrl",
   "scope",
   "clientName",
+  "authServerMetadataUrl",
 ]);
 
 export class McpConflictError extends Error {
@@ -183,6 +184,13 @@ export function validateOAuth(raw: unknown): string | null {
   }
   if (raw.clientName !== undefined && (typeof raw.clientName !== "string" || !raw.clientName.trim())) {
     return "oauth.clientName must be a non-empty string";
+  }
+  if (raw.authServerMetadataUrl !== undefined) {
+    const metadata = typeof raw.authServerMetadataUrl === "string" && URL.canParse(raw.authServerMetadataUrl)
+      ? new URL(raw.authServerMetadataUrl) : undefined;
+    if (!metadata || metadata.username || metadata.password || !(metadata.protocol === "https:" || (metadata.protocol === "http:" && LOOPBACK_HOSTS.includes(metadata.hostname)))) {
+      return "oauth.authServerMetadataUrl must use HTTPS or loopback HTTP without URL credentials";
+    }
   }
   return null;
 }
@@ -345,9 +353,12 @@ export function maskServerConfig(config: Record<string, unknown>): Record<string
       result.headers = Object.fromEntries(Object.keys(value).map((key) => [key, MCP_SAVED_VALUE_MASK]));
     } else if (key === "oauth" && isRecord(value)) {
       const maskedOAuth: Record<string, unknown> = Object.fromEntries(Object.entries(value).filter(([key]) => KNOWN_OAUTH_KEYS.has(key)));
-      if (typeof maskedOAuth.callbackUrl === "string" && URL.canParse(maskedOAuth.callbackUrl)) {
-        const callback = new URL(maskedOAuth.callbackUrl);
-        if (callback.username || callback.password || callback.search || callback.hash) maskedOAuth.callbackUrl = MCP_SAVED_VALUE_MASK;
+      for (const field of ["callbackUrl", "authServerMetadataUrl"]) {
+        const fieldValue = maskedOAuth[field];
+        if (typeof fieldValue === "string" && URL.canParse(fieldValue)) {
+          const url = new URL(fieldValue);
+          if (url.username || url.password || url.search || url.hash) maskedOAuth[field] = MCP_SAVED_VALUE_MASK;
+        }
       }
       if (typeof maskedOAuth.clientSecret === "string") {
         maskedOAuth.clientSecret = MCP_SAVED_VALUE_MASK;
@@ -513,11 +524,12 @@ export function restoreAndMergeServerConfig(
           ...(!switchedTransport ? oldOAuth : {}),
           ...value,
         };
-        if (value.clientSecret === MCP_SAVED_VALUE_MASK) {
-          if (switchedTransport || typeof oldOAuth.clientSecret !== "string") {
-            throw new McpValidationError("Cannot restore masked oauth.clientSecret: not found in existing config");
+        for (const field of ["clientSecret", "callbackUrl", "authServerMetadataUrl"]) {
+          if (value[field] !== MCP_SAVED_VALUE_MASK) continue;
+          if (switchedTransport || !Object.hasOwn(oldOAuth, field) || typeof oldOAuth[field] !== "string") {
+            throw new McpValidationError(`Cannot restore masked oauth.${field}: not found in existing config`);
           }
-          mergedOAuth.clientSecret = oldOAuth.clientSecret;
+          mergedOAuth[field] = oldOAuth[field];
         }
         for (const [oK, oV] of Object.entries(value)) {
           if (oV === null) {

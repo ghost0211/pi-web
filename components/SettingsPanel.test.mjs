@@ -78,6 +78,12 @@ test("uses sidebar navigation on desktop and one compact section picker on mobil
   assert.doesNotMatch(panelSource, /style=\{\{/);
 });
 
+test("shows all SDK startup modes in a compact card-row selector", () => {
+  assert.match(panelSource, /className="settings-shell-select settings-startup-select"/);
+  for (const mode of ["false", "header", "true"]) assert.ok(panelSource.includes(`<option value="${mode}">`));
+  assert.match(cssSource, /\.settings-startup-select \{[\s\S]*?width: auto;[\s\S]*?max-width: 50%;[\s\S]*?flex-shrink: 0/);
+});
+
 test("labels agent profiles as sub-agents", () => {
   assert.match(enSource, /"common\.agents": "Sub-agents"/);
   assert.match(enSource, /"agents\.new": "New sub-agent"/);

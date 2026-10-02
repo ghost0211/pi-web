@@ -269,6 +269,12 @@ separate work item.
   include both top-level and `pi-coding-agent`-nested `pi-ai/dist` trees;
   `build-desktop-server.mjs` validates every installed OAuth runtime before an
   installer can be produced.
+- **Codemode or image processing reports missing worker/WASM/docs** — SDK 1.0
+  uses `pi-codemode`, `pi-mcp`, and `chord` runtimes, which may be hoisted or
+  installed under `pi-coding-agent/node_modules`. The standalone trace includes
+  complete runtime trees, QuickJS/Photon WASM, and SDK documentation. Desktop
+  assembly checks worker dependencies, docs, WASM, and OAuth files against the
+  installed sources. See [SDK 1.0 integration](../docs/pi-sdk-1.0-adaptation.md).
 - **SmartScreen warning on first install** — expected until the installer is
   code-signed.
 - **Firewall prompt** — none should appear; the sidecar binds `127.0.0.1`

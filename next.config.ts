@@ -30,10 +30,16 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": [
       "./node_modules/@earendil-works/pi-coding-agent/dist/**/*",
-      // Codemode resolves QuickJS through createRequire(...).resolve(), which
-      // traces its JS wrapper but misses the separately loaded WASM payload.
-      "./node_modules/quickjs-wasi/quickjs.wasm",
-      "./node_modules/@earendil-works/pi-coding-agent/node_modules/quickjs-wasi/quickjs.wasm",
+      // SDK documentation dynamically resolved via getDocsPath()
+      "./node_modules/@earendil-works/pi-coding-agent/docs/**/*",
+      // Worker imports and WASM resolution are dynamic. Keep package manifests,
+      // JS loaders, and WASM together in hoisted and nested installations.
+      "./node_modules/quickjs-wasi/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/quickjs-wasi/**/*",
+      "./node_modules/@earendil-works/pi-codemode/node_modules/quickjs-wasi/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-codemode/node_modules/quickjs-wasi/**/*",
+      "./node_modules/@silvia-odwyer/photon-node/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node/**/*",
       // pi-ai intentionally hides OAuth/Bedrock flow imports behind variable
       // specifiers. npm currently installs this runtime as a nested dependency
       // of pi-coding-agent, so the top-level pi-ai include below is not enough.
@@ -41,7 +47,18 @@ const nextConfig: NextConfig = {
       "./node_modules/@earendil-works/pi-agent-core/dist/**/*",
       "./node_modules/@earendil-works/pi-ai/dist/**/*",
       "./node_modules/@earendil-works/pi-tui/dist/**/*",
-      "./node_modules/@earendil-works/pi-telemetry/dist/**/*",
+      "./node_modules/@earendil-works/pi-telemetry/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-telemetry/**/*",
+      // pi-codemode runs sandboxed execution in a dedicated worker thread
+      // with runtime dependencies that nft does not trace automatically.
+      "./node_modules/@earendil-works/pi-codemode/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-codemode/**/*",
+      // Full packages, not just dist: ESM exports need each package.json even
+      // when only a variable import or a worker reaches the package at runtime.
+      "./node_modules/@earendil-works/pi-mcp/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-mcp/**/*",
+      "./node_modules/@earendil-works/chord/**/*",
+      "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/chord/**/*",
     ],
   },
   // next/image is only used for the static logo, so the /_next/image optimizer
@@ -59,6 +76,10 @@ const nextConfig: NextConfig = {
     "@earendil-works/pi-agent-core",
     "@earendil-works/pi-ai",
     "@earendil-works/pi-tui",
+    "@earendil-works/pi-telemetry",
+    "@earendil-works/pi-codemode",
+    "@earendil-works/pi-mcp",
+    "@earendil-works/chord",
   ],
   // Next 16 blocks cross-origin development requests by default. Keep the
   // default narrow and require operators to opt additional hosts in.

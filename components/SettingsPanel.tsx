@@ -22,6 +22,8 @@ import { ModelsConfig } from "./ModelsConfig";
 import { ModelScopeConfig } from "./ModelScopeConfig";
 import { SessionsConfig } from "./SessionsConfig";
 import { SshConfig } from "./SshConfig";
+import { McpConfig } from "./McpConfig";
+import { CodemodeSettings } from "./CodemodeSettings";
 import { UsagePanel } from "./UsagePanel";
 import { SkillsConfig } from "./SkillsConfig";
 import { AgentsConfig } from "./AgentsConfig";
@@ -56,6 +58,7 @@ export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: {
   if (section === "model-scope") return <svg {...common}><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z" /></svg>;
   if (section === "sessions") return <svg {...common}><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3 6h.01M3 12h.01M3 18h.01" /></svg>;
   if (section === "ssh") return <svg {...common}><rect x="2" y="3" width="20" height="7" rx="2" /><rect x="2" y="14" width="20" height="7" rx="2" /><path d="M6 6.5h.01M6 17.5h.01" /></svg>;
+  if (section === "mcp") return <svg {...common}><circle cx="5" cy="5" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="m6 7 5 10M18 7l-5 10M7 5h10" /></svg>;
   if (section === "usage") return <svg {...common}><path d="M3 20V10M9 20V4M15 20v-7M21 20V7" /><path d="M2 20h20" /></svg>;
   if (section === "skills") return <svg {...common}><path d="m12 2-10 5 10 5 10-5-10-5Z" /><path d="m2 12 10 5 10-5M2 17l10 5 10-5" /></svg>;
   if (section === "agents") return <svg {...common} className="settings-section-icon is-agent"><rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" /></svg>;
@@ -443,6 +446,7 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
                 />
               </div>
             </section>
+            <CodemodeSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} />
           </>
         )}
 
@@ -596,6 +600,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
     { id: "model-scope", label: t("settings.modelScope"), requiresProject: false },
     { id: "sessions", label: t("common.sessions"), requiresProject: false },
     { id: "ssh", label: t("settings.ssh"), requiresProject: false },
+    { id: "mcp", label: t("mcp.title"), requiresProject: false },
     { id: "usage", label: t("usage.title"), requiresProject: false },
     { id: "skills", label: t("common.skills"), requiresProject: true },
     { id: "agents", label: t("common.agents"), requiresProject: true },
@@ -696,6 +701,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
             {sectionHost("model-scope", <ModelScopeConfig embedded onClose={onClose} />)}
             {sectionHost("sessions", <SessionsConfig embedded onClose={onClose} />)}
             {sectionHost("ssh", <SshConfig embedded onClose={onClose} />)}
+            {sectionHost("mcp", <McpConfig embedded key={cwd ?? "global"} cwd={cwd} sessionId={sessionId} onClose={onClose} onSessionReloaded={onSessionReloaded} />)}
             {sectionHost("usage", <UsagePanel translate={t} />)}
             {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} onClose={onClose} />)}
             {cwd && sectionHost("agents", <AgentsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}

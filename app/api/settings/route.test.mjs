@@ -58,6 +58,19 @@ test("settings route validates and persists the SDK-compatible format", async ()
   assert.equal(response.status, 415);
 });
 
+test("settings API round-trips Codemode without changing defaultTools", async () => {
+  await writeFile(settingsPath, JSON.stringify({ codemode: { extra: "preserved" }, defaultTools: ["read"] }));
+  const response = await PUT(request({ codemodeMode: "only", codemodeInlineBudget: 0 }));
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.settings.codemodeMode, "only");
+  assert.equal(data.settings.codemodeInlineBudget, 0);
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { codemode: { extra: "preserved", mode: "only", inlineBudget: 0 }, defaultTools: ["read"] });
+  for (const invalid of [-1, 1.5, "3000", null]) {
+    assert.equal((await PUT(request({ codemodeInlineBudget: invalid }))).status, 400);
+  }
+});
+
 test("settings route refuses to overwrite malformed configuration", async () => {
   await writeFile(settingsPath, "{");
   const response = await PUT(request({ retryEnabled: true }));

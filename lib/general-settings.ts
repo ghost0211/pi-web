@@ -5,6 +5,7 @@ import { writePrivateFileAtomicSync } from "./atomic-file";
 
 const THINKING_LEVELS = new Set(["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const PROJECT_TRUST_VALUES = new Set(["prompt", "auto", "never"]);
+const CODEMODE_MODES = new Set(["on", "only"]);
 
 export interface GeneralSettings {
   theme: string;
@@ -15,6 +16,8 @@ export interface GeneralSettings {
   hideThinkingBlock: boolean;
   defaultProjectTrust: "prompt" | "auto" | "never";
   enableSkillCommands: boolean;
+  codemodeMode: "on" | "only";
+  codemodeInlineBudget: number;
 }
 
 export type GeneralSettingsPatch = Partial<Omit<GeneralSettings, "theme">>;
@@ -43,6 +46,13 @@ function nestedEnabled(
 export function toGeneralSettings(settings: Record<string, unknown>): GeneralSettings {
   const storedThinking = settings.defaultThinkingLevel;
   const storedTrust = settings.defaultProjectTrust;
+  const codemode = isRecord(settings.codemode) ? settings.codemode : undefined;
+  const codemodeMode = codemode?.mode === "only" ? "only" : "on";
+  const rawBudget = codemode?.inlineBudget;
+  const codemodeInlineBudget =
+    typeof rawBudget === "number" && Number.isSafeInteger(rawBudget) && rawBudget >= 0
+      ? rawBudget
+      : 3000;
   return {
     theme: typeof settings.theme === "string" ? settings.theme : "auto",
     defaultThinkingLevel: typeof storedThinking === "string" && THINKING_LEVELS.has(storedThinking)
@@ -58,6 +68,8 @@ export function toGeneralSettings(settings: Record<string, unknown>): GeneralSet
         ? "never"
         : "prompt",
     enableSkillCommands: settings.enableSkillCommands !== false,
+    codemodeMode,
+    codemodeInlineBudget,
   };
 }
 
@@ -83,6 +95,24 @@ export function parseGeneralSettingsPatch(value: unknown): GeneralSettingsPatch 
       throw new Error("defaultProjectTrust is invalid");
     }
     patch.defaultProjectTrust = value.defaultProjectTrust as GeneralSettings["defaultProjectTrust"];
+  }
+
+  if (value.codemodeMode !== undefined) {
+    if (typeof value.codemodeMode !== "string" || !CODEMODE_MODES.has(value.codemodeMode)) {
+      throw new Error("codemodeMode is invalid");
+    }
+    patch.codemodeMode = value.codemodeMode as GeneralSettings["codemodeMode"];
+  }
+
+  if (value.codemodeInlineBudget !== undefined) {
+    if (
+      typeof value.codemodeInlineBudget !== "number" ||
+      !Number.isSafeInteger(value.codemodeInlineBudget) ||
+      value.codemodeInlineBudget < 0
+    ) {
+      throw new Error("codemodeInlineBudget must be a non-negative integer");
+    }
+    patch.codemodeInlineBudget = value.codemodeInlineBudget;
   }
 
   for (const key of [
@@ -124,6 +154,16 @@ function applyPatch(settings: Record<string, unknown>, patch: GeneralSettingsPat
       : patch.defaultProjectTrust === "prompt"
         ? "ask"
         : "never";
+  }
+  if (patch.codemodeMode !== undefined || patch.codemodeInlineBudget !== undefined) {
+    const current = isRecord(next.codemode) ? { ...next.codemode } : {};
+    if (patch.codemodeMode !== undefined) {
+      current.mode = patch.codemodeMode;
+    }
+    if (patch.codemodeInlineBudget !== undefined) {
+      current.inlineBudget = patch.codemodeInlineBudget;
+    }
+    next.codemode = current;
   }
   return next;
 }

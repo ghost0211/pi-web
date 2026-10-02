@@ -20,10 +20,10 @@ test("opens one settings panel from direct sidebar shortcuts", () => {
 });
 
 test("keeps every requested configuration surface inside the settings panel", () => {
-  for (const section of ["general", "models", "model-scope", "skills", "agents", "plugins"]) {
+  for (const section of ["general", "models", "model-scope", "mcp", "skills", "agents", "plugins"]) {
     assert.match(panelSource, new RegExp(`id: "${section}"`));
   }
-  for (const component of ["ModelsConfig", "ModelScopeConfig", "SkillsConfig", "AgentsConfig", "PluginsConfig"]) {
+  for (const component of ["ModelsConfig", "ModelScopeConfig", "McpConfig", "SkillsConfig", "AgentsConfig", "PluginsConfig"]) {
     assert.match(panelSource, new RegExp(`<${component} embedded`));
   }
 });
@@ -91,6 +91,12 @@ test("uses the child-session robot glyph for the sub-agents tab", () => {
   assert.match(sidebarSource, robotGlyph);
   assert.match(panelSource, /section === "agents"[\s\S]*?className="settings-section-icon is-agent"/);
   assert.match(cssSource, /\.settings-section-icon\.is-agent \{[\s\S]*?transform: scale\(1\.25\)/);
+});
+
+test("embeds Codemode advanced controls with the current session's explicit reload callback", () => {
+  assert.match(panelSource, /<CodemodeSettings sessionId=\{sessionId\} onSessionReloaded=\{onSessionReloaded\}/);
+  assert.match(panelSource, /<McpConfig embedded[^\n]*cwd=\{cwd\}[^\n]*sessionId=\{sessionId\}/);
+  assert.match(panelSource, /id: "mcp", label: t\("mcp\.title"\), requiresProject: false/);
 });
 
 test("uses the compact controls glyph for General", () => {

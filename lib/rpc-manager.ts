@@ -61,6 +61,7 @@ import {
 import { calculateActiveContextTokens } from "./context-tokens";
 import { createPiBuiltinExtensions } from "./pi-builtin-extensions";
 import { BUILTIN_TOOL_NAMES } from "./tool-presets";
+import { McpWebRuntime, McpRuntimeError, type McpAction, type McpWebEvent, type McpRuntimeStatus } from "./mcp-web-runtime";
 
 // ============================================================================
 // Types
@@ -133,6 +134,7 @@ type AgentSessionWrapperOptions = {
   ephemeral?: boolean;
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
+  mcpRuntime?: McpWebRuntime;
 };
 
 const IDLE_RESET_EVENT_TYPES = new Set([
@@ -297,6 +299,7 @@ export class AgentSessionWrapper {
   private extensionWidgetsResetting = false;
   private pendingPromptCount = 0;
   private activeMutatingCommands = 0;
+  private mcpActionPending = false;
   private sessionReplacement: "fork" | "clone" | null = null;
   private agentRunNeedsCompletion = false;
   private promptAdmissionTail: Promise<void> = Promise.resolve();
@@ -308,6 +311,7 @@ export class AgentSessionWrapper {
   private readonly ephemeral: boolean;
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
   private readonly suppressCompletionNotifications: boolean;
+  private readonly mcpRuntime?: McpWebRuntime;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
@@ -328,6 +332,7 @@ export class AgentSessionWrapper {
     this.ephemeral = options.ephemeral ?? false;
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
+    this.mcpRuntime = options.mcpRuntime;
   }
 
   get sessionId(): string {
@@ -393,6 +398,34 @@ export class AgentSessionWrapper {
   /** In-memory (ephemeral) sessions never write a JSONL file. */
   isEphemeral(): boolean {
     return this.ephemeral;
+  }
+
+  hasMcpActionInProgress(): boolean { return this.mcpActionPending; }
+
+  async getMcpRuntimeStatus(): Promise<McpRuntimeStatus> {
+    if (!this._alive || !this.mcpRuntime) return { available: false, reason: "No live built-in MCP runtime in this session. Chat-only and subagent sessions do not load it." };
+    this.resetIdleTimer();
+    return this.mcpRuntime.status();
+  }
+
+  assertMcpActionAvailable(): void {
+    if (!this._alive || !this.mcpRuntime?.isAvailable()) throw new McpRuntimeError("No live built-in MCP runtime in this session");
+    if (this.isRunning() || this.mcpActionPending || this.activeMutatingCommands > 0 || this.sessionReplacement) {
+      throw new McpRuntimeError("Wait for the current session operation to finish before managing MCP");
+    }
+  }
+
+  async runMcpAction(action: McpAction, name: string, signal: AbortSignal, emit: (event: McpWebEvent) => void): Promise<boolean> {
+    this.assertMcpActionAvailable();
+    this.mcpActionPending = true;
+    this.activeMutatingCommands += 1;
+    this.resetIdleTimer();
+    try { return await this.mcpRuntime!.action(this.sessionId, action, name, signal, emit); }
+    finally {
+      this.mcpActionPending = false;
+      this.activeMutatingCommands -= 1;
+      this.resetIdleTimer();
+    }
   }
 
   hasSuppressedCompletionNotifications(): boolean {
@@ -581,7 +614,7 @@ export class AgentSessionWrapper {
     const idleTimeoutMs = resolveSessionIdleTimeoutMs();
     if (idleTimeoutMs === 0) return;
     this.idleTimer = setTimeout(() => {
-      if (this.isRunning() && !this.forceShutdownOnIdle) {
+      if (this.mcpActionPending || (this.isRunning() && !this.forceShutdownOnIdle)) {
         this.resetIdleTimer();
         return;
       }
@@ -658,6 +691,10 @@ export class AgentSessionWrapper {
   async send(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
     const allowedDuringReplacement = COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT.has(type);
+    if (this.mcpActionPending && !allowedDuringReplacement && type !== "abort") {
+      throw new McpRuntimeError("An MCP management action is running; finish or cancel it first");
+    }
+    if (type === "abort") this.mcpRuntime?.cancel();
     if (this.sessionReplacement && !allowedDuringReplacement) {
       throw new Error("Session is being copied to a new session");
     }
@@ -1126,6 +1163,7 @@ export class AgentSessionWrapper {
   }
 
   destroy(): void {
+    this.mcpRuntime?.cancel();
     if (!this._alive) return;
     this._alive = false;
     // Tell attached SSE listeners to drop this instance so the browser
@@ -1178,6 +1216,7 @@ export class AgentSessionWrapper {
   }
 
   async shutdown(): Promise<void> {
+    this.mcpRuntime?.cancel();
     if (this.shutdownPromise) return this.shutdownPromise;
     if (!this._alive) return;
 
@@ -1882,7 +1921,7 @@ export async function setRpcSessionTools(
     return { session: started.session, sessionId: started.realSessionId, recreated: false };
   }
 
-  if (existing.isRunning()) throw new Error("Cannot change tools while the session is running");
+  if (existing.isRunning() || existing.hasMcpActionInProgress?.()) throw new Error("Cannot change tools while the session is running or an MCP action is pending");
   if (readSubagentSessionResources(existing.inner.sessionManager.getEntries() as unknown as SessionEntry[])) {
     throw new Error("Subagent tool selection is fixed by its profile");
   }
@@ -2010,7 +2049,7 @@ export function hasBusyRpcSessionForCwd(cwd: string): boolean {
   const targetCwd = normalizeRpcCwd(cwd);
   if (getStartingSessionCwds().has(targetCwd)) return true;
   return Array.from(getRegistry().values()).some(
-    (session) => normalizeRpcCwd(session.cwd) === targetCwd && session.isRunning(),
+    (session) => normalizeRpcCwd(session.cwd) === targetCwd && (session.isRunning() || session.hasMcpActionInProgress?.()),
   );
 }
 
@@ -2159,6 +2198,7 @@ export async function startRpcSession(
       custom: chatOnly ? null : selectedSystemPrompt,
     };
     const systemPromptExtension = createSystemPromptExtension(systemPromptState);
+    const mcpRuntime = !subagentResources && !chatOnly ? new McpWebRuntime() : undefined;
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
       agentDir,
@@ -2186,7 +2226,7 @@ export async function startRpcSession(
             }
         : {
             extensionFactories: [
-              ...createPiBuiltinExtensions(),
+              ...createPiBuiltinExtensions(mcpRuntime?.createExtension()),
               systemPromptExtension,
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
@@ -2274,6 +2314,7 @@ export async function startRpcSession(
         });
       },
       suppressCompletionNotifications: Boolean(subagentResources),
+      mcpRuntime,
     });
     const realSessionId = inner.sessionId as string;
     registerRpcWrapper(wrapper);

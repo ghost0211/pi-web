@@ -4,7 +4,8 @@ import { NextResponse } from "next/server";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 import { invalidateModelsCache } from "@/lib/models-cache";
-import { getProjectTrustStatus, trustProject } from "@/lib/project-trust";
+import { getProjectTrustStatus, trustProject, trustProjectExplicitly } from "@/lib/project-trust";
+import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 import { destroyRpcSessionsForCwd, hasBusyRpcSessionForCwd } from "@/lib/rpc-manager";
 
 export const dynamic = "force-dynamic";
@@ -39,28 +40,32 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  if (!isApiRequestAllowed(req)) return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+  if (!hasJsonContentType(req)) return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  let body: { cwd?: unknown; purpose?: unknown };
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }
+  if (!body || typeof body !== "object" || Array.isArray(body) || (body.purpose !== undefined && body.purpose !== "mcp")) {
+    return NextResponse.json({ error: "Invalid project trust request" }, { status: 400 });
+  }
   try {
-    const body = await req.json() as { cwd?: unknown };
     const result = await validateCwd(body.cwd);
     if ("response" in result) return result.response;
 
     const agentDir = getAgentDir();
     const current = getProjectTrustStatus(result.cwd, agentDir);
-    if (!current.requiresTrust) {
+    if (!current.requiresTrust && body.purpose !== "mcp") {
       return NextResponse.json({ error: "This project has no resources that require trust" }, { status: 409 });
     }
     if (hasBusyRpcSessionForCwd(result.cwd)) {
       return NextResponse.json({ error: "Wait for the active session to finish before trusting this project" }, { status: 409 });
     }
 
-    const status = trustProject(result.cwd, agentDir);
+    const status = body.purpose === "mcp" ? trustProjectExplicitly(result.cwd, agentDir) : trustProject(result.cwd, agentDir);
     invalidateModelsCache();
     await destroyRpcSessionsForCwd(result.cwd);
     return NextResponse.json(status);
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : String(error) },
-      { status: 500 },
-    );
+  } catch {
+    return NextResponse.json({ error: "Failed to update project trust" }, { status: 500 });
   }
 }

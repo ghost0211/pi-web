@@ -17,7 +17,8 @@ that embedded SDK or automatically install the CLI's built-in extensions.
   format, credential store, or duplicate transport implementation.
 - `/mcp` displays server status in Web mode. `/mcp reconnect <name>`,
   `/mcp login <name>`, and `/mcp logout <name>` use the SDK command/UI bridge.
-  The CLI's interactive terminal manager is not a graphical Web settings panel.
+  Settings → MCP adds a graphical configuration and native-command management
+  panel; see [MCP and Codemode settings](mcp-settings.md).
 - SDK tool exposure is preserved: registered hidden/indirect tools are not
   indiscriminately activated when changing a preset. Tools already declared by
   `tool_search` stay declared when changing a nonempty selection.
@@ -45,6 +46,7 @@ without an explicit tool selection:
 
 `mode: "only"` delegates callable tools through Codemode; `on` keeps their direct
 model declarations. These are SDK settings, not a second Pi Web implementation.
+They are also editable in Settings → General → Automation → Codemode.
 
 ## Add an MCP server
 
@@ -70,9 +72,10 @@ not an OS sandbox: adding Codemode cannot make inactive write/bash tools
 callable, but installed extensions or configured MCP tools can have their own
 side effects. Review configurations and use appropriate OS isolation.
 
-A graphical MCP configuration/OAuth management panel, classifier/image-generation
-UI, and a live virtual-route indicator are follow-up work, not part of this
-baseline integration. Terminal theme changes do not replace Web CSS themes.
+The v0.9.36 baseline deferred graphical MCP management. The follow-up settings
+implementation is documented in [MCP and Codemode settings](mcp-settings.md).
+Classifier/image-generation UI and a live virtual-route indicator remain out
+of scope. Terminal theme changes do not replace Web CSS themes.
 
 ## Validation
 

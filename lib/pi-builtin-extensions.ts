@@ -3,6 +3,7 @@ import {
   createMcpExtension,
   createToolSearchExtension,
   type InlineExtension,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -14,10 +15,10 @@ import {
  * Only normal parent sessions use these: Chat-only loads no services, and
  * subagents retain their explicit profile allowlists/resource policy.
  */
-export function createPiBuiltinExtensions(): InlineExtension[] {
+export function createPiBuiltinExtensions(mcpFactory?: ExtensionFactory): InlineExtension[] {
   return [
     { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true },
     { name: "tool-search", factory: createToolSearchExtension(), replaceable: true, builtin: true },
-    { name: "mcp", factory: createMcpExtension(), replaceable: true, builtin: true },
+    { name: "mcp", factory: mcpFactory ?? createMcpExtension(), replaceable: true, builtin: true },
   ];
 }

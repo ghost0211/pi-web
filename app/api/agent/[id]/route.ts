@@ -25,6 +25,9 @@ export async function POST(
 
     // Fast path: already-running session
     const existing = getRpcSession(id);
+    if (body.requireLiveSession === true && !existing?.isAlive()) {
+      return NextResponse.json({ error: "No live session; this command will not start one" }, { status: 409 });
+    }
     if (body.type === "set_tools") {
       const filePath = existing?.sessionFile || await resolveSessionPath(id) || undefined;
       if (!existing?.isAlive() && !filePath) {

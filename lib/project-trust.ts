@@ -12,6 +12,12 @@ export function getProjectTrustStatus(cwd: string, agentDir: string): ProjectTru
   };
 }
 
+/** Explicit user consent also permits preparing MCP configuration in an otherwise bare project. */
+export function trustProjectExplicitly(cwd: string, agentDir: string): ProjectTrustStatus {
+  new ProjectTrustStore(agentDir).set(cwd, true);
+  return getProjectTrustStatus(cwd, agentDir);
+}
+
 export function trustProject(cwd: string, agentDir: string): ProjectTrustStatus {
   const status = getProjectTrustStatus(cwd, agentDir);
   if (!status.requiresTrust) return status;

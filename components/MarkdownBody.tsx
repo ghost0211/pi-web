@@ -3,7 +3,7 @@
 import { useMemo, type MouseEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { resolveLocalFileHref } from "@/lib/file-links";
-import { encodeFilePathForApi } from "@/lib/file-paths";
+import { getFileApiUrl } from "@/lib/file-paths";
 import { markdownRehypePlugins, markdownRemarkPlugins, markdownUserRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
 import { MermaidBlock, CodeBlock } from "./MermaidBlock";
 
@@ -15,9 +15,10 @@ interface MarkdownBodyProps {
   onOpenFile?: (filePath: string) => void;
   /** Render single newlines as hard line breaks (user-authored messages). */
   preserveLineBreaks?: boolean;
+  sessionId?: string;
 }
 
-export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile, preserveLineBreaks }: MarkdownBodyProps) {
+export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile, preserveLineBreaks, sessionId }: MarkdownBodyProps) {
   const normalizedMarkdown = useMemo(() => normalizeDisplayMath(children), [children]);
   // Stable renderer identities keep stateful blocks mounted across message hover updates.
   const components = useMemo<Components>(() => ({
@@ -75,7 +76,7 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
       delete props.node;
       const filePath = typeof src === "string" ? resolveLocalFileHref(src, cwd) : null;
       const imageSrc = filePath
-        ? `/api/files/${encodeFilePathForApi(filePath)}?type=read`
+        ? getFileApiUrl(filePath, "read", sessionId)
         : src;
       // Dynamic local paths are served directly by the file API.
       // eslint-disable-next-line @next/next/no-img-element
@@ -88,7 +89,7 @@ export function MarkdownBody({ children, className, isStreaming, cwd, onOpenFile
         </div>
       );
     },
-  }), [cwd, isStreaming, onOpenFile]);
+  }), [cwd, isStreaming, onOpenFile, sessionId]);
 
   return (
     <div className={["markdown-body", className].filter(Boolean).join(" ")}>

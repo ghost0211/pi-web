@@ -1,8 +1,8 @@
 import type { McpCatalogResponse, McpCatalogFileServer, McpExposure, McpScope } from "./mcp-types";
 export type { McpCatalogResponse, McpExposure, McpScope, McpServerConfig, McpHttpServerConfig, McpStdioServerConfig } from "./mcp-types";
 export type McpCatalogServer = McpCatalogFileServer;
-import { MCP_SAVED_VALUE_MASK } from "./mcp-types";
-export { MCP_SAVED_VALUE_MASK } from "./mcp-types";
+import { MCP_SAVED_VALUE_MASK, isMcpThinOverride } from "./mcp-types";
+export { MCP_SAVED_VALUE_MASK, isMcpThinOverride } from "./mcp-types";
 export interface McpRuntimeResponse { available: boolean; live?: boolean; statusText?: string; reason?: string }
 export type McpRuntimeEvent =
   | { type: "notify"; level: "info" | "warning" | "error"; message: string }
@@ -28,7 +28,38 @@ export function validateMcpServerName(name: string): string | null {
   return /^[A-Za-z0-9_-]+$/.test(name.trim()) && name.length <= 200 && name.trim() !== "prototype" && !Object.hasOwn(Object.prototype, name.trim()) ? null : "mcp.errorNameInvalidChars";
 }
 export function isMcpServerShadowed(name: string, scope: McpScope, catalog: McpCatalogResponse | null): boolean {
-  return scope === "global" && Boolean(catalog?.project.trusted && catalog.files.find((file) => file.scope === "project")?.servers.some((server) => server.name === name));
+  if (scope !== "global" || !catalog?.project.trusted) return false;
+  const projectServer = catalog.files.find((file) => file.scope === "project")?.servers.find((server) => server.name === name);
+  if (!projectServer) return false;
+  return !isMcpThinOverride(projectServer.config);
+}
+export function getEffectiveMcpServerConfig(
+  name: string,
+  scope: McpScope,
+  catalog: McpCatalogResponse | null,
+): Record<string, unknown> | null {
+  if (!catalog) return null;
+  const globalServer = catalog.files.find((f) => f.scope === "global")?.servers.find((s) => s.name === name);
+  const projectServer = catalog.project.trusted
+    ? catalog.files.find((f) => f.scope === "project")?.servers.find((s) => s.name === name)
+    : undefined;
+
+  if (!globalServer && !projectServer) return null;
+
+  if (!projectServer) {
+    return scope === "global" && globalServer ? globalServer.config : null;
+  }
+
+  if (!isMcpThinOverride(projectServer.config)) {
+    if (scope === "global") return null;
+    return projectServer.config;
+  }
+
+  if (!globalServer) {
+    return projectServer.config;
+  }
+
+  return { ...globalServer.config, ...projectServer.config };
 }
 export function tryParseJson<T>(value: string, fallback?: T): { ok: true; value: T } | { ok: false; error: string } {
   try { return { ok: true, value: value.trim() ? JSON.parse(value) as T : fallback ?? {} as T }; }
@@ -41,18 +72,27 @@ export interface McpServerForm {
   command: string; args: string; cwd: string; env: string; url: string; headers: string; oauth: string;
   authProvider: string; description: string; timeout: string; toolExposure: string;
   savedAuthentication?: { oauth: string; provider: string };
+  savedOverride?: { enabled: boolean; exposure: McpExposure; toolExposure: string };
+  isOverride?: boolean;
 }
-export function serverToMcpForm(scope: McpScope, server?: McpCatalogFileServer): McpServerForm {
-  const config = server?.config ?? {};
+export function serverToMcpForm(scope: McpScope, server?: McpCatalogFileServer, catalog?: McpCatalogResponse | null): McpServerForm {
+  const rawConfig = server?.config ?? {};
+  const isOverride = scope === "project" && Boolean(server) && isMcpThinOverride(rawConfig);
+  const base = isOverride ? catalog?.files.find((file) => file.scope === "global")?.servers.find((entry) => entry.name === server?.name)?.config : undefined;
+  const config = isOverride ? { ...base, ...rawConfig } : rawConfig;
   const text = (key: string) => typeof config[key] === "string" ? config[key] as string : "";
   const json = (key: string, fallback: unknown) => JSON.stringify(config[key] ?? fallback, null, 2);
   const exposure = ["codemode", "deferred", "direct", "hidden"].includes(text("exposure")) ? text("exposure") as McpExposure : "codemode";
+  const enabled = config.enabled !== false;
+  const toolExposure = json("toolExposure", {});
   return {
-    scope, isNew: !server, name: server?.name ?? "", type: typeof config.url === "string" ? "http" : "stdio", enabled: config.enabled !== false, exposure,
+    scope, isNew: !server, name: server?.name ?? "", type: typeof config.url === "string" ? "http" : "stdio", enabled, exposure,
     command: text("command"), args: json("args", []), cwd: text("cwd"), env: json("env", {}),
     url: text("url"), headers: json("headers", {}), oauth: json("oauth", {}),
     authProvider: record(config.auth) && typeof config.auth.provider === "string" ? config.auth.provider : "",
-    description: text("description"), timeout: typeof config.timeout === "number" ? String(config.timeout) : "", toolExposure: json("toolExposure", {}),
+    description: text("description"), timeout: typeof config.timeout === "number" ? String(config.timeout) : "", toolExposure,
+    isOverride,
+    ...(isOverride ? { savedOverride: { enabled, exposure, toolExposure } } : {}),
     ...(server ? { savedAuthentication: { oauth: json("oauth", {}), provider: record(config.auth) && typeof config.auth.provider === "string" ? config.auth.provider : "" } } : {}),
   };
 }
@@ -62,6 +102,18 @@ export function formToMcpServerPatch(form: McpServerForm): Record<string, unknow
     if (!value.ok || !record(value.value)) throw new Error("mcp.errorInvalidJson");
     return value.value;
   };
+  if (form.isOverride) {
+    const patch: Record<string, unknown> = {};
+    const saved = form.savedOverride;
+    const tools = object("toolExposure");
+    // Omitting unchanged fields preserves both explicit values and global inheritance.
+    if (!saved || form.enabled !== saved.enabled) patch.enabled = form.enabled;
+    if (!saved || form.exposure !== saved.exposure) patch.exposure = form.exposure;
+    const sorted = (value: Record<string, unknown>) => JSON.stringify(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+    const previous = saved ? tryParseJson<Record<string, unknown>>(saved.toolExposure, {}) : null;
+    if (!previous?.ok || sorted(tools) !== sorted(previous.value)) patch.toolExposure = tools;
+    return patch;
+  }
   const timeout = form.timeout.trim() ? Number(form.timeout) : null;
   if (timeout !== null && (!Number.isFinite(timeout) || timeout <= 0)) throw new Error("mcp.errorTimeout");
   const config: Record<string, unknown> = {

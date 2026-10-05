@@ -120,3 +120,58 @@ test("does not normalize escaped delimiters or link destinations", () => {
   assert.equal(normalizeDisplayMath(escaped), escaped);
   assert.equal(normalizeDisplayMath(link), link);
 });
+
+test("attaches sessionId to local image url when sessionId is provided", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(MarkdownBody, {
+      cwd: "/home/me/project",
+      sessionId: "session-abc-123",
+      onOpenFile() {},
+    }, "![local image](/tmp/pi-codemode-foo.png)"),
+  );
+
+  assert.match(
+    html,
+    /<img(?=[^>]*src="\/api\/files\/tmp\/pi-codemode-foo\.png\?type=read&amp;sessionId=session-abc-123")[^>]*>/,
+  );
+});
+
+test("does not add sessionId query parameter when sessionId is not provided", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(MarkdownBody, {
+      cwd: "/home/me/project",
+      onOpenFile() {},
+    }, "![local image](/tmp/pi-codemode-foo.png)"),
+  );
+
+  assert.match(
+    html,
+    /<img(?=[^>]*src="\/api\/files\/tmp\/pi-codemode-foo\.png\?type=read")[^>]*>/,
+  );
+  assert.doesNotMatch(html, /sessionId=/);
+});
+
+test("keeps remote images unproxied and preserves Markdown data URL sanitization", () => {
+  const remote = renderToStaticMarkup(
+    React.createElement(MarkdownBody, {
+      cwd: "/home/me/project",
+      sessionId: "session-abc-123",
+      onOpenFile() {},
+    }, "![remote](https://example.com/photo.png)"),
+  );
+  assert.match(remote, /<img(?=[^>]*src="https:\/\/example\.com\/photo\.png")[^>]*>/);
+  assert.doesNotMatch(remote, /\/api\/files/);
+  assert.doesNotMatch(remote, /sessionId=/);
+
+  const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5f0AAAAASUVORK5CYII=";
+  const data = renderToStaticMarkup(
+    React.createElement(MarkdownBody, {
+      cwd: "/home/me/project",
+      sessionId: "session-abc-123",
+      onOpenFile() {},
+    }, `![data](${dataUrl})`),
+  );
+  assert.doesNotMatch(data, /src="data:/);
+  assert.doesNotMatch(data, /\/api\/files/);
+  assert.doesNotMatch(data, /sessionId=/);
+});

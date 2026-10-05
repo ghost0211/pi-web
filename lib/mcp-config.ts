@@ -7,8 +7,10 @@ import { writePrivateFileAtomicSync } from "./atomic-file";
 import { isExistingFilePathAllowed, isFilePathAllowed } from "./file-access";
 import { samePath } from "./paths";
 import {
+  MCP_OVERRIDE_KEYS,
   MCP_SAVED_VALUE_MASK,
   MISSING_REVISION,
+  isMcpThinOverride,
   type McpCatalogFile,
   type McpCatalogProject,
   type McpCatalogResponse,
@@ -20,7 +22,7 @@ import {
   type PutMcpServerRequest,
 } from "./mcp-types";
 
-export { MCP_SAVED_VALUE_MASK, MISSING_REVISION } from "./mcp-types";
+export { MCP_OVERRIDE_KEYS, MCP_SAVED_VALUE_MASK, MISSING_REVISION, isMcpThinOverride } from "./mcp-types";
 
 export const MCP_EXPOSURES: readonly McpExposure[] = [
   "codemode",
@@ -28,6 +30,8 @@ export const MCP_EXPOSURES: readonly McpExposure[] = [
   "direct",
   "hidden",
 ] as const;
+
+const isOverrideKey = (key: string): boolean => (MCP_OVERRIDE_KEYS as readonly string[]).includes(key);
 
 const MCP_EXPOSURE_ALIASES: Record<string, McpExposure> = {
   "codemode-deferred": "codemode",
@@ -72,6 +76,7 @@ const KNOWN_OAUTH_KEYS = new Set([
   "callbackUrl",
   "scope",
   "clientName",
+  "clientRegistration",
   "authServerMetadataUrl",
 ]);
 
@@ -185,6 +190,20 @@ export function validateOAuth(raw: unknown): string | null {
   if (raw.clientName !== undefined && (typeof raw.clientName !== "string" || !raw.clientName.trim())) {
     return "oauth.clientName must be a non-empty string";
   }
+  if (raw.clientRegistration !== undefined && raw.clientRegistration !== "dcr") {
+    if (raw.clientRegistration !== "cimd") {
+      return 'oauth.clientRegistration must be "dcr" or "cimd"';
+    }
+    if (raw.clientId !== undefined || raw.clientName !== undefined) {
+      return 'oauth.clientRegistration "cimd" cannot be combined with oauth.clientId or oauth.clientName';
+    }
+    const callback = typeof raw.callbackUrl === "string" && URL.canParse(raw.callbackUrl)
+      ? new URL(raw.callbackUrl)
+      : undefined;
+    if (callback && (callback.hostname === "[::1]" || callback.pathname !== "/callback")) {
+      return 'oauth.clientRegistration "cimd" requires oauth.callbackUrl on localhost or 127.0.0.1 with path /callback';
+    }
+  }
   if (raw.authServerMetadataUrl !== undefined) {
     const metadata = typeof raw.authServerMetadataUrl === "string" && URL.canParse(raw.authServerMetadataUrl)
       ? new URL(raw.authServerMetadataUrl) : undefined;
@@ -199,6 +218,7 @@ export function validateMcpServerConfig(
   name: string,
   raw: unknown,
   scope: McpScope = "global",
+  baseConfig?: Record<string, unknown>,
 ): { valid: true; config: McpServerConfig } | { valid: false; error: string } {
   const nameError = validateMcpServerName(name);
   if (nameError) return { valid: false, error: nameError };
@@ -247,6 +267,30 @@ export function validateMcpServerConfig(
 
   if (type === "sse") {
     return { valid: false, error: `server "${name}": legacy SSE transport is not supported; use the streamable HTTP URL` };
+  }
+
+  const isOverride = isMcpThinOverride(value);
+  if (isOverride) {
+    if (scope !== "project") {
+      return { valid: false, error: `server "${name}" needs either "command" (stdio) or "url" (streamable HTTP)` };
+    }
+    const extra = Object.keys(raw).filter((k) => !isOverrideKey(k));
+    if (extra.length > 0) {
+      return { valid: false, error: `server "${name}": an override can only set ${MCP_OVERRIDE_KEYS.join(", ")}` };
+    }
+    if (!baseConfig) {
+      return { valid: false, error: `server "${name}" needs "command" or "url", or a global server to override` };
+    }
+    const baseValidation = validateMcpServerConfig(name, baseConfig, "global");
+    if (!baseValidation.valid) {
+      return { valid: false, error: baseValidation.error };
+    }
+    const merged = { ...baseValidation.config, ...value };
+    const mergedValidation = validateMcpServerConfig(name, merged, "global");
+    if (!mergedValidation.valid) {
+      return { valid: false, error: mergedValidation.error };
+    }
+    return { valid: true, config: value as unknown as McpServerConfig };
   }
 
   const command = value.command;
@@ -655,6 +699,7 @@ function readConfigFileSafe(
   filePath: string,
   scope: McpScope,
   errors: string[],
+  globalServers?: Map<string, Record<string, unknown>>,
 ): LoadedConfigFileState {
   const state: LoadedConfigFileState = {
     path: filePath,
@@ -709,7 +754,23 @@ function readConfigFileSafe(
   const namespaceMap = new Map<string, string>();
 
   for (const [name, rawConfig] of Object.entries(rawServers)) {
-    const validation = validateMcpServerConfig(name, rawConfig, scope);
+    let validation: { valid: true; config: McpServerConfig } | { valid: false; error: string };
+    if (scope === "project" && isRecord(rawConfig) && isMcpThinOverride(rawConfig)) {
+      const base = globalServers?.get(name);
+      const extra = Object.keys(rawConfig).filter((k) => !isOverrideKey(k));
+      if (!base) {
+        errors.push(`${filePath}: server "${name}" needs "command" or "url", or a global server to override`);
+        continue;
+      }
+      if (extra.length > 0) {
+        errors.push(`${filePath}: server "${name}": an override can only set ${MCP_OVERRIDE_KEYS.join(", ")}`);
+        continue;
+      }
+      validation = validateMcpServerConfig(name, rawConfig, scope, base);
+    } else {
+      validation = validateMcpServerConfig(name, rawConfig, scope);
+    }
+
     if (!validation.valid) {
       errors.push(`${filePath}: invalid server configuration (use native /mcp for details)`);
       continue;
@@ -760,7 +821,7 @@ export async function getMcpCatalog(options?: McpConfigOptions): Promise<McpCata
       projectTrusted = isProjectExplicitlyTrusted(resolvedCwd, agentDir);
 
       if (projectTrusted) {
-        const projectState = readConfigFileSafe(projectConfigPath, "project", errors);
+        const projectState = readConfigFileSafe(projectConfigPath, "project", errors, globalState.servers);
 
         // Cross-check namespace conflicts between project and global:
         // Same original name: project overrides global (allowed).
@@ -783,6 +844,7 @@ export async function getMcpCatalog(options?: McpConfigOptions): Promise<McpCata
           servers: [...projectState.servers.entries()].map(([name, config]) => ({
             name,
             config: maskServerConfig(config),
+            isOverride: isMcpThinOverride(config),
           })),
         };
       }
@@ -957,8 +1019,37 @@ export async function putMcpServer(
       : undefined;
 
     const restored = restoreAndMergeServerConfig(config, oldServerConfig);
+    const isOverride = scope === "project" && isMcpThinOverride(restored);
 
-    const validation = validateMcpServerConfig(name, restored, scope);
+    let globalBase: Record<string, unknown> | undefined;
+    let globalState: LoadedConfigFileState | undefined;
+
+    if (scope === "project") {
+      // Re-read global configuration safely under the project lock.
+      // Cooperative race boundary: the global file may change concurrently without global lock acquisition,
+      // but re-reading safely here ensures up-to-date validation before writing the project override.
+      // Project configurations must only persist thin override keys and never store shared credentials.
+      const globalConfigPath = path.join(agentDir, "mcp.json");
+      assertEditableFile(globalConfigPath);
+      const globalErrors: string[] = [];
+      globalState = readConfigFileSafe(globalConfigPath, "global", globalErrors);
+
+      if (isOverride) {
+        globalBase = globalState.servers.get(name);
+        if (!globalBase) {
+          throw new McpValidationError(`server "${name}" needs "command" or "url", or a global server to override`);
+        }
+        const extra = Object.keys(restored).filter((k) => !isOverrideKey(k));
+        if (extra.length > 0) {
+          throw new McpValidationError(`server "${name}": an override can only set ${MCP_OVERRIDE_KEYS.join(", ")}`);
+        }
+      }
+    }
+
+    const validation = isOverride
+      ? validateMcpServerConfig(name, restored, scope, globalBase)
+      : validateMcpServerConfig(name, restored, scope);
+
     if (!validation.valid) {
       throw new McpValidationError(validation.error);
     }
@@ -974,24 +1065,15 @@ export async function putMcpServer(
     }
 
     // If writing project scope, check against global servers for alias clash
-    if (scope === "project") {
-      const globalConfigPath = path.join(agentDir, "mcp.json");
-      if (existsSync(globalConfigPath)) {
-        try {
-          const globalText = readFileSync(globalConfigPath, "utf8");
-          const globalParsed = JSON.parse(globalText);
-          if (isRecord(globalParsed) && isRecord(globalParsed.mcpServers)) {
-            for (const globName of Object.keys(globalParsed.mcpServers)) {
-              if (globName !== name && mcpNamespace(globName) === newNs) {
-                throw new McpValidationError(
-                  `Project server "${name}" conflicts with global server "${globName}" namespace`,
-                );
-              }
-            }
-          }
-        } catch (e) {
-          if (e instanceof McpValidationError) throw e;
-          // Ignore unreadable global file when checking alias conflict
+    if (scope === "project" && globalState) {
+      const globalServerNames = isRecord(globalState.parsedTop?.mcpServers)
+        ? Object.keys(globalState.parsedTop.mcpServers)
+        : [...globalState.servers.keys()];
+      for (const globName of globalServerNames) {
+        if (globName !== name && mcpNamespace(globName) === newNs) {
+          throw new McpValidationError(
+            `Project server "${name}" conflicts with global server "${globName}" namespace`,
+          );
         }
       }
     }
@@ -1001,15 +1083,16 @@ export async function putMcpServer(
       const projConfigPath = path.join(effectiveCwd, ".pi", "mcp.json");
       if (existsSync(projConfigPath)) {
         try {
-          const projText = readFileSync(projConfigPath, "utf8");
-          const projParsed = JSON.parse(projText);
-          if (isRecord(projParsed) && isRecord(projParsed.mcpServers)) {
-            for (const projName of Object.keys(projParsed.mcpServers)) {
-              if (projName !== name && mcpNamespace(projName) === newNs) {
-                throw new McpValidationError(
-                  `Global server "${name}" conflicts with project server "${projName}" namespace`,
-                );
-              }
+          assertEditableFile(projConfigPath);
+          const projState = readConfigFileSafe(projConfigPath, "project", []);
+          const projServerNames = isRecord(projState.parsedTop?.mcpServers)
+            ? Object.keys(projState.parsedTop.mcpServers)
+            : [...projState.servers.keys()];
+          for (const projName of projServerNames) {
+            if (projName !== name && mcpNamespace(projName) === newNs) {
+              throw new McpValidationError(
+                `Global server "${name}" conflicts with project server "${projName}" namespace`,
+              );
             }
           }
         } catch (e) {
@@ -1019,8 +1102,10 @@ export async function putMcpServer(
     }
 
     const persisted = { ...validation.config };
-    if (persisted.enabled === true) delete persisted.enabled;
-    if (persisted.exposure === "codemode") delete persisted.exposure;
+    if (!isOverride) {
+      if (persisted.enabled === true) delete persisted.enabled;
+      if (persisted.exposure === "codemode") delete persisted.exposure;
+    }
     const nextServers = { ...currentServers, [name]: persisted };
     parsed.mcpServers = nextServers;
 

@@ -4,9 +4,9 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { sendAgentCommand } from "@/lib/agent-client";
 import {
-  deleteMcpServer, fetchMcpCatalog, fetchMcpRuntime, formToMcpServerPatch, isMcpServerShadowed,
-  isSafeAuthorizationUrl, performMcpRuntimeAction, RevisionConflictError, saveMcpServer, serverToMcpForm,
-  submitMcpRuntimeInput, validateMcpServerName,
+  deleteMcpServer, fetchMcpCatalog, fetchMcpRuntime, formToMcpServerPatch, getEffectiveMcpServerConfig,
+  isMcpServerShadowed, isSafeAuthorizationUrl, performMcpRuntimeAction, RevisionConflictError,
+  saveMcpServer, serverToMcpForm, submitMcpRuntimeInput, validateMcpServerName,
   type McpCatalogResponse, type McpRuntimeResponse, type McpScope, type McpServerForm,
 } from "@/lib/mcp-client";
 import {
@@ -45,7 +45,7 @@ export function McpConfig({ cwd, sessionId, onClose, onSessionReloaded, embedded
   const choose = (scope: McpScope, name?: string, data = catalog) => {
     const server = data?.files.find((file) => file.scope === scope)?.servers.find((entry) => entry.name === name);
     selected.current = { scope, name: name ?? "" };
-    setForm(serverToMcpForm(scope, server));
+    setForm(serverToMcpForm(scope, server, data));
     setError(null); setDeleteConfirm(false); setAuthUrl(null); setInput(null); setMessage("");
   };
 
@@ -54,13 +54,13 @@ export function McpConfig({ cwd, sessionId, onClose, onSessionReloaded, embedded
     const choice = selected.current;
     if (choice) {
       const server = data.files.find((file) => file.scope === choice.scope)?.servers.find((entry) => entry.name === choice.name);
-      if (server) { setForm(serverToMcpForm(choice.scope, server)); return; }
+      if (server) { setForm(serverToMcpForm(choice.scope, server, data)); return; }
       if (!choice.name) { setForm(serverToMcpForm(choice.scope)); return; }
     }
     const file = data.files.find((entry) => entry.servers.length);
     if (file) {
       selected.current = { scope: file.scope, name: file.servers[0].name };
-      setForm(serverToMcpForm(file.scope, file.servers[0]));
+      setForm(serverToMcpForm(file.scope, file.servers[0], data));
     } else { selected.current = null; setForm(null); }
   };
 
@@ -84,7 +84,7 @@ export function McpConfig({ cwd, sessionId, onClose, onSessionReloaded, embedded
       if (controller.signal.aborted) return;
       setCatalog(data);
       const file = data.files.find((entry) => entry.servers.length);
-      if (file) { selected.current = { scope: file.scope, name: file.servers[0].name }; setForm(serverToMcpForm(file.scope, file.servers[0])); }
+      if (file) { selected.current = { scope: file.scope, name: file.servers[0].name }; setForm(serverToMcpForm(file.scope, file.servers[0], data)); }
     }).catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     const sequence = ++statusSequence.current;
@@ -154,6 +154,8 @@ export function McpConfig({ cwd, sessionId, onClose, onSessionReloaded, embedded
 
   const act = (action: "login" | "logout" | "reconnect") => run(async (controller) => {
     if (!sessionId || !form || form.isNew || needsReload || !runtime?.available || isMcpServerShadowed(form.name, form.scope, catalog)) return;
+    const effective = getEffectiveMcpServerConfig(form.name, form.scope, catalog);
+    if (!effective || effective.enabled === false) return;
     const child = new AbortController(); actionAbort.current = child;
     const abort = () => child.abort(); controller.signal.addEventListener("abort", abort, { once: true });
     setAuthUrl(null); setInput(null); setInputValue("");
@@ -189,12 +191,18 @@ export function McpConfig({ cwd, sessionId, onClose, onSessionReloaded, embedded
     } catch (reason) { if (current()) setError(errorMessage(reason)); }
     finally { if (current()) setInputBusy(false); }
   };
-  const change = (key: keyof McpServerForm, value: string | boolean) => setForm((previous) => previous ? { ...previous, [key]: value } : null);
+  const change = (key: keyof McpServerForm, value: string | boolean) => setForm((previous) => {
+    if (!previous) return null;
+    if (key === "name" && previous.isNew && previous.isOverride && typeof value === "string") {
+      return { ...serverToMcpForm("project", { name: value, config: {} }, catalog), isNew: true };
+    }
+    return { ...previous, [key]: value };
+  });
   const shadowed = Boolean(form && isMcpServerShadowed(form.name, form.scope, catalog));
-  const file = catalog?.files.find((entry) => entry.scope === form?.scope);
-  const savedServer = file?.servers.find((entry) => entry.name === form?.name);
-  const oauthCapable = Boolean(savedServer && typeof savedServer.config.url === "string" && !savedServer.config.auth);
-  const liveDisabled = busy || needsReload || !runtime?.available || !form || form.isNew || shadowed;
+  const effectiveConfig = form ? getEffectiveMcpServerConfig(form.name, form.scope, catalog) : null;
+  const isEffectiveDisabled = !effectiveConfig || effectiveConfig.enabled === false;
+  const oauthCapable = Boolean(effectiveConfig && typeof effectiveConfig.url === "string" && !effectiveConfig.auth);
+  const liveDisabled = busy || needsReload || !runtime?.available || !form || form.isNew || shadowed || isEffectiveDisabled;
   const fields: Array<keyof McpServerForm> = form?.type === "http" ? ["url", "headers", "oauth", ...(form.scope === "global" ? ["authProvider" as const] : [])] : ["command", "args", "cwd", "env"];
   const jsonFields = new Set(["args", "env", "headers", "oauth", "toolExposure"]);
 
@@ -226,14 +234,40 @@ export function McpConfig({ cwd, sessionId, onClose, onSessionReloaded, embedded
           <p style={{ fontSize: 11, color: "var(--text-muted)" }}>{t("mcp.savedValueHint")}</p>
           <fieldset disabled={busy || (form.scope === "project" && !catalog?.project.trusted)} style={{ border: 0, padding: 0, margin: 0 }}>
             <ConfigField label={t("mcp.serverName")}><input style={inputStyle} aria-label={t("mcp.serverName")} value={form.name} disabled={!form.isNew} onChange={(event) => change("name", event.target.value)} /></ConfigField>
-            <ConfigField label={t("mcp.serverType")}><select style={inputStyle} aria-label={t("mcp.serverType")} value={form.type} onChange={(event) => change("type", event.target.value)}><option value="stdio">{t("mcp.transportStdio")}</option><option value="http">{t("mcp.transportHttp")}</option></select></ConfigField>
+            <ConfigField label={t("mcp.serverType")}>
+              <select
+                style={inputStyle}
+                aria-label={t("mcp.serverType")}
+                value={form.isOverride ? "override" : form.type}
+                disabled={Boolean(form.isOverride && !form.isNew)}
+                onChange={(event) => {
+                  const val = event.target.value;
+                  if (val === "override") {
+                    setForm((prev) => (prev ? { ...serverToMcpForm("project", { name: prev.name, config: {} }, catalog), isNew: true } : null));
+                  } else {
+                    setForm((prev) => (prev ? { ...prev, type: val as "stdio" | "http", isOverride: false } : null));
+                  }
+                }}
+              >
+                <option value="stdio">{t("mcp.transportStdio")}</option>
+                <option value="http">{t("mcp.transportHttp")}</option>
+                {form.scope === "project" && (form.isNew || form.isOverride) && <option value="override">{t("mcp.thinOverride")}</option>}
+              </select>
+            </ConfigField>
+            {form.isOverride && <p style={{ fontSize: 11, color: "var(--text-muted)" }}>{t("mcp.overrideNotice")}</p>}
             <ConfigField label={t("mcp.enabled")}><ConfigSwitch checked={form.enabled} label={t("mcp.enabled")} onChange={(value) => change("enabled", value)} /></ConfigField>
             <ConfigField label={t("mcp.exposure")}><select style={inputStyle} aria-label={t("mcp.exposure")} value={form.exposure} onChange={(event) => change("exposure", event.target.value)}>{["codemode", "deferred", "direct", "hidden"].map((value) => <option key={value} value={value}>{t(`mcp.exposure${value[0].toUpperCase()}${value.slice(1)}`)}</option>)}</select></ConfigField>
-            {[...fields, "description", "timeout", "toolExposure" as const].map((key) => <ConfigField key={key} label={t(`mcp.${key}`)}>{jsonFields.has(key) ? <textarea style={textStyle} aria-label={t(`mcp.${key}`)} value={String(form[key as keyof McpServerForm])} onChange={(event) => change(key as keyof McpServerForm, event.target.value)} /> : <input style={inputStyle} aria-label={t(`mcp.${key}`)} value={String(form[key as keyof McpServerForm])} onChange={(event) => change(key as keyof McpServerForm, event.target.value)} />}</ConfigField>)}
-            {form.type === "http" && <p style={{ fontSize: 11 }}>{t("mcp.oauthHint")}</p>}
-            {form.type === "http" && form.scope === "global" && <p style={{ fontSize: 11 }}>{t("mcp.authProviderHint")}</p>}
+            {!form.isOverride ? <>
+              {[...fields, "description", "timeout", "toolExposure" as const].map((key) => <ConfigField key={key} label={t(`mcp.${key}`)}>{jsonFields.has(key) ? <textarea style={textStyle} aria-label={t(`mcp.${key}`)} value={String(form[key as keyof McpServerForm])} onChange={(event) => change(key as keyof McpServerForm, event.target.value)} /> : <input style={inputStyle} aria-label={t(`mcp.${key}`)} value={String(form[key as keyof McpServerForm])} onChange={(event) => change(key as keyof McpServerForm, event.target.value)} />}</ConfigField>)}
+              {form.type === "http" && <p style={{ fontSize: 11 }}>{t("mcp.oauthHint")}</p>}
+              {form.type === "http" && form.scope === "global" && <p style={{ fontSize: 11 }}>{t("mcp.authProviderHint")}</p>}
+            </> : (
+              <ConfigField label={t("mcp.toolExposure")}><textarea style={textStyle} aria-label={t("mcp.toolExposure")} value={String(form.toolExposure)} onChange={(event) => change("toolExposure", event.target.value)} /></ConfigField>
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
               <ConfigButton variant="primary" onClick={() => void save()}>{t("mcp.save")}</ConfigButton>
+              {!form.isNew && <ConfigButton onClick={() => choose(form.scope, form.name)}>{t("mcp.reset")}</ConfigButton>}
+              {form.isNew && <ConfigButton onClick={() => { selected.current = null; setForm(null); }}>{t("mcp.cancel")}</ConfigButton>}
               {!form.isNew && <ConfigButton variant="danger" onClick={() => setDeleteConfirm(true)}>{t("mcp.delete")}</ConfigButton>}
               {deleteConfirm && <><ConfigButton variant="danger" onClick={() => void remove()}>{t("mcp.confirmDelete")}</ConfigButton><ConfigButton onClick={() => setDeleteConfirm(false)}>{t("mcp.cancel")}</ConfigButton></>}
             </div>

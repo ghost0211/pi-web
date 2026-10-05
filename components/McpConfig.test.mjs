@@ -117,3 +117,117 @@ test("reload only targets an already live session and is explicitly marked no-st
   assert.deepEqual(JSON.parse(request.options.body), { type: "reload", requireLiveSession: true });
   assert.equal(reloaded, 1);
 });
+
+test("thin override in project displays override form, preserves defaults, and supports reset and cancel", async (t) => {
+  const calls = [];
+  const overrideData = () => ({
+    files: [
+      {
+        scope: "global",
+        path: "/fixture/agent/mcp.json",
+        revision: "r1",
+        servers: [{ name: "remote-tool", config: { url: "https://example.com/mcp", exposure: "direct" } }],
+      },
+      {
+        scope: "project",
+        path: "/fixture/.pi/mcp.json",
+        revision: "r2",
+        servers: [{ name: "remote-tool", config: { enabled: true, exposure: "codemode" } }],
+      },
+    ],
+    project: { cwd: "/fixture", trusted: true },
+    errors: [],
+  });
+
+  const { harness } = setup(t, async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.startsWith("/api/mcp/runtime")) {
+      return Response.json({ available: true, live: true, statusText: "remote-tool: connected" });
+    }
+    return Response.json(overrideData());
+  });
+
+  await tick();
+  harness.render();
+
+  // remote-tool is initially selected under global; click the project server item
+  const projectItem = harness.find((node) => node.type === "button" && typeof node.props?.onClick === "function" && !node.props["aria-current"] && JSON.stringify(node).includes("remote-tool"));
+  assert.notEqual(projectItem, undefined);
+  projectItem.props.onClick();
+  harness.render();
+
+  // Thin override does not show command or args inputs
+  assert.equal(harness.input("mcp.command"), undefined);
+  assert.equal(harness.input("mcp.args"), undefined);
+
+  // Edit exposure
+  const exposureSelect = () => harness.find((node) => node.type === "select" && node.props?.["aria-label"] === "mcp.exposure");
+  assert.notEqual(exposureSelect(), undefined);
+  exposureSelect().props.onChange({ target: { value: "hidden" } });
+  harness.render();
+  assert.equal(exposureSelect().props.value, "hidden");
+
+  // Reset button restores original saved exposure
+  assert.notEqual(harness.button("mcp.reset"), undefined);
+  harness.button("mcp.reset").props.onClick();
+  harness.render();
+  assert.equal(exposureSelect().props.value, "codemode");
+
+  // Edit and save
+  exposureSelect().props.onChange({ target: { value: "deferred" } });
+  harness.render();
+  harness.button("mcp.save").props.onClick();
+  await tick();
+  harness.render();
+
+  const saveCall = calls.find((c) => c.options.method === "PUT");
+  const saveBody = JSON.parse(saveCall.options.body);
+  assert.equal(saveBody.name, "remote-tool");
+  assert.equal(saveBody.scope, "project");
+  assert.equal(saveBody.config.exposure, "deferred");
+  assert.equal(saveBody.config.command, undefined);
+  assert.equal(saveBody.config.url, undefined);
+
+  // Cancel on new server form dismisses the form
+  harness.button("mcp.addProjectServer").props.onClick();
+  harness.render();
+  assert.notEqual(harness.button("mcp.cancel"), undefined);
+  harness.button("mcp.cancel").props.onClick();
+  harness.render();
+  assert.match(harness.text(), /mcp\.emptySelection/);
+});
+
+test("effective merged config enables OAuth actions for project thin override of HTTP server", async (t) => {
+  const overrideData = () => ({
+    files: [
+      {
+        scope: "global",
+        path: "/fixture/agent/mcp.json",
+        revision: "r1",
+        servers: [{ name: "oauth-tool", config: { url: "https://example.com/mcp" } }],
+      },
+      {
+        scope: "project",
+        path: "/fixture/.pi/mcp.json",
+        revision: "r2",
+        servers: [{ name: "oauth-tool", config: { enabled: true, exposure: "direct" } }],
+      },
+    ],
+    project: { cwd: "/fixture", trusted: true },
+    errors: [],
+  });
+
+  const { harness } = setup(t, async (url) => {
+    if (url.startsWith("/api/mcp/runtime")) {
+      return Response.json({ available: true, live: true, statusText: "oauth-tool: needs-auth" });
+    }
+    return Response.json(overrideData());
+  });
+
+  await tick();
+  harness.render();
+
+  // The server has OAuth capabilities through the effective merged config
+  assert.notEqual(harness.button("mcp.login"), undefined);
+  assert.equal(harness.button("mcp.login").props.disabled, false);
+});

@@ -266,3 +266,59 @@ test("renders custom-message images as buttons that open a larger preview", () =
   assert.match(html, /<button[^>]+aria-label="Preview image"[^>]*>/);
   assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"/);
 });
+
+test("threads sessionId through TextBlock and SafeMarkdownBody to MarkdownBody for local images", () => {
+  const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+  const assistantHtml = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{ type: "text", text: "Look at the generated image: ![chart](/tmp/pi-codemode-output.png)" }],
+  }, { sessionId });
+
+  assert.match(
+    assistantHtml,
+    new RegExp(`<img(?=[^>]*src="\\/api\\/files\\/tmp\\/pi-codemode-output\\.png\\?type=read&amp;sessionId=${sessionId}")[^>]*>`),
+  );
+
+  const withoutSessionHtml = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{ type: "text", text: "Look at the generated image: ![chart](/tmp/pi-codemode-output.png)" }],
+  });
+
+  assert.match(
+    withoutSessionHtml,
+    /<img(?=[^>]*src="\/api\/files\/tmp\/pi-codemode-output\.png\?type=read")[^>]*>/,
+  );
+  assert.doesNotMatch(withoutSessionHtml, /sessionId=/);
+});
+
+test("threads sessionId to user message markdown bodies", () => {
+  const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+  const userHtml = renderMessage({
+    role: "user",
+    content: "Here is an image: ![user photo](/tmp/user-photo.png)",
+    timestamp: Date.now(),
+  }, { sessionId });
+
+  assert.match(
+    userHtml,
+    new RegExp(`<img(?=[^>]*src="\\/api\\/files\\/tmp\\/user-photo\\.png\\?type=read&amp;sessionId=${sessionId}")[^>]*>`),
+  );
+});
+
+test("leaves remote image URLs unproxied in MessageView assistant text", () => {
+  const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+  const remoteHtml = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{ type: "text", text: "Remote: ![pic](https://example.com/pic.png)" }],
+  }, { sessionId });
+
+  assert.match(remoteHtml, /<img(?=[^>]*src="https:\/\/example\.com\/pic\.png")[^>]*>/);
+  assert.doesNotMatch(remoteHtml, /\/api\/files/);
+  assert.doesNotMatch(remoteHtml, /sessionId=/);
+});

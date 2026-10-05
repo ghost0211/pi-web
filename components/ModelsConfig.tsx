@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { SamplingParams, SamplingParamsByThinkingLevel } from "@earendil-works/pi-ai";
 import { useI18n } from "@/hooks/useI18n";
 import type { ModelCatalogPreset, ModelCatalogRecommendation } from "@/lib/model-catalog";
 import type { DiscoveredModel } from "@/lib/model-discovery";
@@ -76,6 +77,8 @@ interface ModelEntry {
   api?: string;
   reasoning?: boolean;
   thinkingLevelMap?: Record<string, string | null>;
+  samplingParams?: SamplingParams;
+  samplingParamsByThinkingLevel?: SamplingParamsByThinkingLevel;
   input?: string[];
   contextWindow?: number;
   maxTokens?: number;

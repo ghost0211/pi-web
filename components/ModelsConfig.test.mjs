@@ -247,3 +247,59 @@ test("thinking level overrides keep explicit default, disabled, and custom contr
   assert.match(editor, /state === "null"/);
   assert.match(editor, /state === "string"/);
 });
+
+test("ModelEntry declares SDK public sampling parameters without provider-level leakage or wide index signatures", () => {
+  const modelEntrySection = source.slice(
+    source.indexOf("interface ModelEntry {"),
+    source.indexOf("interface ProviderEntry {"),
+  );
+  const providerEntrySection = source.slice(
+    source.indexOf("interface ProviderEntry {"),
+    source.indexOf("interface ModelsJson {"),
+  );
+
+  // ModelEntry defines public SDK sampling types
+  assert.match(modelEntrySection, /samplingParams\?: SamplingParams;/);
+  assert.match(modelEntrySection, /samplingParamsByThinkingLevel\?: SamplingParamsByThinkingLevel;/);
+  assert.match(source, /import type \{[^}]*\bSamplingParams\b[^}]*,\s*\bSamplingParamsByThinkingLevel\b[^}]*\} from "@earendil-works\/pi-ai"/);
+
+  // ModelEntry does NOT define wide index signature
+  assert.doesNotMatch(modelEntrySection, /\[\s*key\s*:\s*string\s*\]/);
+
+  // ProviderEntry does NOT define samplingParams or samplingParamsByThinkingLevel
+  assert.doesNotMatch(providerEntrySection, /samplingParams/);
+});
+
+test("custom model edits pass through samplingParams and samplingParamsByThinkingLevel untouched", () => {
+  const modelWithSampling = {
+    id: "qwen-custom",
+    samplingParams: {
+      temperature: 0.7,
+      top_p: 0.9,
+    },
+    samplingParamsByThinkingLevel: {
+      off: { temperature: 0.2, top_p: 0.8 },
+      high: { temperature: 1.0, top_k: 20 },
+    },
+    compat: { supportsStore: true },
+  };
+
+  const updatedCompat = setCompatBool(modelWithSampling, "supportsDeveloperRole", false);
+
+  assert.deepEqual(updatedCompat.samplingParams, {
+    temperature: 0.7,
+    top_p: 0.9,
+  });
+  assert.deepEqual(updatedCompat.samplingParamsByThinkingLevel, {
+    off: { temperature: 0.2, top_p: 0.8 },
+    high: { temperature: 1.0, top_k: 20 },
+  });
+  assert.deepEqual(updatedCompat.compat, {
+    supportsStore: true,
+    supportsDeveloperRole: false,
+  });
+
+  // Source-level verification that ModelDetail and fillEmptyModelFields use shallow copy preserving sampling fields
+  assert.match(source, /const next = \{ \.\.\.model \};/);
+  assert.match(source, /const set = <K extends keyof ModelEntry>\(k: K, v: ModelEntry\[K\]\) => onChange\(\{ \.\.\.model, \[k\]: v \}\);/);
+});

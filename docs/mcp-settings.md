@@ -12,7 +12,15 @@
   per-tool exposure, stdio command/args/cwd/env, or Streamable HTTP
   URL/headers/OAuth options. Global HTTP entries can reuse a Pi credential via
   `auth.provider`; this cannot be combined with OAuth options or an
-  `Authorization` header.
+  `Authorization` header. HTTP OAuth JSON also accepts
+  `clientRegistration: "dcr" | "cimd"`; CIMD forbids `clientId` / `clientName`
+  and requires any explicit callback to use `localhost` or `127.0.0.1`
+  with the exact `/callback` path.
+- Trusted project entries can be thin overrides of a same-name global server:
+  omit `command`, `url` and `type`, and set only `enabled`, `exposure` or
+  `toolExposure`. Select **Project override** when adding one, or edit an
+  existing override. Transport/authentication remain inherited; unchanged
+  controls stay omitted rather than silently enabling hidden tools.
 - Saving does not connect, run a prompt, or automatically reload. Use **Reload
   session** explicitly. Other live sessions need their own reload. Reload from
   these controls uses `requireLiveSession: true`; an idle/disposed session is
@@ -55,7 +63,9 @@ ones; this does not delete SDK-owned login credentials (use Logout for that).
 Raw file SHA-256 revisions reject stale writes with 409 instead of overwriting.
 The RMW transaction uses `proper-lockfile` and private temporary-file + atomic
 rename, retaining indentation and unrelated fields. Default `enabled: true`
-and `exposure: "codemode"` are omitted, matching Pi's editor. Malformed JSON is
+and `exposure: "codemode"` are omitted for ordinary definitions, matching Pi's
+editor. Thin overrides retain explicit defaults because they override global
+values. Malformed JSON is
 not overwritten. The lock serializes cooperating web writers; it is not a
 claim that the SDK CLI's unlocked edits participate in that transaction.
 
@@ -71,7 +81,9 @@ A bare project is not implicitly trusted by this page. Its explicit two-step
 trust action uses the existing trust API and closes idle runtimes for that cwd;
 busy runtimes block it. Consent grants normal Pi project trust to extensions,
 skills and MCP, including future resources — not a narrower MCP-only grant.
-Same original names in a project override global entries. Different names that
+Full same-name project definitions replace global entries; thin overrides
+merge only the three allowed fields and may inherit global `auth.provider`
+without copying credentials into the project. Different names that
 collapse to the same `mcp__` namespace (`foo-bar` / `foo_bar`) are conflicts,
 not overrides. Name comparison remains case-sensitive.
 

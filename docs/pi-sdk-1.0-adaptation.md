@@ -1,6 +1,6 @@
 # Pi SDK 1.0 integration
 
-Pi Web's four direct `@earendil-works/pi-*` dependencies target **1.0.0**. Node **22.19.0 or newer** is required. This builds on the [0.99 integration](pi-sdk-0.99-adaptation.md), including its tool exposure, Chat-only isolation, model identity, and usage rules.
+The initial integration targeted **1.0.0**; see [the 1.0.1–1.0.3 companion updates](pi-sdk-1.0.3-adaptation.md) for current compatibility. Node **22.19.0 or newer** is required. This builds on the [0.99 integration](pi-sdk-0.99-adaptation.md), including its tool exposure, Chat-only isolation, model identity, and usage rules.
 
 ## Codemode and image models
 
@@ -23,7 +23,7 @@ for (const block of result.output) {
 
 The example needs that provider's credentials and an available image model; generation may incur charges. Use `await models.getAvailableOfType("image")` to discover models. `getModelOfType()` inside the sandbox is also asynchronous. Web chat selectors continue to select chat models, not image models.
 
-Generated images are standard image blocks in the paired Codemode result. Expand the tool call to see and preview them. Do not print base64 through `text()` or `console.log()`. Images are not automatically saved as files. The SDK records image-call usage on the tool result, which the Web counts exactly once; nested-call details are not another billable transcript.
+Generated images are standard image blocks in the paired Codemode result. Expand the tool call to see and preview them. Do not print base64 through `text()` or `console.log()`. SDK 1.0.0 did not automatically save image files; SDK 1.0.3 also saves each `image(block)` result to a private temporary file (see the companion guide). The SDK records image-call usage on the tool result, which the Web counts exactly once; nested-call details are not another billable transcript.
 
 ## Provider login
 

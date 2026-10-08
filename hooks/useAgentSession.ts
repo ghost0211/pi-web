@@ -30,6 +30,7 @@ import { mergeDeliveredUserMessage, userMessageKey } from "@/lib/prompt-recovery
 import type { TurnPreview } from "@/lib/turn-index";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
+import { isStaleLocalPromptToken, PromptCompletionTracker } from "./prompt-completion";
 import {
   CHAT_SCROLL_REATTACH_TOLERANCE,
   CHAT_SCROLL_TAIL_TOLERANCE,
@@ -83,6 +84,8 @@ type AgentStateResponse = {
   isPromptRunning?: boolean;
   isBashRunning?: boolean;
   isCompacting?: boolean;
+  /** Most recent agent settlement, used when SSE terminal events were missed. */
+  aborted?: boolean;
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
   queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
@@ -375,7 +378,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const agentRunningRef = useRef(false);
   const sdkAgentActiveRef = useRef(false);
   const rpcPromptPendingRef = useRef(false);
-  const notifiedPromptRunIdRef = useRef(-1);
+  const promptCompletionRef = useRef(new PromptCompletionTracker());
+  const promptTokenOwnerRef = useRef<string | null>(null);
+  const activePromptTokenRef = useRef<string | null>(null);
   const bashRunningRef = useRef(false);
   const bashRecoveryIdRef = useRef(0);
   // Latest-value refs for handleAgentEvent: its useCallback deps deliberately
@@ -996,8 +1001,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const notifyPromptStage = useCallback((runId: number) => {
-    if (notifiedPromptRunIdRef.current === runId) return false;
-    notifiedPromptRunIdRef.current = runId;
+    if (!promptCompletionRef.current.notify(runId)) return false;
     onAgentEnd?.();
     return true;
   }, [onAgentEnd]);
@@ -1060,7 +1064,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     eventStreamGraceTimerRef.current = setTimeout(() => void checkServerIdle(), EVENT_STREAM_IDLE_GRACE_MS);
   }, [cancelEventStreamGrace, closeEvents]);
 
-  const finishPromptWithoutStream = useCallback(async (sid: string | null = sessionIdRef.current, runId = promptRunIdRef.current) => {
+  const finishPromptWithoutStream = useCallback(async (
+    sid: string | null = sessionIdRef.current,
+    runId = promptRunIdRef.current,
+    aborted = false,
+  ) => {
     // Bail out before loadSession too: a stale finish for a previous run
     // must not overwrite the messages of the run currently streaming.
     if (promptRunIdRef.current !== runId) return;
@@ -1068,15 +1076,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (sid) await loadSession(sid);
     } finally {
       if (promptRunIdRef.current !== runId) return;
+      if (aborted) promptCompletionRef.current.markAborted(runId);
       const promptWasPending = rpcPromptPendingRef.current;
       const agentWasActive = sdkAgentActiveRef.current;
+      activePromptTokenRef.current = null;
       rpcPromptPendingRef.current = false;
       sdkAgentActiveRef.current = false;
       optimisticUserMessageKeyRef.current = null;
       const wasRunning = settleUiStage();
       if (promptWasPending) {
         notifyPromptStage(runId);
-      } else if (agentWasActive && wasRunning) {
+      } else if (agentWasActive && wasRunning && !promptCompletionRef.current.isAborted(runId)) {
         onAgentEnd?.();
       }
       if (sid) scheduleEventStreamClose(sid);
@@ -1095,7 +1105,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const data = await res.json() as { running?: boolean; state?: AgentStateResponse };
           const state = data.state;
           if (!data.running || !state || (!state.isStreaming && !state.isPromptRunning)) {
-            await finishPromptWithoutStream(sid, runId);
+            await finishPromptWithoutStream(sid, runId, state?.aborted === true);
             return;
           }
         }
@@ -1171,7 +1181,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
         if (state.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
       }
-      await finishPromptWithoutStream(sid, runId);
+      await finishPromptWithoutStream(sid, runId, state?.aborted === true);
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }
@@ -1228,6 +1238,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       }
       case "agent_start":
+        if (isStaleLocalPromptToken(event.promptToken, promptTokenOwnerRef.current, activePromptTokenRef.current)) break;
+        if (!rpcPromptPendingRef.current) promptCompletionRef.current.beginAgentRun(promptRunIdRef.current);
         cancelEventStreamGrace();
         sdkAgentActiveRef.current = true;
         agentRunningRef.current = true;
@@ -1261,9 +1273,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         break;
       case "agent_settled": {
+        if (isStaleLocalPromptToken(event.promptToken, promptTokenOwnerRef.current, activePromptTokenRef.current)) break;
+        const runId = promptRunIdRef.current;
+        const aborted = event.aborted === true;
+        if (aborted) promptCompletionRef.current.markAborted(runId);
         const agentWasActive = sdkAgentActiveRef.current;
         sdkAgentActiveRef.current = false;
-        if (!agentWasActive || rpcPromptPendingRef.current) break;
+        if (rpcPromptPendingRef.current || (!agentWasActive && !agentRunningRef.current)) break;
 
         const sid = sessionIdRef.current;
         const wasRunning = settleUiStage();
@@ -1272,16 +1288,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           void loadSession(sid);
           scheduleEventStreamClose(sid);
         }
-        if (wasRunning) onAgentEnd?.();
+        if (wasRunning && !aborted && !promptCompletionRef.current.isAborted(runId)) onAgentEnd?.();
         break;
       }
       case "prompt_done":
         {
+          if (isStaleLocalPromptToken(event.promptToken, promptTokenOwnerRef.current, activePromptTokenRef.current)) break;
           const runId = promptRunIdRef.current;
+          const aborted = event.aborted === true;
+          if (aborted) promptCompletionRef.current.markAborted(runId);
           const promptWasPending = rpcPromptPendingRef.current;
+          activePromptTokenRef.current = null;
           rpcPromptPendingRef.current = false;
           optimisticUserMessageKeyRef.current = null;
-          const firstNotification = notifyPromptStage(runId);
+          // prompt_done may acknowledge an extension command while its injected
+          // agent run is still active; that run's settled event owns completion.
+          const firstNotification = !sdkAgentActiveRef.current && notifyPromptStage(runId);
           if (!promptWasPending && !firstNotification) break;
 
           const sid = sessionIdRef.current;
@@ -1500,6 +1522,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
 
     const promptRunId = promptRunIdRef.current + 1;
+    promptCompletionRef.current.beginRun(promptRunId);
+    const promptTokenOwner = promptTokenOwnerRef.current ?? createNoticeId();
+    promptTokenOwnerRef.current = promptTokenOwner;
+    const promptToken = `${promptTokenOwner}:${promptRunId}`;
+    activePromptTokenRef.current = promptToken;
     cancelEventStreamGrace();
     rpcPromptPendingRef.current = true;
 
@@ -1546,6 +1573,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         await sendAgentCommand(sid, {
           type: "prompt",
           message,
+          promptToken,
           ...(piImages?.length ? { images: piImages } : {}),
         });
         promoteNewSession(1, message);
@@ -1556,6 +1584,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         await sendAgentCommand(session.id, {
           type: "prompt",
           message,
+          promptToken,
           ...(piImages?.length ? { images: piImages } : {}),
         });
       } else {
@@ -1574,6 +1603,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void waitForPromptSettlement(sentSessionId, promptRunId);
         return;
       }
+      activePromptTokenRef.current = null;
       rpcPromptPendingRef.current = false;
       setMessages((prev) => {
         const optimisticIndex = prev.lastIndexOf(userMsg);
@@ -1639,12 +1669,36 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       return;
     }
     const queuedBefore = queuedMessagesRef.current;
+    const abortRunId = promptRunIdRef.current;
+    const hasActiveRun = agentRunningRef.current || sdkAgentActiveRef.current || rpcPromptPendingRef.current;
+    const abortRequestId = hasActiveRun
+      ? promptCompletionRef.current.beginAbortRequest(abortRunId)
+      : null;
     try {
       await sendAgentCommand(sid, { type: "abort" });
     } catch (e) {
+      if (abortRequestId !== null) {
+        promptCompletionRef.current.finishAbortRequest(abortRunId, abortRequestId, false);
+        // If settlement raced the failed request, release the deferred success
+        // now; otherwise the normal SSE/reconciliation path will do so later.
+        if (
+          promptRunIdRef.current === abortRunId
+          && !agentRunningRef.current
+          && !sdkAgentActiveRef.current
+          && !rpcPromptPendingRef.current
+        ) {
+          notifyPromptStage(abortRunId);
+        }
+      }
       console.error("Failed to abort:", e);
       return;
     }
+    if (abortRequestId !== null) {
+      promptCompletionRef.current.finishAbortRequest(abortRunId, abortRequestId, true);
+    }
+    // A late abort response must not clear or restore messages belonging to a
+    // newer prompt run.
+    if (promptRunIdRef.current !== abortRunId) return;
     // Match pi's Escape: aborting clears the queued steering/follow-up
     // messages and restores them into the editor instead of silently
     // delivering them to the next turn.
@@ -1652,10 +1706,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     let texts: string[] = [];
     try {
       const result = await sendAgentCommand<{ steering?: string[]; followUp?: string[] }>(sid, { type: "clear_queue" });
+      if (promptRunIdRef.current !== abortRunId) return;
       texts = [...(result?.steering ?? []), ...(result?.followUp ?? [])];
     } catch {
       // Network hiccup — fall back to the pre-abort snapshot below.
     }
+    if (promptRunIdRef.current !== abortRunId) return;
     if (texts.length === 0) {
       texts = [...queuedBefore.steering, ...queuedBefore.followUp];
     }
@@ -1663,7 +1719,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (texts.length > 0) {
       opts.chatInputRef?.current?.prependText(texts.join("\n\n"));
     }
-  }, [opts.chatInputRef]);
+  }, [notifyPromptStage, opts.chatInputRef]);
 
   const handleFork = useCallback(async (entryId: string) => {
     if (bashRunningRef.current) return;

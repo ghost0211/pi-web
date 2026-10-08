@@ -80,6 +80,8 @@ type PendingUiResponse = {
   cancel: () => void;
 };
 
+type PendingPromptCompletion = { aborted: boolean; token?: string };
+
 type CustomUiComponent = {
   render: (width: number) => string[];
   handleInput?: (data: string) => void;
@@ -302,6 +304,8 @@ export class AgentSessionWrapper {
   private mcpActionPending = false;
   private sessionReplacement: "fork" | "clone" | null = null;
   private agentRunNeedsCompletion = false;
+  private lastAgentRunAborted: boolean | undefined;
+  private pendingPromptCompletions = new Set<PendingPromptCompletion>();
   private promptAdmissionTail: Promise<void> = Promise.resolve();
   private extensionsBound = false;
   private extensionBindingPromise: Promise<void> | null = null;
@@ -434,7 +438,19 @@ export class AgentSessionWrapper {
 
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
-      if (event.type === "agent_start") this.agentRunNeedsCompletion = true;
+      if (event.type === "agent_start") {
+        this.agentRunNeedsCompletion = true;
+        this.lastAgentRunAborted = undefined;
+      }
+      if (event.type === "agent_settled") {
+        this.lastAgentRunAborted = event.aborted === true;
+        if (this.lastAgentRunAborted) {
+          // Settlement and UI cleanup still happen, but a cancelled logical run
+          // must never leave a deferred success notification for finishPrompt().
+          this.agentRunNeedsCompletion = false;
+          for (const prompt of this.pendingPromptCompletions) prompt.aborted = true;
+        }
+      }
       if (event.type === "agent_end") {
         invalidateSessionListCache();
       }
@@ -447,7 +463,10 @@ export class AgentSessionWrapper {
         }
       }
       if (IDLE_RESET_EVENT_TYPES.has(event.type)) this.resetIdleTimer();
-      this.emit(event);
+      const promptToken = (event.type === "agent_start" || event.type === "agent_settled")
+        ? [...this.pendingPromptCompletions].find((prompt) => prompt.token)?.token
+        : undefined;
+      this.emit(promptToken ? { ...event, promptToken } : event);
       if (event.type === "agent_settled") this.notifyAgentRunCompleteIfIdle();
     });
     this.resetIdleTimer();
@@ -733,12 +752,26 @@ export class AgentSessionWrapper {
           let preflightAccepted = false;
           let preflightSettled = false;
           let promptSettled = false;
-          let acceptPreflight!: () => void;
+          let acceptPreflight!: (trackRun?: boolean) => void;
           let rejectPreflight!: (error: unknown) => void;
+          const promptCompletion: PendingPromptCompletion = {
+            aborted: false,
+            ...(typeof command.promptToken === "string" && command.promptToken.length > 0
+              ? { token: command.promptToken.slice(0, 128) }
+              : {}),
+          };
+          this.pendingPromptCompletions.add(promptCompletion);
           const preflight = new Promise<void>((resolve, reject) => {
-            acceptPreflight = () => {
+            acceptPreflight = (trackRun = true) => {
+              if (preflightAccepted) return;
               preflightAccepted = true;
-              this.agentRunNeedsCompletion = true;
+              // Only the SDK's real acceptance callback owns run lifecycle
+              // state. The promise-resolution fallback is for admission ack
+              // compatibility and may arrive after an aborted settlement.
+              if (trackRun) {
+                this.lastAgentRunAborted = undefined;
+                this.agentRunNeedsCompletion = true;
+              }
               if (preflightSettled) return;
               preflightSettled = true;
               resolve();
@@ -752,6 +785,7 @@ export class AgentSessionWrapper {
           const finishPrompt = () => {
             if (promptSettled) return;
             promptSettled = true;
+            this.pendingPromptCompletions.delete(promptCompletion);
             this.pendingPromptCount = Math.max(0, this.pendingPromptCount - 1);
             this.resetIdleTimer();
             this.notifyAgentRunCompleteIfIdle();
@@ -777,11 +811,15 @@ export class AgentSessionWrapper {
           }
 
           void prompt.then(() => {
-            // Compatibility fallback if a future SDK resolves without invoking
-            // the internal callback. This waits for the run, but never acks early.
-            acceptPreflight();
+            // Compatibility fallback if an SDK resolves without invoking the
+            // internal callback. Ack here without reviving lifecycle state.
+            acceptPreflight(false);
             finishPrompt();
-            if (!streamingBehavior) this.emit({ type: "prompt_done" });
+            if (!streamingBehavior) this.emit({
+              type: "prompt_done",
+              aborted: promptCompletion.aborted,
+              ...(promptCompletion.token ? { promptToken: promptCompletion.token } : {}),
+            });
           }, (error) => {
             rejectPreflight(error);
             finishPrompt();
@@ -793,7 +831,11 @@ export class AgentSessionWrapper {
                 type: "prompt_error",
                 errorMessage: error instanceof Error ? error.message : String(error),
               });
-              if (!streamingBehavior) this.emit({ type: "prompt_done" });
+              if (!streamingBehavior) this.emit({
+                type: "prompt_done",
+                aborted: promptCompletion.aborted,
+                ...(promptCompletion.token ? { promptToken: promptCompletion.token } : {}),
+              });
             }
           }).catch((error) => {
             console.error(
@@ -842,6 +884,8 @@ export class AgentSessionWrapper {
             steering: [...this.inner.getSteeringMessages()],
             followUp: [...this.inner.getFollowUpMessages()],
           },
+          // Last logical agent settlement; optional for older frontend builds.
+          aborted: this.lastAgentRunAborted,
           contextUsage: contextUsage
             ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
             : null,

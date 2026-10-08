@@ -91,6 +91,8 @@ export interface ToolResultMessage {
   isError?: boolean;
   details?: unknown;
   timestamp?: number;
+  /** Monotonic tool execution duration in milliseconds; absent on legacy results. */
+  durationMs?: number;
   usage?: AgentUsage;
   /** Bounded metadata only; nested results are not separate transcript messages. */
   nestedCalls?: NestedToolCalls;

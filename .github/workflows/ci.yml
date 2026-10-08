@@ -33,5 +33,9 @@ jobs:
       - name: Lint
         run: npm run lint -- --max-warnings=0
 
+      # Full Web fixtures use POSIX launchers/paths. Match desktop release CI:
+      # Linux runs the complete suite; Windows keeps typecheck/lint here and
+      # validates Rust plus real NSIS installation in desktop-windows.yml.
       - name: Test
+        if: matrix.os == 'ubuntu-latest'
         run: npm test

@@ -14,6 +14,7 @@ import { isApplyPatchToolName, isEditToolName } from "@/lib/tool-names";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { skillExpansionToCommand } from "@/lib/slash-display";
+import { formatToolExecutionDuration, getToolExecutionDuration, type ToolExecutionDuration } from "@/lib/tool-duration";
 import type {
   AgentMessage,
   UserMessage,
@@ -642,17 +643,14 @@ function AssistantMessageView({
     return secs > 0 ? secs : undefined;
   }, [message.timestamp, prevTimestamp]);
 
-  // Tool call durations derived from session file timestamps (accurate for completed messages)
-  // assistant message timestamp = when generation ended = when tools started running
-  // toolResult timestamp = when tool execution finished
-  const toolCallDurations = useMemo<Map<string, number>>(() => {
-    const map = new Map<string, number>();
-    if (!toolResults || !message.timestamp) return map;
+  // SDK 1.1.0 records monotonic execution time on final tool results. Legacy
+  // sessions still fall back to rounded message timestamps, marked approximate.
+  const toolCallDurations = useMemo<Map<string, ToolExecutionDuration>>(() => {
+    const map = new Map<string, ToolExecutionDuration>();
+    if (!toolResults) return map;
     for (const [callId, result] of toolResults) {
-      if (result.timestamp && message.timestamp) {
-        const secs = Math.round((result.timestamp - message.timestamp) / 1000);
-        if (secs > 0) map.set(callId, secs);
-      }
+      const duration = getToolExecutionDuration(result, message.timestamp);
+      if (duration !== undefined) map.set(callId, duration);
     }
     return map;
   }, [toolResults, message.timestamp]);
@@ -865,7 +863,7 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, onOpenSession, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; onOpenSession?: (sessionId: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
+function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, onOpenSession, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, ToolExecutionDuration>; cwd?: string; onOpenFile?: (filePath: string) => void; onOpenSession?: (sessionId: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
   if (block.type === "text") {
     return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} />;
   }
@@ -1021,7 +1019,7 @@ function resolveSubagentSessionId(block: ToolCallContent, result?: ToolResultMes
   return null;
 }
 
-function ToolCallBlock({ block, result, duration, onOpenSession }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; onOpenSession?: (sessionId: string) => void }) {
+function ToolCallBlock({ block, result, duration, onOpenSession }: { block: ToolCallContent; result?: ToolResultMessage; duration?: ToolExecutionDuration; onOpenSession?: (sessionId: string) => void }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const inputStr = getToolCallInputText(block);
@@ -1084,7 +1082,7 @@ function ToolCallBlock({ block, result, duration, onOpenSession }: { block: Tool
             </span>
           )}
           {duration !== undefined && (
-            <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
+            <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{formatToolExecutionDuration(duration)}</span>
           )}
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
             <polyline points="2 3.5 5 6.5 8 3.5" />

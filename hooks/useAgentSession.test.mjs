@@ -1,11 +1,133 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createJiti } from "jiti";
 
 const source = (await readFile(new URL("./useAgentSession.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const completionSource = (await readFile(new URL("./prompt-completion.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
+const { isStaleLocalPromptToken, PromptCompletionTracker } = await jiti.import("./prompt-completion.ts");
 const chatWindowSource = (await readFile(new URL("../components/ChatWindow.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const chatInputSource = (await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const appShellSource = (await readFile(new URL("../components/AppShell.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+
+test("completion tracking suppresses abort effects but permits exactly one later success", () => {
+  const tracker = new PromptCompletionTracker();
+  tracker.beginRun(1);
+
+  // SDK agent_settled, explicit prompt_done, and idle reconciliation all report
+  // the same cancelled run; none may claim a successful completion.
+  assert.equal(tracker.markAborted(1), true);
+  assert.equal(tracker.notify(1), false);
+  assert.equal(tracker.notify(1), false);
+
+  tracker.beginRun(2);
+  assert.equal(tracker.markAborted(1), false, "late prior-run aborts are ignored");
+  assert.equal(tracker.notify(2), true);
+  assert.equal(tracker.notify(2), false, "duplicate terminal paths notify only once");
+
+  tracker.beginRun(3);
+  tracker.markAborted(3); // Reconciliation can discover an abort before prompt_done.
+  assert.equal(tracker.notify(3), false);
+  tracker.beginRun(4);
+  tracker.markAborted(4);
+  tracker.beginAgentRun(4); // An extension-injected SDK run starts after the abort.
+  assert.equal(tracker.isAborted(4), false);
+  assert.equal(tracker.notify(4), true);
+
+  assert.equal(isStaleLocalPromptToken("hook:1", "hook", "hook:2"), true);
+  assert.equal(isStaleLocalPromptToken("hook:2", "hook", "hook:2"), false);
+  assert.equal(isStaleLocalPromptToken("another-hook:1", "hook", null), false);
+});
+
+test("explicit abort protects a dead-wrapper settlement and releases only its own run", () => {
+  const tracker = new PromptCompletionTracker();
+  tracker.beginRun(1);
+  const requestId = tracker.beginAbortRequest(1);
+  assert.notEqual(requestId, null);
+
+  // A missed terminal SSE followed by running:false/state:undefined reaches
+  // finishPromptWithoutStream with aborted=false while the abort POST is pending.
+  assert.equal(tracker.notify(1), false, "in-flight explicit abort defers success");
+  assert.equal(tracker.finishAbortRequest(1, requestId, true), true);
+  assert.equal(tracker.notify(1), false, "confirmed abort suppresses completion");
+
+  tracker.beginRun(2);
+  assert.equal(tracker.notify(2), true, "a later normal prompt completes successfully");
+
+  const staleRequestId = tracker.beginAbortRequest(2);
+  tracker.beginRun(3);
+  assert.equal(tracker.finishAbortRequest(2, staleRequestId, true), false);
+  assert.equal(tracker.isAborted(3), false, "a stale abort response cannot cancel a newer run");
+  assert.equal(tracker.notify(3), true);
+});
+
+test("a rejected explicit abort releases deferred success when settlement already raced", () => {
+  const tracker = new PromptCompletionTracker();
+  tracker.beginRun(1);
+  const requestId = tracker.beginAbortRequest(1);
+  assert.equal(tracker.notify(1), false);
+  assert.equal(tracker.finishAbortRequest(1, requestId, false), true);
+  assert.equal(tracker.notify(1), true, "failed abort does not permanently suppress a successful run");
+});
+
+test("hook keeps settlement cleanup separate from successful completion notifications", () => {
+  const settledSource = source.slice(
+    source.indexOf('case "agent_settled"'),
+    source.indexOf('case "prompt_done"'),
+  );
+  const promptDoneSource = source.slice(
+    source.indexOf('case "prompt_done"'),
+    source.indexOf('case "prompt_error"'),
+  );
+  const finishSource = source.slice(
+    source.indexOf("const finishPromptWithoutStream"),
+    source.indexOf("const waitForPromptSettlement"),
+  );
+  const reconcileSource = source.slice(
+    source.indexOf("const reconcileAgentState"),
+    source.indexOf("// Recovery net for missed SSE events"),
+  );
+  const sendSource = source.slice(
+    source.indexOf("const handleSend = useCallback"),
+    source.indexOf("const executeBash = useCallback"),
+  );
+
+  assert.match(source, /aborted\?: boolean/);
+  assert.match(settledSource, /if \(aborted\) promptCompletionRef\.current\.markAborted\(runId\)/);
+  assert.match(settledSource, /settleUiStage\(\)/);
+  assert.match(settledSource, /wasRunning && !aborted && !promptCompletionRef\.current\.isAborted\(runId\)/);
+  assert.match(promptDoneSource, /event\.aborted === true/);
+  assert.match(promptDoneSource, /promptCompletionRef\.current\.markAborted\(runId\)/);
+  assert.match(promptDoneSource, /notifyPromptStage\(runId\)/);
+  assert.match(promptDoneSource, /settleUiStage\(\)/);
+  assert.match(finishSource, /aborted = false/);
+  assert.match(finishSource, /if \(aborted\) promptCompletionRef\.current\.markAborted\(runId\)/);
+  assert.match(reconcileSource, /finishPromptWithoutStream\(sid, runId, state\?\.aborted === true\)/);
+  assert.match(sendSource, /promptCompletionRef\.current\.beginRun\(promptRunId\)/);
+  assert.match(sendSource, /promptToken,/);
+  assert.match(promptDoneSource, /isStaleLocalPromptToken\(event\.promptToken, promptTokenOwnerRef\.current, activePromptTokenRef\.current\)/);
+  assert.match(source, /isStaleLocalPromptToken\(event\.promptToken, promptTokenOwnerRef\.current, activePromptTokenRef\.current\)/);
+  assert.match(completionSource, /token\.startsWith\(`\$\{owner\}:`\)[\s\S]*token !== active/);
+  assert.match(completionSource, /runId !== this\.currentRunId/);
+});
+
+test("handleAbort tracks only the active run and preserves bash and queue behavior", () => {
+  const abortSource = source.slice(
+    source.indexOf("  const handleAbort = useCallback"),
+    source.indexOf("  const handleFork = useCallback"),
+  );
+
+  assert.match(abortSource, /if \(bashRunningRef\.current\) \{[\s\S]*?type: "abort_bash"[\s\S]*?return;/);
+  assert.match(abortSource, /const abortRunId = promptRunIdRef\.current/);
+  assert.match(abortSource, /beginAbortRequest\(abortRunId\)/);
+  assert.match(abortSource, /await sendAgentCommand\(sid, \{ type: "abort" \}\)/);
+  assert.match(abortSource, /finishAbortRequest\(abortRunId, abortRequestId, false\)/);
+  assert.match(abortSource, /finishAbortRequest\(abortRunId, abortRequestId, true\)/);
+  assert.match(abortSource, /if \(promptRunIdRef\.current !== abortRunId\) return/);
+  assert.match(abortSource, /type: "clear_queue"/);
+  assert.match(abortSource, /prependText\(texts\.join\("\\n\\n"\)\)/);
+});
 
 test("turn-rail jumps can page to the oldest turn without a fixed request limit", () => {
   const jump = source.slice(

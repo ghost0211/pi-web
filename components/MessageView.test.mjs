@@ -27,6 +27,60 @@ function renderMessage(message, props = {}) {
   );
 }
 
+test("renders persisted tool execution milliseconds instead of timestamp wall time in history", () => {
+  const toolCall = { type: "toolCall", toolCallId: "timed-call", toolName: "read", input: {} };
+  const result = {
+    role: "toolResult",
+    toolCallId: toolCall.toolCallId,
+    content: [{ type: "text", text: "file contents" }],
+    timestamp: 101_000,
+    durationMs: 1_234,
+  };
+  const html = renderMessage({
+    role: "assistant",
+    provider: "test",
+    model: "test-model",
+    timestamp: 1_000,
+    content: [toolCall],
+  }, { toolResults: new Map([[toolCall.toolCallId, result]]) });
+
+  assert.match(html, /1\.234s/);
+  assert.doesNotMatch(html, /100s/);
+  assert.equal(renderMessage(result), "", "tool results remain inline under their call");
+});
+
+test("shows an actual zero-millisecond tool duration", () => {
+  const toolCall = { type: "toolCall", toolCallId: "zero-call", toolName: "read", input: {} };
+  const result = {
+    role: "toolResult",
+    toolCallId: toolCall.toolCallId,
+    content: [],
+    timestamp: 20_000,
+    durationMs: 0,
+  };
+  const html = renderMessage({
+    role: "assistant", provider: "test", model: "test-model", timestamp: 1_000, content: [toolCall],
+  }, { toolResults: new Map([[toolCall.toolCallId, result]]) });
+
+  assert.match(html, /0s/);
+  assert.doesNotMatch(html, /≈/);
+});
+
+test("marks the legacy timestamp duration fallback as approximate", () => {
+  const toolCall = { type: "toolCall", toolCallId: "legacy-call", toolName: "read", input: {} };
+  const result = {
+    role: "toolResult",
+    toolCallId: toolCall.toolCallId,
+    content: [],
+    timestamp: 3_800,
+  };
+  const html = renderMessage({
+    role: "assistant", provider: "test", model: "test-model", timestamp: 1_000, content: [toolCall],
+  }, { toolResults: new Map([[toolCall.toolCallId, result]]) });
+
+  assert.match(html, /≈3s/);
+});
+
 test("expands Codemode image output as preview media, never base64 plaintext", () => {
   const result = { role: "toolResult", toolCallId: "image-call", toolName: "codemode",
     content: [{ type: "text", text: "Generated locally" }, { type: "image", data: "YWJj", mimeType: "image/png" }],

@@ -2,6 +2,7 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { isNewerStableVersion } from "./app-update";
+import { locateGlobalPiCli } from "./pi-cli-locator";
 
 export interface GitRepoInfo {
   name: string;
@@ -273,7 +274,25 @@ export function executePiAgentUpdate(target: "global" | "local" = "global"): Pro
     const execCwd = process.cwd();
 
     if (target === "global") {
-      args.push("install", "-g", "@earendil-works/pi-coding-agent@latest");
+      const resolution = locateGlobalPiCli();
+      if (resolution.kind === "unsupported") {
+        resolve({
+          success: false,
+          output: `The existing 'pi' command at ${resolution.launcherPath} is not managed by npm global install (${resolution.reason}). Please update it using its original installation method.`,
+          error: `Unsupported pi launcher: ${resolution.reason}`,
+          previousVersion,
+          newVersion: previousVersion,
+          target,
+        });
+        return;
+      }
+
+      if (resolution.kind === "npm-global") {
+        args.push("install", "-g", "--prefix", resolution.prefix, "@earendil-works/pi-coding-agent@latest");
+      } else {
+        // Not found on PATH: fallback to fresh global install
+        args.push("install", "-g", "@earendil-works/pi-coding-agent@latest");
+      }
     } else {
       args.push(
         "install",
@@ -345,7 +364,16 @@ export function executePiAgentUpdate(target: "global" | "local" = "global"): Pro
       // Invalidate the cache after update
       latestVersionCache = null;
 
-      if (code === 0) {
+      if (code === 0 && target === "global" && (!newVersion || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(newVersion))) {
+        resolve({
+          success: false,
+          output: `${combinedOutput}\nNpm completed, but the active Pi CLI version could not be verified. Check that the installation's bin directory is on PATH.`.trim(),
+          error: "Updated Pi CLI could not be verified",
+          previousVersion,
+          newVersion,
+          target,
+        });
+      } else if (code === 0) {
         resolve({
           success: true,
           output: combinedOutput || "Update completed successfully.",

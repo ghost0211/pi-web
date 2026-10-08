@@ -97,13 +97,13 @@ export function CodemodeSettings({ sessionId, onSessionReloaded }: Props) {
       {loading ? <p>{t("settings.codemode.loading")}</p> : (
         <fieldset disabled={busy || !ready} style={{ border: 0, margin: 0, padding: 0 }}>
           <ConfigField label={t("settings.codemode.mode")}>
-            <select aria-label={t("settings.codemode.mode")} value={mode} onChange={(event) => { setMode(event.target.value as "on" | "only"); setSaved(false); }}>
+            <select className="config-input" aria-label={t("settings.codemode.mode")} value={mode} onChange={(event) => { setMode(event.target.value as "on" | "only"); setSaved(false); }}>
               <option value="on">{t("settings.codemode.modeOn")}</option>
               <option value="only">{t("settings.codemode.modeOnly")}</option>
             </select>
           </ConfigField>
           <ConfigField label={t("settings.codemode.budget")}>
-            <input aria-label={t("settings.codemode.budget")} type="number" min={0} step={1} value={budget} onChange={(event) => { setBudget(event.target.value); setSaved(false); }} />
+            <input className="config-input" aria-label={t("settings.codemode.budget")} type="number" min={0} step={1} value={budget} onChange={(event) => { setBudget(event.target.value); setSaved(false); }} />
           </ConfigField>
           <p style={{ fontSize: 11, color: "var(--text-muted)" }}>{t("settings.codemode.budgetHint")}</p>
           <ConfigButton onClick={() => void save()}>{busy ? t("settings.codemode.busy") : t("settings.codemode.save")}</ConfigButton>

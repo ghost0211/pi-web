@@ -14,6 +14,9 @@ test("Codemode UI keeps the explicit no-start reload boundary and tool selection
   const source = await readFile(new URL("./CodemodeSettings.tsx", import.meta.url), "utf8");
   assert.match(source, /codemodeMode: mode, codemodeInlineBudget: parsed/);
   assert.match(source, /requireLiveSession: true/);
+  // Mode select and budget input must look like editable controls, not plain text.
+  assert.match(source, /<select className="config-input"/);
+  assert.match(source, /<input className="config-input"/);
   assert.match(source, /if \(controller.signal.aborted\) return;\s*setNeedsReload\(false\);\s*onSessionReloaded\(\)/);
   assert.doesNotMatch(source, /defaultTools|set_tools|\/api\/agent\/new/);
 });

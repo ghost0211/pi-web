@@ -375,6 +375,45 @@
   line-height: 1.35;
 }
 
+/* Shared look for text/select controls inside config panels so they read as
+   interactive inputs instead of plain description text. */
+.config-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background-color 0.14s ease;
+}
+
+.config-input:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+.config-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.config-input:disabled {
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+select.config-input {
+  cursor: pointer;
+}
+
+select.config-input:disabled {
+  cursor: default;
+}
+
 .config-empty-state {
   display: grid;
   flex: 1;

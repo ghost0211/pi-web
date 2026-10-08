@@ -32,13 +32,18 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # Full Web checks are Linux-validated; several fixtures rely on POSIX.
+      # Windows validates the Rust shell and the compiled NSIS upgrade hook.
       - name: Test web app
+        if: matrix.os == 'ubuntu-latest'
         run: npm test
 
       - name: Typecheck web app
+        if: matrix.os == 'ubuntu-latest'
         run: node node_modules/typescript/bin/tsc --noEmit
 
       - name: Lint web app
+        if: matrix.os == 'ubuntu-latest'
         run: npm run lint -- --max-warnings=0
 
       # The shell holds the desktop-only behavior (startup reveal, navigation
@@ -89,6 +94,16 @@ jobs:
         run: |
           if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Missing TAURI_SIGNING_PRIVATE_KEY Actions secret; refusing to publish an unsigned updater.' }
           npm run desktop:build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Tauri downloads NSIS during the build. Require it here so the real
+      # upgrade/rollback regressions cannot silently skip before publication.
+      - name: Test NSIS upgrade and rollback
+        shell: pwsh
+        run: |
+          $env:PI_WEB_TEST_MAKENSIS = Join-Path $env:LOCALAPPDATA 'tauri\NSIS\makensis.exe'
+          if (-not (Test-Path $env:PI_WEB_TEST_MAKENSIS)) { throw 'NSIS compiler missing; refusing to skip installer regressions.' }
+          node --test desktop-installer.test.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Generate updater manifest

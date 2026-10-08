@@ -219,7 +219,17 @@ Desktop checks for a newer desktop release when it opens and shows an update
 notice. Settings → About also checks when opened and offers a manual retry.
 Clicking **Download and install update** downloads the signed NSIS installer
 and applies it through Tauri's updater; Windows exits Desktop to run the
-installer. This interrupts running agent sessions. Regular browser and phone
+installer. This interrupts running agent sessions. The installer replaces the
+generated `server/` and `node/` payload directories rather than overlaying them:
+NSIS `/UPDATE` skips uninstalling, so files removed or re-hoisted in a newer
+build would otherwise survive and shadow the new dependencies. After checking
+the running app, preinstall renames old payloads to `server.previous` and
+`node.previous`; if staging the second directory fails, it restores the first
+before aborting. Postinstall removes these backups only after copying the new
+payloads. A locked backup is retained outside the live runtime paths; existing
+recovery copies are never overwritten. This applies to fresh installs,
+reinstalls and updates, and never removes the installation root, `~/.pi/` or
+the Desktop app-data directories. Regular browser and phone
 pages cannot invoke the native updater, even when they access the same server.
 The existing 0.9.20 and older installers do not contain the updater and must be
 upgraded manually **once** to an updater-enabled release.
@@ -245,11 +255,15 @@ desktop-only feed first. GitHub release checks and downloads require internet
 access. CI `workflow_dispatch` produces signed artifacts but does not change
 the published update feed.
 
-CI layout: an `ubuntu-latest` job runs `npm test` / `tsc` / `lint` first — the
+CI layout: the `ubuntu-latest` test job runs `npm test` / `tsc` / `lint` — the
 web test suite is Linux-validated and several pre-existing tests encode POSIX
-assumptions (CRLF source markers, `PATH` vs `Path` casing). The Windows job then
-focuses on the installer build. Fixing those tests to be Windows-native is a
-separate work item.
+assumptions (CRLF source markers, `PATH` vs `Path` casing). The Windows test job
+runs Rust shell tests. After building the signed installer, Windows also runs
+`desktop-installer.test.mjs` with Tauri's actual NSIS compiler; fresh install,
+reinstall, `/UPDATE`, staging rollback and recovery-copy protection must pass
+before publication. A missing compiler fails the release instead of silently
+skipping the installer regressions. Making the full Web suite Windows-native
+is a separate work item.
 
 ## Troubleshooting
 
@@ -264,6 +278,23 @@ separate work item.
   in Tauri CLI 2.11 (tauri-apps/tauri#15342). If you upgrade the CLI and
   resources go missing, verify the install directory contains `server/` and
   `node/` next to the exe.
+- **Installer reports existing recovery payloads** — an interrupted copy or a
+  locked old runtime left `server.previous` / `node.previous` in the install
+  directory. Fully Quit Desktop and its old sidecar. Move these directories
+  outside the install directory as backups before retrying the installer. If
+  you need to restore the old installation instead, move any partial new
+  `server/` / `node/` aside and rename the recovery copies back to their original
+  names. Never overwrite a recovery copy or remove user app-data/session folders.
+- **Session list shows HTTP 500 after an update, with `pi-tui` missing
+  `setImageTranscoder` in the sidecar log** — check for obsolete nested packages,
+  not just the top-level SDK version. The 0.99 → 1.0 upgrade can leave
+  `server/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui`
+  at 0.99.1 while the hoisted SDK is 1.0.3. Node resolves the stale nested package
+  first. The preinstall hook now cleans the generated payloads before copying
+  the new release. For an affected older installer, fully **Quit** Desktop,
+  move the install directory's `server/` and `node/` folders outside the install
+  directory as backups, then rerun the installer. Do not delete or move `~/.pi/`
+  or the Desktop app-data directories — these hold user sessions and settings.
 - **OAuth reports `Cannot find module .../pi-ai/dist/auth/oauth/*.js`** — the
   standalone trace omitted a variable dynamic import. `next.config.ts` must
   include both top-level and `pi-coding-agent`-nested `pi-ai/dist` trees;

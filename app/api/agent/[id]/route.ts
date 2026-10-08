@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession, setRpcSessionTools } from "@/lib/rpc-manager";
+import { isSessionDeletionGuardError, withSessionMutationGuard } from "@/lib/session-deletion-guard";
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -23,52 +24,54 @@ export async function POST(
     }
     const toolNames = requestedToolNames as string[] | undefined;
 
-    // Fast path: already-running session
-    const existing = getRpcSession(id);
-    if (body.requireLiveSession === true && !existing?.isAlive()) {
-      return NextResponse.json({ error: "No live session; this command will not start one" }, { status: 409 });
-    }
-    if (body.type === "set_tools") {
-      const filePath = existing?.sessionFile || await resolveSessionPath(id) || undefined;
-      if (!existing?.isAlive() && !filePath) {
-        return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    return await withSessionMutationGuard(id, async () => {
+      // Fast path: already-running session
+      const existing = getRpcSession(id);
+      if (body.requireLiveSession === true && !existing?.isAlive()) {
+        return NextResponse.json({ error: "No live session; this command will not start one" }, { status: 409 });
       }
-      const changed = await setRpcSessionTools(id, filePath, toolNames);
-      return NextResponse.json({
-        success: true,
-        data: { sessionId: changed.sessionId, recreated: changed.recreated },
+      if (body.type === "set_tools") {
+        const filePath = existing?.sessionFile || await resolveSessionPath(id) || undefined;
+        if (!existing?.isAlive() && !filePath) {
+          return NextResponse.json({ error: "Session not found" }, { status: 404 });
+        }
+        const changed = await setRpcSessionTools(id, filePath, toolNames);
+        return NextResponse.json({
+          success: true,
+          data: { sessionId: changed.sessionId, recreated: changed.recreated },
+        });
+      }
+      if (existing?.isAlive()) {
+        const result = await existing.send(body);
+        promptAccepted = body.type === "prompt";
+        return NextResponse.json({ success: true, data: result });
+      }
+
+      const filePath = await resolveSessionPath(id);
+      if (!filePath) {
+        return NextResponse.json({
+          error: "Session not found",
+          ...(body.type === "prompt"
+            ? { code: "prompt_rejected", accepted: false }
+            : {}),
+        }, { status: 404 });
+      }
+
+      const { session } = await startRpcSession(id, filePath, undefined, {
+        ...(toolNames !== undefined ? { toolNames } : {}),
       });
-    }
-    if (existing?.isAlive()) {
-      const result = await existing.send(body);
+      const result = await session.send(body);
       promptAccepted = body.type === "prompt";
+
       return NextResponse.json({ success: true, data: result });
-    }
-
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({
-        error: "Session not found",
-        ...(body.type === "prompt"
-          ? { code: "prompt_rejected", accepted: false }
-          : {}),
-      }, { status: 404 });
-    }
-
-    const { session } = await startRpcSession(id, filePath, undefined, {
-      ...(toolNames !== undefined ? { toolNames } : {}),
     });
-    const result = await session.send(body);
-    promptAccepted = body.type === "prompt";
-
-    return NextResponse.json({ success: true, data: result });
   } catch (error) {
     return NextResponse.json({
       error: error instanceof Error ? error.message : String(error),
       ...(commandType === "prompt" && !promptAccepted
         ? { code: "prompt_rejected", accepted: false }
         : {}),
-    }, { status: 500 });
+    }, { status: isSessionDeletionGuardError(error) ? 409 : 500 });
   }
 }
 

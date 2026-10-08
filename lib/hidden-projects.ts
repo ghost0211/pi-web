@@ -1,10 +1,7 @@
 /**
- * Browser-local hidden-projects store shared by the session sidebar and the
- * settings panel. A hidden project's sessions are filtered from the sidebar
- * list; the settings panel lists them so the user can restore them.
- *
- * Legacy format was a bare array of project keys (strings); entries are
- * normalized to { key, root? } refs so the settings panel can show paths.
+ * Legacy hidden-project readers retained for backed-up metadata migration.
+ * Bare arrays normalize to { key, root? }. New UI removes/restores project
+ * entries independently of session states via session-management-client.
  */
 
 const STORAGE_KEY = "pi-web:hidden-projects";

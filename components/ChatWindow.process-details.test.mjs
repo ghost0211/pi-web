@@ -6,11 +6,11 @@ const source = await readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf
 const appShellSource = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 
 test("sub-agent panes stay observational, including tabs without relation metadata", () => {
-  assert.match(appShellSource, /key=\{activeFileTab\.subagentSessionId\}\s+readOnly\s+session=/);
+  assert.match(appShellSource, /key=\{activeFileTab\.subagentSessionId\}\s+readOnly\s+archived=\{[^\n]+\}\s+managementPending=\{!management\.ready\}\s+session=/);
   assert.match(source, /const isReadOnlySubagent = readOnly \|\| session\?\.relation\?\.kind === "subagent"/);
   assert.match(source, /const readOnlyNotice = \([\s\S]*?data-subagent-read-only="true"/);
-  assert.match(source, /isReadOnlySubagent \? readOnlyNotice : \([\s\S]*?\{chatInputElement\}/);
-  assert.match(source, /onFork=\{isReadOnlySubagent \|\| sessionBusy \|\| isNew \? undefined : handleFork\}/);
+  assert.match(source, /archived \? archivedReadOnlyNotice : isReadOnlySubagent \? readOnlyNotice : \(\s*<>\s*\{chatInputElement\}/);
+  assert.match(source, /onFork=\{isReadOnlyConversation \|\| sessionBusy \|\| isNew \? undefined : handleConversationFork\}/);
   assert.match(source, /if \(!isReadOnlySubagent\) registerAbortHandler/);
 });
 

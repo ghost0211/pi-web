@@ -1,10 +1,14 @@
 import type { LocalePlugin } from "../types";
+import { sessionsManagerMessagesZhTW } from "../../session-management-messages";
+import { sessionSidebarMessagesZhTW } from "../../session-sidebar-messages";
 
 /** Pi Web 內建繁體中文語系。 */
 export const zhTWLocale: LocalePlugin = {
   id: "zh-TW",
   label: "繁體中文",
   messages: {
+    ...sessionsManagerMessagesZhTW,
+    ...sessionSidebarMessagesZhTW,
     "settings.codemode.title": "Codemode 進階設定",
     "settings.codemode.description": "在「工具 → 自訂」中選取 Codemode 後生效。此處僅調整全域預設行為，不啟用工具；受信任專案的設定可覆寫這些值。儲存後請重新載入既有工作階段。",
     "settings.codemode.mode": "執行模式",

@@ -14,6 +14,8 @@ import {
 import { setTaskNotificationsEnabled, taskNotificationsEnabled } from "@/lib/task-notifications";
 import { getDesktopLanAccess, setDesktopLanAccess } from "@/lib/desktop";
 import type { ShellToolSettingsResponse } from "@/lib/api-types";
+import type { SessionInfo } from "@/lib/types";
+import type { OpenSessionManagementDetail } from "@/lib/session-management-types";
 import {
   setLastSettingsSection,
   type SettingsSection,
@@ -37,6 +39,8 @@ interface Props {
   initialSection: SettingsSection;
   onClose: () => void;
   onSessionReloaded: () => void;
+  sessionManagementRequest?: OpenSessionManagementDetail & { serial: number };
+  onSelectSession?: (session: SessionInfo) => void;
 }
 
 export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: { section: SettingsSection; size?: number; strokeWidth?: number }) {
@@ -593,9 +597,10 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
   );
 }
 
-export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessionReloaded }: Props) {
+export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessionReloaded, sessionManagementRequest, onSelectSession }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  const [sessionsBusy, setSessionsBusy] = useState(false);
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );
@@ -603,7 +608,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
     { id: "general", label: t("settings.general"), requiresProject: false },
     { id: "models", label: t("common.models"), requiresProject: false },
     { id: "model-scope", label: t("settings.modelScope"), requiresProject: false },
-    { id: "sessions", label: t("common.sessions"), requiresProject: false },
+    { id: "sessions", label: t("sessionsManager.title"), requiresProject: false },
     { id: "ssh", label: t("settings.ssh"), requiresProject: false },
     { id: "mcp", label: t("mcp.title"), requiresProject: false },
     { id: "usage", label: t("usage.title"), requiresProject: false },
@@ -613,17 +618,21 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
     { id: "about", label: t("common.about"), requiresProject: false },
   ];
 
-  useEffect(() => setLastSettingsSection(initialSection), [initialSection]);
+  useEffect(() => {
+    setSection(initialSection);
+    setMountedSections((current) => new Set(current).add(initialSection));
+    setLastSettingsSection(initialSection);
+  }, [initialSection, sessionManagementRequest?.serial]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
-      onClose();
+      if (!sessionsBusy) onClose();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, sessionsBusy]);
 
   useEffect(() => {
     if (cwd || (section !== "skills" && section !== "agents" && section !== "plugins")) return;
@@ -633,6 +642,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
   }, [cwd, section]);
 
   const activateSection = (nextSection: SettingsSection) => {
+    if (sessionsBusy) return;
     setMountedSections((current) => new Set(current).add(nextSection));
     setSection(nextSection);
     setLastSettingsSection(nextSection);
@@ -653,7 +663,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
       role="dialog"
       aria-modal="true"
       aria-label={t("settings.title")}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget && !sessionsBusy) onClose(); }}
       className="settings-dialog-backdrop"
     >
       <div className="settings-dialog-surface">
@@ -664,14 +674,14 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
           <nav aria-label={t("settings.title")} className="settings-section-tabs">
             {sections.map((item) => {
               const selected = section === item.id;
-              const disabled = item.requiresProject && !cwd;
+              const disabled = sessionsBusy || (item.requiresProject && !cwd);
               return (
                 <button
                   key={item.id}
                   type="button"
                   className="settings-section-tab"
                   disabled={disabled}
-                  title={disabled ? t("settings.projectRequired") : item.label}
+                  title={item.requiresProject && !cwd ? t("settings.projectRequired") : item.label}
                   aria-current={selected ? "page" : undefined}
                   onClick={() => activateSection(item.id)}
                 >
@@ -688,6 +698,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
             <select
               aria-label={t("settings.title")}
               value={section}
+              disabled={sessionsBusy}
               onChange={(event) => activateSection(event.target.value as SettingsSection)}
               className="settings-mobile-section-picker"
             >
@@ -697,14 +708,19 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
                 </option>
               ))}
             </select>
-            <button type="button" onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
+            <button type="button" disabled={sessionsBusy} onClick={onClose} title={t("i18n.close")} aria-label={t("i18n.close")} className="config-close-button settings-dialog-close">×</button>
           </div>
 
           <main className="settings-dialog-main">
             {sectionHost("general", <GeneralSettings sessionId={sessionId} onSessionReloaded={onSessionReloaded} />)}
             {sectionHost("models", <ModelsConfig embedded onClose={onClose} />)}
             {sectionHost("model-scope", <ModelScopeConfig embedded onClose={onClose} />)}
-            {sectionHost("sessions", <SessionsConfig embedded onClose={onClose} />)}
+            {sectionHost("sessions", <SessionsConfig embedded key={sessionManagementRequest?.serial ?? 0}
+              initialFilter={sessionManagementRequest?.filter}
+              initialProjectKey={sessionManagementRequest?.projectKey}
+              onSelectSession={onSelectSession}
+              onOperationBusyChange={setSessionsBusy}
+              onClose={onClose} />)}
             {sectionHost("ssh", <SshConfig embedded onClose={onClose} />)}
             {sectionHost("mcp", <McpConfig embedded key={cwd ?? "global"} cwd={cwd} sessionId={sessionId} onClose={onClose} onSessionReloaded={onSessionReloaded} />)}
             {sectionHost("usage", <UsagePanel translate={t} />)}

@@ -171,6 +171,14 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - While a run is active, `useAgentSession` periodically calls `GET /api/agent/[id]` and also reconciles on `visibilitychange`/`online`. This fixes missed terminal events from background tabs or half-open connections.
 - Prompt runs use a monotonic run id; late SSE or slow reconciliation responses from an old run must be ignored so they cannot resurrect stale streaming bubbles.
 
+### Session management and deletion
+- Pi Web-owned metadata lives in `getAgentDir()/pi-web/session-management.json`, not SDK session files or `settings.json`. `GET/PATCH/POST /api/session-management` are the only archive/pin/project-visibility writes; `useSessionManagement` shares synchronized state across sidebar/settings/windows.
+- Sessions are normal or archived. Archiving clears pins, does not stop runs, and does not close the selected chat. Archived viewing is read-only until explicit restoration; it must preserve live reconciliation, completion notifications, and parent-session stop/extension responses. Subagent views remain observational.
+- Removing a project entry changes only its sidebar visibility. Bulk archive is a separate action. Management shows all sessions/removed projects; opening does not restore. Explicit session restoration also makes its project visible.
+- Legacy hidden/archive/pin browser stores are read-only migration inputs. Back up exact raw values locally and on the server before import; import only unknown records and retain explicit restored decisions. Never reveal old hidden sessions before migration succeeds.
+- Permanent DELETE requires JSON `{ confirm: true }`. Clients confirm impact and delete sequentially, retaining failed rows and reporting partial results. Busy targets and loaded dependents are rejected rather than implicitly aborted. A per-ID deletion barrier protects Pi Web runtime startup/mutations/PATCH; cross-process DELETEs coordinate through a filesystem lock. External Pi CLI writes are not covered.
+- See `docs/adr/0005-unified-session-management.md` for persistence, migration, and deletion limitations.
+
 ### Chat turn rail
 - The rail renders the **whole-branch turn index**, not the loaded window: `GET /api/sessions/[id]` (and the first page of `.../context`) returns `turnIndex` built by `buildSessionTurnIndex()` in `lib/session-reader.ts`. Without it the rail only knew about the turns the client had lazy-loaded, so switching to a session showed just the last one or two.
 - `buildSessionTurnIndex()` must stay cheap: it uses its own text-only extractor instead of `entryToUiMessage()`, which normalizes tool calls and rewrites base64 media (seconds on sessions with large attachments). Roles that cannot anchor a turn are skipped, which keeps the turn list identical — verified against the full conversion path over real sessions.

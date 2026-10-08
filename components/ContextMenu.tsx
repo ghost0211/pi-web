@@ -8,6 +8,7 @@ export interface ContextMenuItem {
   label: string;
   icon?: ReactNode;
   danger?: boolean;
+  disabled?: boolean;
   checked?: boolean;
   onSelect: () => void;
 }
@@ -100,7 +101,9 @@ export function ContextMenu({ x, y, items, onClose, ariaLabel }: ContextMenuProp
           key={item.key}
           type="button"
           role="menuitem"
+          disabled={item.disabled}
           onClick={() => {
+            if (item.disabled) return;
             onClose();
             item.onSelect();
           }}
@@ -116,10 +119,12 @@ export function ContextMenu({ x, y, items, onClose, ariaLabel }: ContextMenuProp
             color: item.danger ? "#ef4444" : "var(--text)",
             fontSize: 12,
             textAlign: "left",
-            cursor: "pointer",
+            cursor: item.disabled ? "not-allowed" : "pointer",
+            opacity: item.disabled ? 0.5 : 1,
             whiteSpace: "nowrap",
           }}
           onMouseEnter={(event) => {
+            if (item.disabled) return;
             event.currentTarget.style.background = item.danger ? "rgba(239, 68, 68, 0.1)" : "var(--bg-hover)";
           }}
           onMouseLeave={(event) => {

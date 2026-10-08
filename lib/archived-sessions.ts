@@ -1,9 +1,7 @@
 /**
- * Browser-local archived-sessions store. Archiving removes a session from the
- * sidebar list without deleting data; the section "..." menu's "show archived"
- * toggle lists them again so they can be unarchived. Unlike hidden sessions
- * (managed in Settings → Sessions), archive state is meant for everyday
- * decluttering with quick restore from the sidebar itself.
+ * Legacy browser-local archive readers retained for backed-up migration.
+ * New UI writes exclusively through session-management-client/server metadata;
+ * it must not use these legacy writers or the old show-archived toggle.
  */
 
 const STORAGE_KEY = "pi-web:archived-sessions";

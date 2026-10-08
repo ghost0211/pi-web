@@ -1,6 +1,6 @@
 /**
- * Browser-local pinned-sessions store. Pinned sessions sort before unpinned
- * families inside their project group; pinning never hides anything.
+ * Legacy pin readers/writers retained for migration compatibility, plus the
+ * pure family-ordering helper. New UI stores pins via session-management-client.
  */
 
 const STORAGE_KEY = "pi-web:pinned-sessions";

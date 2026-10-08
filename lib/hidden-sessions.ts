@@ -1,7 +1,6 @@
 /**
- * Browser-local hidden-sessions store. Hiding removes a session from the
- * sidebar list; the Settings → Sessions panel lists all sessions (including
- * hidden ones) so they can be restored or permanently deleted.
+ * Legacy hidden-session readers retained for backed-up migration to archives.
+ * New UI has no hide-session action and must not write this browser-local store.
  */
 
 const STORAGE_KEY = "pi-web:hidden-sessions";

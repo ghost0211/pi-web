@@ -1,10 +1,14 @@
 import type { LocalePlugin } from "../types";
+import { sessionsManagerMessagesEn } from "../../session-management-messages";
+import { sessionSidebarMessagesEn } from "../../session-sidebar-messages";
 
 /** Pi Web 内置英语语言包。 */
 export const enLocale: LocalePlugin = {
   id: "en",
   label: "English",
   messages: {
+    ...sessionsManagerMessagesEn,
+    ...sessionSidebarMessagesEn,
     "settings.codemode.title": "Codemode (advanced)",
     "settings.codemode.description": "Enable Codemode from Tools → Custom. These global defaults do not enable tools; trusted project settings can override them. Reload existing sessions after saving.",
     "settings.codemode.mode": "Mode",

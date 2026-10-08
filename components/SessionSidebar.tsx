@@ -4,25 +4,18 @@ import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, typ
 import type { SessionInfo } from "@/lib/types";
 import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
+import { orderFamiliesWithPinned } from "@/lib/pinned-sessions";
+import { useSessionManagement } from "@/hooks/useSessionManagement";
+import { SESSION_CATALOG_CHANGED_EVENT } from "@/lib/session-management-client";
 import {
-  orderFamiliesWithPinned,
-  PINNED_SESSIONS_CHANGED_EVENT,
-  readPinnedSessionIds,
-  removePinnedSession,
-  togglePinnedSession,
-} from "@/lib/pinned-sessions";
-import {
-  ARCHIVED_SESSIONS_CHANGED_EVENT,
-  readArchivedSessionIds,
-  readShowArchivedSessions,
-  toggleArchivedSession,
-  writeShowArchivedSessions,
-} from "@/lib/archived-sessions";
+  OPEN_SESSION_MANAGEMENT_EVENT,
+  emptySessionManagementState,
+  type OpenSessionManagementDetail,
+  type SessionManagementAction,
+} from "@/lib/session-management-types";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
-import { readHiddenProjects, addHiddenProject } from "@/lib/hidden-projects";
-import { readHiddenSessions, addHiddenSession, addHiddenSessions } from "@/lib/hidden-sessions";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
@@ -94,7 +87,7 @@ export function getVisibleRowIndices(
 type SidebarRow = SidebarVirtualRow & (
   | { kind: "project"; project: { key: string; root: string }; isCollapsed: boolean }
   | { kind: "session"; family: SessionFamily; projectKey: string }
-  | { kind: "empty" }
+  | { kind: "empty"; projectKey: string }
   | { kind: "more"; projectKey: string; expanded: boolean }
 );
 
@@ -114,7 +107,6 @@ interface Props {
   skipInitialProjectSelection?: boolean;
   onInitialRestoreDone?: () => void;
   refreshKey?: number;
-  onSessionDeleted?: (sessionId: string) => void;
   selectedCwd?: string | null;
   onCwdChange?: (
     cwd: string | null,
@@ -310,9 +302,38 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, onToggleSidebar }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, selectedCwd: selectedCwdProp, onCwdChange, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, onToggleSidebar }: Props) {
   const { t } = useI18n();
+  const management = useSessionManagement();
+  const { ready: managementReady, update: updateManagement } = management;
+  const managementState = useMemo(() => management.state ?? emptySessionManagementState(), [management.state]);
+  const [managementBusy, setManagementBusy] = useState(false);
+  const [managementActionError, setManagementActionError] = useState<string | null>(null);
+  const managementBusyRef = useRef(false);
+  const pinnedSessionIds = useMemo(() => new Set(Object.entries(managementState.sessions)
+    .filter(([, state]) => state.status === "active" && state.pinned).map(([id]) => id)), [managementState]);
+  const archivedSessionIds = useMemo(() => new Set(Object.entries(managementState.sessions)
+    .filter(([, state]) => state.status === "archived").map(([id]) => id)), [managementState]);
+  const removedProjects = useMemo(() => new Set(Object.entries(managementState.projects)
+    .filter(([, state]) => state.removed).map(([key]) => key)), [managementState]);
+  const runManagementAction = useCallback(async (action: SessionManagementAction) => {
+    if (!managementReady || managementBusyRef.current) return;
+    managementBusyRef.current = true;
+    setManagementBusy(true);
+    setManagementActionError(null);
+    try { await updateManagement(action); }
+    catch (cause) { setManagementActionError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { managementBusyRef.current = false; setManagementBusy(false); }
+  }, [managementReady, updateManagement]);
+  const openSessionManagement = useCallback((detail: OpenSessionManagementDetail) => {
+    window.dispatchEvent(new CustomEvent(OPEN_SESSION_MANAGEMENT_EVENT, { detail }));
+  }, []);
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
+  const deletedSessionIdsRef = useRef(new Set<string>());
+  const visibleSearchSessionIds = useMemo(() => new Set(listSessionFamilies(allSessions)
+    .filter((family) => !archivedSessionIds.has(family.root.id) && !removedProjects.has(workspaceKeyOf(family.root)))
+    .flatMap((family) => [family.root, ...family.subagents]).filter((session) => !archivedSessionIds.has(session.id)).map((session) => session.id)),
+  [allSessions, archivedSessionIds, removedProjects]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
@@ -427,7 +448,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         runningSessionIds?: string[];
         completionNotificationSuppressedSessionIds?: string[];
       };
-      setAllSessions(data.sessions);
+      const loadedSessions = data.sessions.filter((session) => !deletedSessionIdsRef.current.has(session.id));
+      setAllSessions(loadedSessions);
       // Treat the fetched running set as an initial fallback only. Once the
       // lightweight poll is live, a slow session-list fetch cannot overwrite it.
       if (!runningPollAuthoritativeRef.current) {
@@ -439,7 +461,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       // Drop markers for deleted sessions and for subagents, whose completion
       // is intentionally silent even if an older client marked them unread.
       const unreadEligibleIds = new Set(
-        data.sessions
+        loadedSessions
           .filter((session) => session.relation?.kind !== "subagent")
           .map((session) => session.id),
       );
@@ -454,13 +476,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
         sessionRefreshTimerRef.current = setTimeout(() => setSessionRefreshDone(false), 2000);
       }
-      return data.sessions;
+      return loadedSessions;
     } catch (e) {
       setError(String(e));
       return [];
     } finally {
       if (showLoading) setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    const onCatalogChanged = (event: Event) => {
+      const ids = (event as CustomEvent<{ deletedIds: string[] }>).detail?.deletedIds;
+      if (!Array.isArray(ids)) return;
+      ids.forEach((id) => deletedSessionIdsRef.current.add(id));
+      setAllSessions((current) => current.filter((session) => !deletedSessionIdsRef.current.has(session.id)));
+      setRunningSessionIds((current) => new Set([...current].filter((id) => !deletedSessionIdsRef.current.has(id))));
+      setUnreadSessionIds((current) => new Set([...current].filter((id) => !deletedSessionIdsRef.current.has(id))));
+    };
+    window.addEventListener(SESSION_CATALOG_CHANGED_EVENT, onCatalogChanged);
+    return () => window.removeEventListener(SESSION_CATALOG_CHANGED_EVENT, onCatalogChanged);
   }, []);
 
   const initialLoadDone = useRef(false);
@@ -569,7 +604,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         .map((session) => session.id),
     );
     const completedWithNotifications = completedInBackground.filter(
-      (id) => !previousSuppressedCompletionSessionIdsRef.current.has(id) && !knownSubagentIds.has(id),
+      (id) => !previousSuppressedCompletionSessionIdsRef.current.has(id) && !knownSubagentIds.has(id) && !deletedSessionIdsRef.current.has(id),
     );
     const newlyRunning = [...runningSessionIds].filter((id) => !previous.has(id));
 
@@ -886,56 +921,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [projectMenu, setProjectMenu] = useState<{ key: string; root: string; x: number; y: number } | null>(null);
   const [sessionMenu, setSessionMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const rowActionsRef = useRef(new Map<string, SessionRowActions>());
-  const [pinnedSessionIds, setPinnedSessionIds] = useState<Set<string>>(() => new Set(readPinnedSessionIds()));
-  const [archivedSessionIds, setArchivedSessionIds] = useState<Set<string>>(() => new Set(readArchivedSessionIds()));
-  const [showArchived, setShowArchived] = useState<boolean>(() => readShowArchivedSessions());
-  const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
-    // Normalized over the legacy bare-array format; only keys matter here.
-    return new Set(readHiddenProjects().map((entry) => entry.key));
-  });
-  const [hiddenSessions, setHiddenSessions] = useState<Set<string>>(() => {
-    return new Set(readHiddenSessions().map((entry) => entry.id));
-  });
-
-  // Keep hide state in sync when another component (e.g. Settings → Sessions)
-  // writes to localStorage in the same tab or another tab.
-  useEffect(() => {
-    const refreshHidden = () => {
-      setHiddenProjects(new Set(readHiddenProjects().map((entry) => entry.key)));
-      setHiddenSessions(new Set(readHiddenSessions().map((entry) => entry.id)));
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== "pi-web:hidden-projects" && event.key !== "pi-web:hidden-sessions") return;
-      refreshHidden();
-    };
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("pi-web:hidden-state-changed", refreshHidden);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("pi-web:hidden-state-changed", refreshHidden);
-    };
-  }, []);
-
-  // Keep pin/archive state in sync with writes from other components or tabs.
-  useEffect(() => {
-    const refreshPinArchive = () => {
-      setPinnedSessionIds(new Set(readPinnedSessionIds()));
-      setArchivedSessionIds(new Set(readArchivedSessionIds()));
-      setShowArchived(readShowArchivedSessions());
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === "pi-web:pinned-sessions" || event.key === "pi-web:archived-sessions" || event.key === "pi-web:show-archived-sessions") refreshPinArchive();
-    };
-    window.addEventListener("storage", onStorage);
-    window.addEventListener(PINNED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
-    window.addEventListener(ARCHIVED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener(PINNED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
-      window.removeEventListener(ARCHIVED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
-    };
-  }, []);
-
   const registerSessionRowActions = useCallback((id: string, actions: SessionRowActions | null) => {
     const map = rowActionsRef.current;
     if (actions) map.set(id, actions);
@@ -943,56 +928,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, []);
 
   const handleTogglePinSession = useCallback((sessionId: string) => {
-    togglePinnedSession(sessionId);
-    setPinnedSessionIds(new Set(readPinnedSessionIds()));
-  }, []);
+    void runManagementAction({ type: "sessions", ids: [sessionId], pinned: !pinnedSessionIds.has(sessionId) });
+  }, [runManagementAction, pinnedSessionIds]);
 
-  const handleToggleArchiveSession = useCallback((sessionId: string) => {
-    const archived = toggleArchivedSession(sessionId);
-    if (archived) removePinnedSession(sessionId);
-    setArchivedSessionIds(new Set(readArchivedSessionIds()));
-    setPinnedSessionIds(new Set(readPinnedSessionIds()));
-  }, []);
+  const handleArchiveSession = useCallback((sessionId: string) => {
+    // Archive affects presentation only: don't close the chat or stop a run.
+    void runManagementAction({ type: "sessions", ids: [sessionId], status: "archived" });
+  }, [runManagementAction]);
 
-  const handleToggleShowArchived = useCallback(() => {
-    const next = !readShowArchivedSessions();
-    writeShowArchivedSessions(next);
-    setShowArchived(next);
-  }, []);
+  const handleRemoveProject = useCallback((projectKey: string, root: string) => {
+    // Removing an entry never archives/deletes its sessions or closes a chat.
+    void runManagementAction({ type: "project", key: projectKey, root, removed: true });
+  }, [runManagementAction]);
 
-  const handleRemoveProject = useCallback((projectKey: string, root?: string) => {
-    // Hide the project AND every session under it, so restoring a single
-    // session later can keep the others hidden.
-    addHiddenProject({ key: projectKey, ...(root ? { root } : {}) });
-    const sessionsInProject = allSessions
-      .filter((session) => workspaceKeyOf(session) === projectKey)
-      .map((session) => ({ id: session.id, projectKey }));
-    if (sessionsInProject.length) addHiddenSessions(sessionsInProject);
-    setHiddenProjects((prev) => new Set(prev).add(projectKey));
-    setHiddenSessions((prev) => new Set([...prev, ...sessionsInProject.map((s) => s.id)]));
-    if (selectedSessionId && sessionsInProject.some((session) => session.id === selectedSessionId)) {
-      onSessionDeleted?.(selectedSessionId);
-    }
-    setProjectMenu(null);
-  }, [allSessions, onSessionDeleted, selectedSessionId]);
-
-  const handlePermanentlyRemoveProject = useCallback(async (projectKey: string) => {
-    // Delete every persisted session file belonging to this project.
-    const toDelete = allSessions.filter((session) => workspaceKeyOf(session) === projectKey);
-    await Promise.allSettled(toDelete.map((session) => (
-      fetch(`/api/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" })
-    )));
-    // Also remove any hide records so the project is fully gone.
-    setHiddenProjects((prev) => { const next = new Set(prev); next.delete(projectKey); return next; });
-    setProjectMenu(null);
-    await loadSessions();
-  }, [allSessions, loadSessions]);
-
-  const handleHideSession = useCallback((sessionId: string, projectKey?: string) => {
-    addHiddenSession({ id: sessionId, ...(projectKey ? { projectKey } : {}) });
-    setHiddenSessions((prev) => new Set(prev).add(sessionId));
-    onSessionDeleted?.(sessionId);
-  }, [onSessionDeleted]);
+  const handleArchiveProject = useCallback((projectKey: string) => {
+    const ids = allSessions.filter((session) => workspaceKeyOf(session) === projectKey
+      && !session.transient && !archivedSessionIds.has(session.id)).map((session) => session.id);
+    if (ids.length) void runManagementAction({ type: "sessions", ids, status: "archived" });
+  }, [allSessions, archivedSessionIds, runManagementAction]);
 
   const handleCopyProjectPath = useCallback(async (root: string) => {
     setProjectMenu(null);
@@ -1057,8 +1010,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (selectedProject && !list.some((p) => p.key === selectedProject.key)) {
       list.unshift({ key: selectedProject.key, root: selectedProject.root });
     }
-    return list.filter((p) => !hiddenProjects.has(p.key));
-  }, [recentProjects, selectedProject, hiddenProjects]);
+    return list.filter((p) => !removedProjects.has(p.key));
+  }, [recentProjects, selectedProject, removedProjects]);
 
   // Per-project activity counts (running / unread) for the workspace selector.
   // Uses the same stable server key as the project list and filtering.
@@ -1110,6 +1063,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // expand/empty rows laid out with cumulative tops (see #626; adapted to the
   // fork's project-grouped sidebar).
   const sidebarRows = useMemo(() => {
+    // Until legacy migration is acknowledged, never reveal old hidden rows.
+    if (!managementReady) return { rows: [] as SidebarRow[], totalHeight: 0 };
     const rows: SidebarRow[] = [];
     let top = 0;
     const q = sessionSearch.trim().toLowerCase();
@@ -1129,8 +1084,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               });
             })
           : projectFamilies
-        ).filter((family) => !hiddenSessions.has(family.root.id)
-          && (showArchived || !archivedSessionIds.has(family.root.id))),
+        ).filter((family) => !archivedSessionIds.has(family.root.id)),
         pinnedSessionIds,
       );
       if (q && visibleProjectFamilies.length === 0) continue;
@@ -1138,7 +1092,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       top += PROJECT_HEADER_HEIGHT;
       if (!isCollapsed) {
         if (visibleProjectFamilies.length === 0) {
-          rows.push({ kind: "empty", key: `empty:${project.key}`, top, height: PROJECT_EMPTY_HEIGHT });
+          rows.push({ kind: "empty", key: `empty:${project.key}`, top, height: PROJECT_EMPTY_HEIGHT, projectKey: project.key });
           top += PROJECT_EMPTY_HEIGHT;
         } else {
           const expanded = q !== "" || expandedProjectSessions.has(project.key);
@@ -1156,7 +1110,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       top += PROJECT_TRAILING_HEIGHT;
     }
     return { rows, totalHeight: top };
-  }, [allProjects, collapsedProjects, sessionsByProject, sessionSearch, hiddenSessions, expandedProjectSessions, pinnedSessionIds, archivedSessionIds, showArchived]);
+  }, [allProjects, collapsedProjects, sessionsByProject, sessionSearch, expandedProjectSessions, pinnedSessionIds, archivedSessionIds, managementReady]);
 
   const visibleRowIndices = getVisibleRowIndices(sidebarRows.rows, listScrollTop, listViewportH, focusedRowKey);
 
@@ -1401,9 +1355,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {!contentSearchBusy && !contentSearchError && contentMatches.length === 0 && (
               <div style={{ padding: "4px 9px 9px", color: "var(--text-dim)", fontSize: 11 }}>{t("sidebar.noContentMatches")}</div>
             )}
-            {contentMatches.filter((match) => !hiddenSessions.has(match.sessionId)).map((match) => {
+            {contentMatches.filter((match) => managementReady && visibleSearchSessionIds.has(match.sessionId)).map((match) => {
               const found = allSessions.find((s) => s.id === match.sessionId);
-              if (!found) return null;
+              if (!found || removedProjects.has(workspaceKeyOf(found))) return null;
               return (
                 <button key={`${match.sessionId}:${match.entryId}`} type="button"
                   onClick={() => handleSelectSessionFromList(found, match.turnEntryId || match.entryId)}
@@ -1684,9 +1638,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
                     <button
                       type="button"
+                      onClick={() => { setListMenuOpen(false); openSessionManagement({ filter: "all" }); }}
+                      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "6px 10px", background: "none", border: "none", borderRadius: 6, color: "var(--text)", fontSize: 12, textAlign: "left", cursor: "pointer" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
+                      <span>{t("sessionSidebar.manageSessions")}</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => {
                         setListMenuOpen(false);
-                        handleToggleShowArchived();
+                        openSessionManagement({ filter: "archived" });
                       }}
                       style={{
                         display: "flex", alignItems: "center", gap: 8,
@@ -1702,12 +1666,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                         <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
                         <line x1="10" y1="12" x2="14" y2="12" />
                       </svg>
-                      <span style={{ flex: 1 }}>{t("sidebar.showArchived")}</span>
-                      {showArchived && (
-                        <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="1.5 5 4 7.5 8.5 2.5" />
-                        </svg>
-                      )}
+                      <span>{t("sessionSidebar.archivedEntry")}</span>
                     </button>
 
                     <button
@@ -1736,7 +1695,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             </div>
           );
         })()}
-        {loading && (
+        {(loading || management.loading) && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.loading")}
           </div>
@@ -1746,9 +1705,19 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {error}
           </div>
         )}
-        {!loading && !error && allProjects.length === 0 && (
+        {(management.error || managementActionError) && (
+          <div role="alert" style={{ padding: "12px 14px", color: "#f87171", fontSize: 12 }}>
+            {managementActionError || management.error}
+            <button type="button" className="config-input" onClick={() => {
+              setManagementActionError(null);
+              void management.refresh().catch(() => {});
+            }} style={{ display: "block", marginTop: 6 }}>{t("sessionsManager.retry")}</button>
+          </div>
+        )}
+        {!loading && managementReady && !error && allProjects.length === 0 && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
-            {t("sidebar.noSessions")}
+            {allSessions.length ? t("sessionSidebar.noVisibleProjects") : t("sidebar.noSessions")}
+            {allSessions.length > 0 && <button type="button" onClick={() => openSessionManagement({ filter: "all" })} style={{ display: "block", marginTop: 6 }}>{t("sessionSidebar.manageSessions")}</button>}
           </div>
         )}
         {sidebarRows.rows.length > 0 && (
@@ -1950,7 +1919,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     key={row.key}
                     style={{ position: "absolute", top: row.top, left: 0, right: 0, height: row.height, display: "flex", alignItems: "center", padding: "0 28px", fontSize: 11, color: "var(--text-dim)" }}
                   >
-                    {t("sidebar.noSessions")}
+                    <span>{t("sessionSidebar.noActiveSessions")}</span>
+                    <button type="button" onClick={() => openSessionManagement({ filter: "archived", projectKey: row.projectKey })}
+                      style={{ marginLeft: 8, padding: 0, border: 0, background: "none", color: "var(--text-muted)", fontSize: 11, cursor: "pointer" }}>{t("sessionSidebar.archivedEntry")}</button>
                   </div>
                 );
               }
@@ -1995,14 +1966,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
                     onClick={() => handleSelectSessionFromList(family.root)}
                     onRenamed={loadSessions}
-                    onHide={(id) => {
-                      handleHideSession(id, row.projectKey);
-                      loadSessions();
-                    }}
                     pinned={pinnedSessionIds.has(family.root.id)}
-                    archived={archivedSessionIds.has(family.root.id)}
+                    actionsDisabled={managementBusy}
                     onTogglePin={() => handleTogglePinSession(family.root.id)}
-                    onToggleArchive={() => handleToggleArchiveSession(family.root.id)}
+                    onArchive={() => handleArchiveSession(family.root.id)}
                     onContextMenuOpen={(x, y) => {
                       setProjectMenu(null);
                       setSessionMenu({ id: family.root.id, x, y });
@@ -2023,8 +1990,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             items={projectMenuItems({
               newSession: () => startNewSessionForCwd(projectMenu.root),
               copyPath: () => void handleCopyProjectPath(projectMenu.root),
-              hideProject: () => handleRemoveProject(projectMenu.key, projectMenu.root),
-              removeProject: () => void handlePermanentlyRemoveProject(projectMenu.key),
+              manageSessions: () => openSessionManagement({ filter: "all", projectKey: projectMenu.key }),
+              archiveSessions: () => handleArchiveProject(projectMenu.key),
+              removeProject: () => handleRemoveProject(projectMenu.key, projectMenu.root),
+              sessionCount: allSessions.filter((session) => workspaceKeyOf(session) === projectMenu.key
+                && !session.transient && !archivedSessionIds.has(session.id)).length,
+              disabled: managementBusy || !managementReady,
             }, t)}
           />
         )}
@@ -2036,10 +2007,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             onClose={() => setSessionMenu(null)}
             items={sessionMenuItems({
               pinned: pinnedSessionIds.has(sessionMenu.id),
-              archived: archivedSessionIds.has(sessionMenu.id),
               actions: rowActionsRef.current.get(sessionMenu.id),
               togglePin: () => handleTogglePinSession(sessionMenu.id),
-              toggleArchive: () => handleToggleArchiveSession(sessionMenu.id),
+              archive: () => handleArchiveSession(sessionMenu.id),
+              manageSessions: () => openSessionManagement({ filter: "all" }),
+              disabled: managementBusy || !managementReady,
             }, t)}
           />
         )}
@@ -2118,7 +2090,6 @@ function UnreadSessionIndicator() {
  * (rendered at the sidebar root) can trigger its in-row rename/hide flows. */
 interface SessionRowActions {
   startRename: () => void;
-  requestHide: () => void;
 }
 
 const menuIconProps = {
@@ -2145,23 +2116,17 @@ const archiveIcon = (
     <line x1="10" y1="12" x2="14" y2="12" />
   </svg>
 );
-const archiveRestoreIcon = (
-  <svg {...menuIconProps}>
-    <rect x="2" y="3" width="20" height="5" rx="1" />
-    <path d="M4 8v11a2 2 0 0 0 2 2h2" />
-    <path d="M20 8v11a2 2 0 0 1-2 2h-2" />
-    <path d="m9 15 3-3 3 3" />
-    <path d="M12 12v9" />
-  </svg>
-);
 
 /** Items of the project-row context menu (right-click or the "..." button). */
 export function projectMenuItems(
   handlers: {
     newSession: () => void;
     copyPath: () => void;
-    hideProject: () => void;
+    manageSessions: () => void;
+    archiveSessions: () => void;
     removeProject: () => void;
+    sessionCount: number;
+    disabled?: boolean;
   },
   t: (key: string) => string,
 ): ContextMenuItem[] {
@@ -2189,28 +2154,29 @@ export function projectMenuItems(
       onSelect: handlers.copyPath,
     },
     {
-      key: "hide-project",
-      label: t("sidebar.hideProject"),
+      key: "manage-sessions",
+      label: t("sessionSidebar.manageProjectSessions"),
       icon: (
         <svg {...menuIconProps}>
-          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-          <line x1="2" y1="2" x2="22" y2="22" />
+          <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
         </svg>
       ),
-      onSelect: handlers.hideProject,
+      onSelect: handlers.manageSessions,
+    },
+    {
+      key: "archive-sessions",
+      label: `${t("sessionSidebar.archiveProjectSessions")} (${handlers.sessionCount})`,
+      icon: archiveIcon,
+      disabled: handlers.disabled || handlers.sessionCount === 0,
+      onSelect: handlers.archiveSessions,
     },
     {
       key: "remove-project",
-      label: t("sidebar.removeProjectPermanently"),
-      danger: true,
+      label: t("sessionSidebar.removeProjectEntry"),
+      disabled: handlers.disabled,
       icon: (
         <svg {...menuIconProps}>
-          <polyline points="3 6 5 6 21 6" />
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-          <path d="M10 11v6M14 11v6" />
-          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+          <path d="M20 9V8a2 2 0 0 0-2-2h-6l-2-3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h8M16 15l6 6M22 15l-6 6" />
         </svg>
       ),
       onSelect: handlers.removeProject,
@@ -2222,10 +2188,11 @@ export function projectMenuItems(
 export function sessionMenuItems(
   options: {
     pinned: boolean;
-    archived: boolean;
     actions?: SessionRowActions;
     togglePin: () => void;
-    toggleArchive: () => void;
+    archive: () => void;
+    manageSessions: () => void;
+    disabled?: boolean;
   },
   t: (key: string) => string,
 ): ContextMenuItem[] {
@@ -2244,27 +2211,25 @@ export function sessionMenuItems(
       key: "pin",
       label: t(options.pinned ? "sidebar.unpin" : "sidebar.pin"),
       icon: pinIcon,
+      disabled: options.disabled,
       onSelect: options.togglePin,
     },
     {
       key: "archive",
-      label: t(options.archived ? "sidebar.unarchive" : "sidebar.archive"),
-      icon: options.archived ? archiveRestoreIcon : archiveIcon,
-      onSelect: options.toggleArchive,
+      label: t("sidebar.archive"),
+      icon: archiveIcon,
+      disabled: options.disabled,
+      onSelect: options.archive,
     },
     {
-      key: "hide",
-      label: t("sidebar.delete"),
-      danger: true,
+      key: "manage",
+      label: t("sessionSidebar.manageSessions"),
       icon: (
         <svg {...menuIconProps}>
-          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-          <line x1="2" y1="2" x2="22" y2="22" />
+          <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
         </svg>
       ),
-      onSelect: () => options.actions?.requestHide(),
+      onSelect: options.manageSessions,
     },
   ];
 }
@@ -2318,15 +2283,14 @@ function SessionItem({
   isUnread,
   onClick,
   onRenamed,
-  onHide,
   depth = 0,
   hasChildren = false,
   collapsed = false,
   onToggleCollapse,
   pinned = false,
-  archived = false,
+  actionsDisabled = false,
   onTogglePin,
-  onToggleArchive,
+  onArchive,
   onContextMenuOpen,
   registerActions,
 }: {
@@ -2336,15 +2300,14 @@ function SessionItem({
   isUnread?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
-  onHide?: (id: string) => void;
   depth?: number;
   hasChildren?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   pinned?: boolean;
-  archived?: boolean;
+  actionsDisabled?: boolean;
   onTogglePin?: () => void;
-  onToggleArchive?: () => void;
+  onArchive?: () => void;
   onContextMenuOpen?: (x: number, y: number) => void;
   registerActions?: (actions: SessionRowActions | null) => void;
 }) {
@@ -2352,7 +2315,6 @@ function SessionItem({
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Select the whole name once the rename input is mounted (startRename's
@@ -2376,11 +2338,10 @@ function SessionItem({
     setRenaming(true);
   }, [session.name, session.transient, displayFirstMessage, session.id]);
 
-  // The context menu lives at the sidebar root; expose the in-row rename and
-  // hide-confirmation flows to it while this row is mounted.
+  // The portal context menu delegates rename to the mounted row.
   useEffect(() => {
     if (!registerActions) return;
-    registerActions({ startRename, requestHide: () => setConfirmDelete(true) });
+    registerActions({ startRename });
     return () => registerActions(null);
   }, [registerActions, startRename]);
 
@@ -2403,22 +2364,6 @@ function SessionItem({
       // ignore
     }
   }, [renameValue, session.id, session.name, onRenamed, title]);
-
-  const performDelete = useCallback(() => {
-    if (session.transient) return;
-    setConfirmDelete(false);
-    onHide?.(session.id);
-  }, [session.id, session.transient, onHide]);
-
-  const handleDeleteConfirm = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    performDelete();
-  }, [performDelete]);
-
-  const handleDeleteCancel = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setConfirmDelete(false);
-  }, []);
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const handled = dispatchSessionRowContextMenu({
@@ -2447,8 +2392,8 @@ function SessionItem({
   return (
     <div
       className="session-row"
-      onClick={confirmDelete || renaming ? undefined : onClick}
-      onContextMenu={confirmDelete || renaming ? undefined : handleContextMenu}
+      onClick={renaming ? undefined : onClick}
+      onContextMenu={renaming ? undefined : handleContextMenu}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
       style={{
@@ -2459,57 +2404,14 @@ function SessionItem({
         paddingLeft: depth > 0 ? depth * 12 + 8 : 10,
         paddingRight: 8,
         borderRadius: 6,
-        cursor: confirmDelete || renaming ? "default" : "pointer",
-        background: confirmDelete
-          ? "rgba(239,68,68,0.08)"
-          : isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
+        cursor: renaming ? "default" : "pointer",
+        background: isSelected ? "var(--bg-selected)" : hovered ? "var(--bg-hover)" : "transparent",
         transition: "background 0.12s ease",
         gap: 6,
         overflow: "hidden",
       }}
     >
-      {confirmDelete ? (
-        /* ── Delete confirmation: same height, two flat buttons ── */
-        <>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {t("sidebar.deleteSession", { title: title.slice(0, 22) + (title.length > 22 ? "…" : "") })}
-          </div>
-          <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
-            <button
-              onClick={handleDeleteConfirm}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
-                height: 30, padding: "0 11px",
-                background: "#ef4444", border: "none",
-                borderRadius: 6, color: "#fff",
-                cursor: "pointer", fontSize: 12, fontWeight: 600,
-                whiteSpace: "nowrap",
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-                <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-                <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-                <line x1="2" y1="2" x2="22" y2="22" />
-              </svg>
-              {t("sidebar.delete")}
-            </button>
-            <button
-              onClick={handleDeleteCancel}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center",
-                height: 30, padding: "0 11px",
-                background: "var(--bg)", border: "1px solid var(--border)",
-                borderRadius: 6, color: "var(--text-muted)",
-                cursor: "pointer", fontSize: 12, fontWeight: 500,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {t("sidebar.cancel")}
-            </button>
-          </div>
-        </>
-      ) : renaming ? (
+      {renaming ? (
         /* ── Rename: input fills the same row ── */
         <input
           ref={inputRef}
@@ -2603,6 +2505,7 @@ function SessionItem({
           {!session.transient && (
             <div className="session-row-actions" style={{ gap: 3, flexShrink: 0 }}>
               <button
+                disabled={actionsDisabled}
                 onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
                 title={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
                 aria-label={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
@@ -2629,9 +2532,10 @@ function SessionItem({
                 </svg>
               </button>
               <button
-                onClick={(e) => { e.stopPropagation(); onToggleArchive?.(); }}
-                title={t(archived ? "sidebar.unarchive" : "sidebar.archive")}
-                aria-label={t(archived ? "sidebar.unarchive" : "sidebar.archive")}
+                disabled={actionsDisabled}
+                onClick={(e) => { e.stopPropagation(); onArchive?.(); }}
+                title={t("sidebar.archive")}
+                aria-label={t("sidebar.archive")}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: 24, height: 24, padding: 0,
@@ -2649,21 +2553,11 @@ function SessionItem({
                   e.currentTarget.style.color = "var(--text-muted)";
                 }}
               >
-                {archived ? (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="2" y="3" width="20" height="5" rx="1" />
-                    <path d="M4 8v11a2 2 0 0 0 2 2h2" />
-                    <path d="M20 8v11a2 2 0 0 1-2 2h-2" />
-                    <path d="m9 15 3-3 3 3" />
-                    <path d="M12 12v9" />
-                  </svg>
-                ) : (
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="2" y="3" width="20" height="5" rx="1" />
-                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
-                    <line x1="10" y1="12" x2="14" y2="12" />
-                  </svg>
-                )}
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="20" height="5" rx="1" />
+                  <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                  <line x1="10" y1="12" x2="14" y2="12" />
+                </svg>
               </button>
             </div>
           )}

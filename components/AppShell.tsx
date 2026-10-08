@@ -17,6 +17,9 @@ import { AgentSessionPanel } from "./AgentSessionPanel";
 import { RunningTasksPanel, type RunningTaskPhase } from "./RunningTasksPanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
+import { useSessionManagement } from "@/hooks/useSessionManagement";
+import { SESSION_CATALOG_CHANGED_EVENT } from "@/lib/session-management-client";
+import { OPEN_SESSION_MANAGEMENT_EVENT, type OpenSessionManagementDetail } from "@/lib/session-management-types";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
@@ -108,9 +111,28 @@ export function AppShell() {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio, soundEnabledRef } = useAudio();
   const notifiedAttentionRequestIdsRef = useRef(new Set<string>());
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
+  const management = useSessionManagement();
+  const [archivedRestoring, setArchivedRestoring] = useState(false);
+  const archivedRestoringRef = useRef(false);
+  const [archiveRestoreError, setArchiveRestoreError] = useState<string | null>(null);
+  const selectedSessionArchived = Boolean(selectedSession
+    && management.state?.sessions[selectedSession.id]?.status === "archived");
+  const restoreSelectedSession = async () => {
+    if (!selectedSession || !management.ready || archivedRestoringRef.current) return;
+    archivedRestoringRef.current = true;
+    setArchivedRestoring(true);
+    setArchiveRestoreError(null);
+    try {
+      await management.update({ type: "sessions", ids: [selectedSession.id], status: "active",
+        restoreProjects: [workspaceKeyOf(selectedSession)] });
+    } catch (cause) { setArchiveRestoreError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { archivedRestoringRef.current = false; setArchivedRestoring(false); }
+  };
   const [sessionCatalog, setSessionCatalog] = useState<SessionInfo[]>([]);
+  const deletedSessionIdsRef = useRef(new Set<string>());
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
-    setSessionCatalog(sessions);
+    // An older list response must not resurrect an acknowledged deletion.
+    setSessionCatalog(sessions.filter((session) => !deletedSessionIdsRef.current.has(session.id)));
   }, []);
   const sessionsWithSelection = useMemo(() => {
     if (!selectedSession) return sessionCatalog;
@@ -146,6 +168,17 @@ export function AppShell() {
   const [searchJump, setSearchJump] = useState<{ entryId: string; requestId: number } | null>(null);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
+  const [sessionManagementRequest, setSessionManagementRequest] = useState<OpenSessionManagementDetail & { serial: number }>({ filter: "all", serial: 0 });
+  useEffect(() => {
+    const openManagement = (event: Event) => {
+      const detail = (event as CustomEvent<OpenSessionManagementDetail>).detail;
+      if (!detail || !["all", "active", "archived"].includes(detail.filter)) return;
+      setSessionManagementRequest((previous) => ({ ...detail, serial: previous.serial + 1 }));
+      setSettingsSection("sessions");
+    };
+    window.addEventListener(OPEN_SESSION_MANAGEMENT_EVENT, openManagement);
+    return () => window.removeEventListener(OPEN_SESSION_MANAGEMENT_EVENT, openManagement);
+  }, []);
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
@@ -981,6 +1014,28 @@ export function AppShell() {
     }
   }, [invalidateWorkspaceRestore, selectedSession, router]);
 
+  useEffect(() => {
+    const onCatalogChanged = (event: Event) => {
+      const deletedIds = (event as CustomEvent<{ deletedIds: string[] }>).detail?.deletedIds;
+      if (!Array.isArray(deletedIds) || !deletedIds.length) return;
+      const removed = new Set(deletedIds);
+      deletedIds.forEach((id) => deletedSessionIdsRef.current.add(id));
+      setSessionCatalog((current) => current.filter((session) => !removed.has(session.id)));
+      const remainingTabs = fileTabs.filter((tab) => !tab.subagentSessionId || !removed.has(tab.subagentSessionId));
+      if (remainingTabs.length !== fileTabs.length) {
+        setFileTabs(remainingTabs);
+        if (!remainingTabs.length) setRightPanelOpen(false);
+        if (activeFileTabId?.startsWith("subagent:") && removed.has(activeFileTabId.slice("subagent:".length))) {
+          setActiveFileTabId(remainingTabs[0]?.id ?? null);
+        }
+      }
+      if (selectedSession && removed.has(selectedSession.id)) handleSessionDeleted(selectedSession.id);
+      else setRefreshKey((key) => key + 1);
+    };
+    window.addEventListener(SESSION_CATALOG_CHANGED_EVENT, onCatalogChanged);
+    return () => window.removeEventListener(SESSION_CATALOG_CHANGED_EVENT, onCatalogChanged);
+  }, [handleSessionDeleted, selectedSession, fileTabs, activeFileTabId]);
+
   const handleOpenFile = useCallback((
     filePath: string,
     fileName: string,
@@ -1143,7 +1198,6 @@ export function AppShell() {
         skipInitialProjectSelection={initialNavigation.requestedCwd !== null}
         onInitialRestoreDone={handleInitialRestoreDone}
         refreshKey={refreshKey}
-        onSessionDeleted={handleSessionDeleted}
         selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
         onCwdChange={handleCwdChange}
         onOpenFile={handleOpenFile}
@@ -2700,6 +2754,15 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
+        {(archiveRestoreError || (selectedSession && management.error)) && (
+          <div role="alert" style={{ padding: "8px 16px", color: "#f87171", fontSize: 12 }}>
+            {archiveRestoreError || management.error}
+            <button type="button" onClick={() => {
+              setArchiveRestoreError(null);
+              void management.refresh().catch(() => {});
+            }} style={{ marginLeft: 10 }}>{translate("sessionsManager.retry")}</button>
+          </div>
+        )}
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {showChat ? (
@@ -2708,6 +2771,10 @@ export function AppShell() {
               session={selectedSession}
               searchJump={searchJump}
               sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
+              archived={selectedSessionArchived}
+              managementPending={Boolean(selectedSession && !management.ready)}
+              archivedRestoring={archivedRestoring}
+              onRestoreArchived={() => void restoreSelectedSession()}
               newSessionCwd={effectiveNewSessionCwd}
               newSessionDraftKey={newSessionDraftKey}
               onAgentEnd={handleAgentEnd}
@@ -2857,6 +2924,8 @@ export function AppShell() {
               <ChatWindow
                 key={activeFileTab.subagentSessionId}
                 readOnly
+                archived={management.state?.sessions[activeFileTab.subagentSessionId]?.status === "archived"}
+                managementPending={!management.ready}
                 session={activeFileTab.subagentSession ?? {
                   id: activeFileTab.subagentSessionId,
                   path: "",
@@ -2916,6 +2985,11 @@ export function AppShell() {
         cwd={projectTrustCwd}
         sessionId={selectedSession?.id ?? null}
         initialSection={settingsSection}
+        sessionManagementRequest={sessionManagementRequest}
+        onSelectSession={(session) => {
+          setSettingsSection(null);
+          handleAgentSessionSelect(session);
+        }}
         onClose={() => {
           setSettingsSection(null);
           setModelsRefreshKey((key) => key + 1);

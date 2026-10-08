@@ -1,10 +1,14 @@
 import type { LocalePlugin } from "../types";
+import { sessionsManagerMessagesZhCN } from "../../session-management-messages";
+import { sessionSidebarMessagesZhCN } from "../../session-sidebar-messages";
 
 /** Pi Web 内置简体中文语言包。 */
 export const zhCNLocale: LocalePlugin = {
   id: "zh-CN",
   label: "简体中文",
   messages: {
+    ...sessionsManagerMessagesZhCN,
+    ...sessionSidebarMessagesZhCN,
     "settings.codemode.title": "Codemode 高级设置",
     "settings.codemode.description": "在「工具 → 自定义」中选择 Codemode 后生效。此处仅调整全局默认行为，不启用工具；受信任项目的设置可覆盖这些值。保存后请重载已有会话。",
     "settings.codemode.mode": "运行模式",

@@ -40,6 +40,12 @@ interface Props {
   sessionRunning?: boolean;
   /** Sub-agent tabs are observational: only their parent agent can send commands. */
   readOnly?: boolean;
+  /** Archived sessions remain live/observable but cannot be changed or sent to. */
+  archived?: boolean;
+  /** Fail closed until server metadata and legacy migration are acknowledged. */
+  managementPending?: boolean;
+  archivedRestoring?: boolean;
+  onRestoreArchived?: () => void;
   newSessionCwd: string | null;
   newSessionDraftKey: string | null;
   onAgentEnd?: (info?: AgentEndInfo) => void;
@@ -206,7 +212,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, searchJump, sessionRunning, readOnly = false, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenGitDiff, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
+export function ChatWindow({ session, searchJump, sessionRunning, readOnly = false, archived = false, managementPending = false, archivedRestoring = false, onRestoreArchived, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenGitDiff, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
@@ -224,6 +230,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     return () => document.removeEventListener("mousedown", handler);
   }, [projectMenuOpen]);
   const isReadOnlySubagent = readOnly || session?.relation?.kind === "subagent";
+  const isReadOnlyConversation = isReadOnlySubagent || archived || managementPending;
+  const isReadOnlyConversationRef = useRef(isReadOnlyConversation);
+  isReadOnlyConversationRef.current = isReadOnlyConversation;
   const completionNotificationsEnabled = !isReadOnlySubagent;
 
   // Wrap onAgentEnd to play the completion sound. This is more reliable than
@@ -248,6 +257,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
 
   // 稳定化 onEditContent 引用，配合 React.memo 防止历史消息重渲染
   const handleEditContent = useCallback((message: UserMessage) => {
+    if (isReadOnlyConversationRef.current) return;
     chatInputRef?.current?.replaceMessage(message);
   }, [chatInputRef]);
 
@@ -278,6 +288,22 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
   // Keep the notification snippet source current (see wrappedOnAgentEnd).
   messagesForNotifyRef.current = messages;
   const sessionBusy = agentRunning || bashRunning;
+  const handleConversationSend = useCallback(async (...args: Parameters<typeof handleSend>) => {
+    if (isReadOnlyConversationRef.current) return;
+    await handleSend(...args);
+  }, [handleSend]);
+  const handleConversationFork = useCallback((entryId: string) => {
+    if (isReadOnlyConversationRef.current) return;
+    return handleFork(entryId);
+  }, [handleFork]);
+  const handleConversationNavigate = useCallback((entryId: string) => {
+    if (isReadOnlyConversationRef.current) return;
+    return handleNavigate(entryId);
+  }, [handleNavigate]);
+  const handleConversationBuiltinSlashCommand = useCallback(async (text: string) => {
+    if (isReadOnlyConversationRef.current) return { handled: false };
+    return handleBuiltinSlashCommand(text);
+  }, [handleBuiltinSlashCommand]);
 
   useEffect(() => {
     if (
@@ -389,11 +415,11 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
   useEffect(() => () => { onContextUsageChange?.(null); }, [onContextUsageChange]);
 
   const onDrop = useCallback((files: File[]) => {
-    if (!isReadOnlySubagent) chatInputRef?.current?.addFiles(files);
-  }, [chatInputRef, isReadOnlySubagent]);
+    if (!isReadOnlyConversationRef.current) chatInputRef?.current?.addFiles(files);
+  }, [chatInputRef]);
   const onDesktopPathDrop = useCallback((paths: string[]) => {
-    if (!isReadOnlySubagent) chatInputRef?.current?.addLocalFiles(paths);
-  }, [chatInputRef, isReadOnlySubagent]);
+    if (!isReadOnlyConversationRef.current) chatInputRef?.current?.addLocalFiles(paths);
+  }, [chatInputRef]);
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop, onDesktopPathDrop);
 
@@ -591,14 +617,37 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       {t("subagent.readOnly")}
     </div>
   );
+  const managementPendingNotice = (
+    <div role="status" data-session-status-pending="true" style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
+      {t("sessionSidebar.checkingStatus")}
+      {sessionBusy && !isReadOnlySubagent && <button type="button" onClick={handleAbort} style={{ marginLeft: 12 }}>{t("chat.stopAgent")}</button>}
+    </div>
+  );
+  const archivedReadOnlyNotice = (
+    <div role="status" data-archived-read-only="true" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 16px", borderTop: "1px solid var(--border)", background: "var(--bg-panel)", color: "var(--text-muted)", fontSize: 12 }}>
+      <span>{t("sessionSidebar.archivedReadOnly")}</span>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        {sessionBusy && !isReadOnlySubagent && (
+          <button type="button" onClick={handleAbort} aria-label={t("chat.stopAgent")} title={t("chat.stopAgent")} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-muted)", cursor: "pointer" }}>
+            {t("chat.stopAgent")}
+          </button>
+        )}
+        {!isReadOnlySubagent && (
+          <button type="button" onClick={onRestoreArchived} disabled={archivedRestoring || !onRestoreArchived} aria-busy={archivedRestoring || undefined} style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid var(--accent)", background: "var(--accent)", color: "#fff", cursor: archivedRestoring || !onRestoreArchived ? "not-allowed" : "pointer", opacity: archivedRestoring || !onRestoreArchived ? 0.6 : 1 }}>
+            {t("sessionSidebar.restoreContinue")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
   const chatInputElement = (
     <ChatInput
       ref={chatInputRef}
-      onSend={handleSend}
+      onSend={handleConversationSend}
       onAbort={handleAbort}
-      onSteer={agentRunning ? handleSteer : undefined}
-      onFollowUp={agentRunning ? handleFollowUp : undefined}
-      onPromptWithStreamingBehavior={agentRunning ? handlePromptWithStreamingBehavior : undefined}
+      onSteer={!isReadOnlyConversation && agentRunning ? handleSteer : undefined}
+      onFollowUp={!isReadOnlyConversation && agentRunning ? handleFollowUp : undefined}
+      onPromptWithStreamingBehavior={!isReadOnlyConversation && agentRunning ? handlePromptWithStreamingBehavior : undefined}
       isStreaming={sessionBusy}
       model={displayModelValue}
       isAutoModelSelection={isAutoModelSelection}
@@ -606,31 +655,31 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       modelList={modelList}
       modelError={modelError}
       modelScopeWarnings={modelScopeWarnings}
-      onModelChange={handleModelChange}
+      onModelChange={isReadOnlyConversation ? undefined : handleModelChange}
       modelSwitching={modelSwitching}
-      onCompact={session || isNew ? handleCompact : undefined}
-      onAbortCompaction={handleAbortCompaction}
+      onCompact={!isReadOnlyConversation && (session || isNew) ? handleCompact : undefined}
+      onAbortCompaction={isReadOnlyConversation ? undefined : handleAbortCompaction}
       isCompacting={isCompacting}
       compactError={compactError}
       compactResult={compactResult}
       toolPreset={toolPreset}
       customToolNames={customToolNames}
-      onToolPresetChange={session || isNew ? handleToolPresetChange : undefined}
-      onCustomToolsChange={session || isNew ? handleCustomToolsChange : undefined}
+      onToolPresetChange={!isReadOnlyConversation && (session || isNew) ? handleToolPresetChange : undefined}
+      onCustomToolsChange={!isReadOnlyConversation && (session || isNew) ? handleCustomToolsChange : undefined}
       ephemeral={ephemeral}
-      onEphemeralChange={isNew && !session ? setEphemeral : undefined}
+      onEphemeralChange={!isReadOnlyConversation && isNew && !session ? setEphemeral : undefined}
       thinkingLevel={thinkingLevel}
-      onThinkingLevelChange={session || isNew ? handleThinkingLevelChange : undefined}
+      onThinkingLevelChange={!isReadOnlyConversation && (session || isNew) ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
       thinkingLevelMap={currentThinkingLevelMap}
       retryInfo={retryInfo}
       queuedMessages={queuedMessages}
       inputHistory={inputHistory}
-      onRecallQueue={handleRecallQueue}
+      onRecallQueue={isReadOnlyConversation ? undefined : handleRecallQueue}
       slashCommands={slashCommands}
       slashCommandsLoading={slashCommandsLoading}
       onLoadSlashCommands={loadSlashCommands}
-      onBuiltinCommand={handleBuiltinSlashCommand}
+      onBuiltinCommand={handleConversationBuiltinSlashCommand}
       contextUsage={contextUsage}
       sessionStats={sessionStats}
       soundEnabled={soundEnabled}
@@ -661,12 +710,12 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     <div
       className="relative flex h-full min-w-0 flex-col overflow-hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      onDragEnter={isReadOnlySubagent ? undefined : handleDragEnter}
-      onDragOver={isReadOnlySubagent ? undefined : handleDragOver}
-      onDragLeave={isReadOnlySubagent ? undefined : handleDragLeave}
-      onDrop={isReadOnlySubagent ? undefined : handleDrop}
+      onDragEnter={isReadOnlyConversation ? undefined : handleDragEnter}
+      onDragOver={isReadOnlyConversation ? undefined : handleDragOver}
+      onDragLeave={isReadOnlyConversation ? undefined : handleDragLeave}
+      onDrop={isReadOnlyConversation ? undefined : handleDrop}
     >
-      {isDragOver && (
+      {isDragOver && !isReadOnlyConversation && (
         <div className="pointer-events-none absolute inset-0 z-50 flex animate-[drop-zone-in_0.15s_ease_both] items-center justify-center bg-[rgba(37,99,235,0.06)] backdrop-blur-[1px]">
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             {[0, 0.8, 1.6].map((delay) => (
@@ -739,9 +788,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               </p>
             </div>
 
-            {isReadOnlySubagent ? readOnlyNotice : chatInputElement}
+            {managementPending ? managementPendingNotice : archived ? archivedReadOnlyNotice : isReadOnlySubagent ? readOnlyNotice : chatInputElement}
 
-            {messageCwd && !isReadOnlySubagent && (
+            {messageCwd && !isReadOnlyConversation && (
               <div ref={projectMenuRef} className="relative mx-4 -mt-2">
                 <button
                   type="button"
@@ -815,7 +864,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               </div>
             )}
 
-            {dirPickerOpen && (
+            {!isReadOnlyConversation && dirPickerOpen && (
               <DirectoryPicker
                 initialPath={messageCwd}
                 onCancel={() => setDirPickerOpen(false)}
@@ -826,7 +875,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               />
             )}
 
-            {remotePickerOpen && (
+            {!isReadOnlyConversation && remotePickerOpen && (
               <RemoteDirPicker
                 onCancel={() => setRemotePickerOpen(false)}
                 onSelect={(localPath) => {
@@ -836,7 +885,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               />
             )}
 
-            {!isReadOnlySubagent && <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />}
+            {!isReadOnlyConversation && <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />}
           </div>
         </div>
       ) : (
@@ -923,11 +972,11 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     onOpenFile={onOpenFile}
                     onOpenSession={onOpenSession}
                     entryId={entryIds[idx]}
-                    onFork={isReadOnlySubagent || sessionBusy || isNew ? undefined : handleFork}
+                    onFork={isReadOnlyConversation || sessionBusy || isNew ? undefined : handleConversationFork}
                     forking={forkingEntryId === entryIds[idx]}
-                    onNavigate={isReadOnlySubagent || sessionBusy ? undefined : handleNavigate}
-                    prevAssistantEntryId={isReadOnlySubagent || sessionBusy ? undefined : prevAssistantEntryId}
-                    onEditContent={isReadOnlySubagent ? undefined : handleEditContent}
+                    onNavigate={isReadOnlyConversation || sessionBusy ? undefined : handleConversationNavigate}
+                    prevAssistantEntryId={isReadOnlyConversation || sessionBusy ? undefined : prevAssistantEntryId}
+                    onEditContent={isReadOnlyConversation ? undefined : handleEditContent}
                     showTimestamp={showTimestamp}
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
                     sessionId={session?.id ?? sessionIdRef.current ?? undefined}
@@ -1105,7 +1154,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
           onOpenSession={onOpenSession}
           fallbackPlan={data?.history?.latestPlan ?? data?.context?.latestPlan}
         />
-        {isReadOnlySubagent ? readOnlyNotice : (
+        {managementPending ? managementPendingNotice : archived ? archivedReadOnlyNotice : isReadOnlySubagent ? readOnlyNotice : (
           <>
             {chatInputElement}
             <ExtensionStatusBar statuses={extensionStatuses} widgets={extensionWidgets} />

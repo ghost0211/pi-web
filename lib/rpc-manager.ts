@@ -4,6 +4,7 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { sessionPathKey } from "./session-path";
 import { validateAgentImages } from "./image-attachments";
 import { createBinaryAttachmentExtension } from "./attachment-extension";
 import {
@@ -12,6 +13,7 @@ import {
   type SystemPromptState,
 } from "./system-prompt-extension";
 import { invalidateModelsCache } from "./models-cache";
+import { withSessionMutationGuard } from "./session-deletion-guard";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
 import {
   createProjectCommandBashExtension,
@@ -147,6 +149,13 @@ const IDLE_RESET_EVENT_TYPES = new Set([
 ]);
 
 const SESSION_REPLACEMENT_COMMAND_TYPES = new Set(["fork", "clone"]);
+const SESSION_READ_ONLY_COMMAND_TYPES = new Set([
+  "get_state",
+  "get_session_stats",
+  "get_last_assistant_text",
+  "get_tools",
+  "get_commands",
+]);
 const COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT = new Set([
   "get_state",
   "get_session_stats",
@@ -708,6 +717,12 @@ export class AgentSessionWrapper {
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
+    const type = command.type as string;
+    if (SESSION_READ_ONLY_COMMAND_TYPES.has(type)) return this.sendWithoutDeletionGuard(command);
+    return withSessionMutationGuard(this.sessionId, () => this.sendWithoutDeletionGuard(command));
+  }
+
+  private async sendWithoutDeletionGuard(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
     const allowedDuringReplacement = COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT.has(type);
     if (this.mcpActionPending && !allowedDuringReplacement && type !== "abort") {
@@ -1938,6 +1953,61 @@ export function getRpcSession(sessionId: string): AgentSessionWrapper | undefine
   return getRegistry().get(sessionId);
 }
 
+/**
+ * Find direct dependents from every live wrapper, including sessions omitted
+ * from getRpcSessionInfos() because their deferred JSONL has not been created.
+ */
+export function getLoadedRpcDependentSessionIds(parentSessionId: string, parentSessionPath?: string): string[] {
+  const targetPathKey = parentSessionPath ? sessionPathKey(parentSessionPath) : undefined;
+  const dependentIds = new Set<string>();
+
+  for (const [registryId, session] of getRegistry()) {
+    if (!session.isAlive()) continue;
+
+    const runtime = session as unknown as {
+      sessionId?: string;
+      sessionFile?: string;
+      inner?: {
+        sessionManager?: {
+          getHeader?: () => { id?: string; parentSession?: unknown } | undefined;
+          getEntries?: () => unknown[];
+          getSessionFile?: () => string | undefined;
+        };
+      };
+    };
+    const candidateId = runtime.sessionId || registryId;
+    if (candidateId === parentSessionId || registryId === parentSessionId) continue;
+
+    const manager = runtime.inner?.sessionManager;
+    const header = manager?.getHeader?.();
+    const entries = manager?.getEntries?.();
+    if (!manager || !entries) continue;
+
+    const headerParentPath = header?.parentSession;
+    const headerMatches = Boolean(
+      targetPathKey
+      && typeof headerParentPath === "string"
+      && headerParentPath
+      && sessionPathKey(headerParentPath) === targetPathKey,
+    );
+    const subagent = readSubagentRun(
+      entries as SessionEntry[],
+      header?.id || candidateId,
+      manager.getSessionFile?.() ?? runtime.sessionFile ?? "",
+    );
+    const metadataMatches = subagent?.parentSessionId === parentSessionId;
+
+    if (headerMatches || metadataMatches) dependentIds.add(candidateId);
+  }
+
+  return [...dependentIds];
+}
+
+/** Includes in-flight starts that began before a hot reload replaced the guard. */
+export function isRpcSessionStarting(sessionId: string): boolean {
+  return Boolean(globalThis.__piStartLocks?.has(sessionId));
+}
+
 export interface SetRpcSessionToolsResult {
   session: AgentSessionWrapper;
   sessionId: string;
@@ -1946,6 +2016,14 @@ export interface SetRpcSessionToolsResult {
 
 /** Persist a normal session's tool selection and rebuild when resource policy changes. */
 export async function setRpcSessionTools(
+  sessionId: string,
+  sessionFile: string | undefined,
+  requestedToolNames: unknown,
+): Promise<SetRpcSessionToolsResult> {
+  return withSessionMutationGuard(sessionId, () => setRpcSessionToolsGuarded(sessionId, sessionFile, requestedToolNames));
+}
+
+async function setRpcSessionToolsGuarded(
   sessionId: string,
   sessionFile: string | undefined,
   requestedToolNames: unknown,
@@ -2149,6 +2227,15 @@ export function getRunningRpcSessionPhases(): Record<string, RunningRpcSessionPh
  * Pass options.toolNames to pre-configure active tools (empty = all disabled).
  */
 export async function startRpcSession(
+  sessionId: string,
+  sessionFile: string,
+  cwd: string | undefined,
+  options: RpcSessionStartOptions = {},
+): Promise<{ session: AgentSessionWrapper; realSessionId: string }> {
+  return withSessionMutationGuard(sessionId, () => startRpcSessionGuarded(sessionId, sessionFile, cwd, options));
+}
+
+async function startRpcSessionGuarded(
   sessionId: string,
   sessionFile: string,
   cwd: string | undefined,

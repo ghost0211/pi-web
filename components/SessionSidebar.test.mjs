@@ -48,57 +48,71 @@ test("row windows stay valid after the list shrinks and before the viewport is m
   assert.ok(getVisibleRowIndices(rowsOfHeights(2000, 34), 0, 0).length > 0);
 });
 
-test("session hide requires the in-row confirmation", () => {
-  // Hide moved from a hover button (with a Shift+click bypass) into the
-  // context menu; it always goes through the in-row confirmation now.
-  assert.doesNotMatch(sessionItemSource, /handleDeleteClick/);
-  assert.match(sessionItemSource, /requestHide: \(\) => setConfirmDelete\(true\)/);
-  assert.match(sessionItemSource, /onHide\?: \(id: string\) => void/);
-  assert.doesNotMatch(sessionItemSource, /fetch\(`\/api\/sessions\/[^`]+`\).*DELETE/);
+test("sidebar no longer hides or permanently deletes sessions", () => {
+  assert.doesNotMatch(source, /requestHide|confirmDelete|handleHideSession|handlePermanentlyRemoveProject/);
+  assert.doesNotMatch(source, /readHiddenSessions|readHiddenProjects|writeShowArchivedSessions/);
+  assert.doesNotMatch(sessionItemSource, /onHide\?:|performDelete|handleDeleteClick/);
 });
 
 test("session rows expose pin/archive hover actions and a right-click menu", () => {
   assert.match(sessionItemSource, /aria-label=\{t\(pinned \? "sidebar\.unpin" : "sidebar\.pin"\)\}/);
-  assert.match(sessionItemSource, /aria-label=\{t\(archived \? "sidebar\.unarchive" : "sidebar\.archive"\)\}/);
+  assert.match(sessionItemSource, /aria-label=\{t\("sidebar\.archive"\)\}/);
+  assert.match(sessionItemSource, /disabled=\{actionsDisabled\}/);
   assert.match(sessionItemSource, /onContextMenuOpen\(e\.clientX, e\.clientY\)/);
   // External listeners (desktop shell) still get first claim on the menu.
   assert.match(sessionItemSource, /dispatchSessionRowContextMenu\(/);
 });
 
-test("session menu items cover rename/pin/archive/hide and reflect state", () => {
+test("session menu covers rename/pin/archive/management without destructive or hide actions", () => {
   const calls = [];
   const items = sessionMenuItems({
     pinned: true,
-    archived: false,
-    actions: { startRename: () => calls.push("rename"), requestHide: () => calls.push("hide") },
+    actions: { startRename: () => calls.push("rename") },
     togglePin: () => calls.push("pin"),
-    toggleArchive: () => calls.push("archive"),
+    archive: () => calls.push("archive"),
+    manageSessions: () => calls.push("manage"),
+    disabled: true,
   }, (key) => key);
-  assert.deepEqual(items.map((item) => item.key), ["rename", "pin", "archive", "hide"]);
+  assert.deepEqual(items.map((item) => item.key), ["rename", "pin", "archive", "manage"]);
   assert.equal(items[1].label, "sidebar.unpin");
   assert.equal(items[2].label, "sidebar.archive");
-  assert.equal(items[3].danger, true);
+  assert.equal(items[1].disabled, true);
+  assert.equal(items[2].disabled, true);
+  assert.ok(items.every((item) => !item.danger));
   for (const item of items) item.onSelect();
-  assert.deepEqual(calls, ["rename", "pin", "archive", "hide"]);
+  assert.deepEqual(calls, ["rename", "pin", "archive", "manage"]);
 });
 
-test("project menu items mirror the former dropdown actions", () => {
+test("project menu separates non-destructive visibility, bulk archive, and management", () => {
   const calls = [];
   const items = projectMenuItems({
     newSession: () => calls.push("new"),
     copyPath: () => calls.push("copy"),
-    hideProject: () => calls.push("hide"),
-    removeProject: () => calls.push("remove"),
+    manageSessions: () => calls.push("manage"),
+    archiveSessions: () => calls.push("archive"),
+    removeProject: () => calls.push("remove-entry"),
+    sessionCount: 3,
   }, (key) => key);
-  assert.deepEqual(items.map((item) => item.key), ["new-session", "copy-path", "hide-project", "remove-project"]);
-  assert.equal(items[3].danger, true);
+  assert.deepEqual(items.map((item) => item.key), ["new-session", "copy-path", "manage-sessions", "archive-sessions", "remove-project"]);
+  assert.equal(items[3].label, "sessionSidebar.archiveProjectSessions (3)");
+  assert.equal(items[4].label, "sessionSidebar.removeProjectEntry");
+  assert.ok(items.every((item) => !item.danger));
   for (const item of items) item.onSelect();
-  assert.deepEqual(calls, ["new", "copy", "hide", "remove"]);
+  assert.deepEqual(calls, ["new", "copy", "manage", "archive", "remove-entry"]);
 });
 
-test("row model filters archived sessions and orders pinned families first", () => {
+test("row model filters archives, orders pins, and fails closed during migration", () => {
   assert.match(source, /orderFamiliesWithPinned\(/);
-  assert.match(source, /showArchived \|\| !archivedSessionIds\.has\(family\.root\.id\)/);
+  assert.match(source, /filter\(\(family\) => !archivedSessionIds\.has\(family\.root\.id\)\)/);
+  assert.match(source, /if \(!managementReady\) return \{ rows: \[\]/);
+  assert.match(source, /openSessionManagement\(\{ filter: "archived" \}\)/);
+  assert.doesNotMatch(source, /showArchived\b/);
+});
+
+test("project removal changes only project visibility, not session status or the open chat", () => {
+  const remove = source.slice(source.indexOf("const handleRemoveProject ="), source.indexOf("const handleArchiveProject ="));
+  assert.match(remove, /type: "project", key: projectKey, root, removed: true/);
+  assert.doesNotMatch(remove, /DELETE|status:|onSessionDeleted|onSelectSession|shutdown/);
 });
 
 test("project rows open the shared context menu on right-click and hover-reveal actions", () => {
@@ -175,7 +189,7 @@ test("offers the downstream context-menu hook only on a normal session row", () 
   assert.match(sessionItemSource, /const handleContextMenu[\s\S]*?dispatchSessionRowContextMenu\(\{/);
   assert.match(
     sessionItemSource,
-    /onContextMenu=\{confirmDelete \|\| renaming \? undefined : handleContextMenu\}/,
+    /onContextMenu=\{renaming \? undefined : handleContextMenu\}/,
   );
 });
 

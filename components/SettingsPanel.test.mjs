@@ -19,6 +19,31 @@ test("opens one settings panel from direct sidebar shortcuts", () => {
   assert.doesNotMatch(shellSource, /setModelsConfigOpen|setSkillsConfigOpen|setAgentsConfigOpen|setPluginsConfigOpen/);
 });
 
+test("sidebar archive/project entry points open one full session manager with an explicit filter", () => {
+  assert.match(shellSource, /window\.addEventListener\(OPEN_SESSION_MANAGEMENT_EVENT, openManagement\)/);
+  assert.match(shellSource, /setSettingsSection\("sessions"\)/);
+  assert.match(panelSource, /key=\{sessionManagementRequest\?\.serial \?\? 0\}/);
+  assert.match(panelSource, /initialFilter=\{sessionManagementRequest\?\.filter\}/);
+  assert.match(panelSource, /initialProjectKey=\{sessionManagementRequest\?\.projectKey\}/);
+  assert.match(panelSource, /onSelectSession=\{onSelectSession\}/);
+});
+
+test("archived and not-yet-migrated main sessions cannot show a writable composer", () => {
+  assert.match(shellSource, /archived=\{selectedSessionArchived\}/);
+  assert.match(shellSource, /managementPending=\{Boolean\(selectedSession && !management\.ready\)\}/);
+  assert.match(shellSource, /onRestoreArchived=\{\(\) => void restoreSelectedSession\(\)\}/);
+  assert.match(shellSource, /window\.addEventListener\(SESSION_CATALOG_CHANGED_EVENT, onCatalogChanged\)/);
+  assert.match(shellSource, /if \(selectedSession && removed\.has\(selectedSession\.id\)\) handleSessionDeleted/);
+});
+
+test("confirmed batches cannot be dismissed before partial failures are observable", () => {
+  assert.match(panelSource, /onOperationBusyChange=\{setSessionsBusy\}/);
+  assert.match(panelSource, /if \(!sessionsBusy\) onClose\(\)/);
+  assert.match(panelSource, /event\.target === event\.currentTarget && !sessionsBusy/);
+  assert.match(panelSource, /disabled=\{sessionsBusy\} onClick=\{onClose\}/);
+  assert.match(panelSource, /const activateSection = [\s\S]*?if \(sessionsBusy\) return;/);
+});
+
 test("keeps every requested configuration surface inside the settings panel", () => {
   for (const section of ["general", "models", "model-scope", "mcp", "skills", "agents", "plugins"]) {
     assert.match(panelSource, new RegExp(`id: "${section}"`));

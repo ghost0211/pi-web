@@ -4,7 +4,7 @@ import test from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
-const { getVisibleRowIndices } = await jiti.import("./SessionSidebar.tsx");
+const { getVisibleRowIndices, projectMenuItems, sessionMenuItems } = await jiti.import("./SessionSidebar.tsx");
 
 const source = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
 const sessionItemSource = source.slice(source.indexOf("function SessionItem("));
@@ -48,14 +48,63 @@ test("row windows stay valid after the list shrinks and before the viewport is m
   assert.ok(getVisibleRowIndices(rowsOfHeights(2000, 34), 0, 0).length > 0);
 });
 
-test("only Shift+click bypasses session hide confirmation", () => {
-  assert.match(
-    sessionItemSource,
-    /const handleDeleteClick[\s\S]*?if \(e\.shiftKey\) \{\s*performDelete\(\);\s*\} else \{\s*setConfirmDelete\(true\);/,
-  );
-  // The row action now hides instead of deleting.
+test("session hide requires the in-row confirmation", () => {
+  // Hide moved from a hover button (with a Shift+click bypass) into the
+  // context menu; it always goes through the in-row confirmation now.
+  assert.doesNotMatch(sessionItemSource, /handleDeleteClick/);
+  assert.match(sessionItemSource, /requestHide: \(\) => setConfirmDelete\(true\)/);
   assert.match(sessionItemSource, /onHide\?: \(id: string\) => void/);
   assert.doesNotMatch(sessionItemSource, /fetch\(`\/api\/sessions\/[^`]+`\).*DELETE/);
+});
+
+test("session rows expose pin/archive hover actions and a right-click menu", () => {
+  assert.match(sessionItemSource, /aria-label=\{t\(pinned \? "sidebar\.unpin" : "sidebar\.pin"\)\}/);
+  assert.match(sessionItemSource, /aria-label=\{t\(archived \? "sidebar\.unarchive" : "sidebar\.archive"\)\}/);
+  assert.match(sessionItemSource, /onContextMenuOpen\(e\.clientX, e\.clientY\)/);
+  // External listeners (desktop shell) still get first claim on the menu.
+  assert.match(sessionItemSource, /dispatchSessionRowContextMenu\(/);
+});
+
+test("session menu items cover rename/pin/archive/hide and reflect state", () => {
+  const calls = [];
+  const items = sessionMenuItems({
+    pinned: true,
+    archived: false,
+    actions: { startRename: () => calls.push("rename"), requestHide: () => calls.push("hide") },
+    togglePin: () => calls.push("pin"),
+    toggleArchive: () => calls.push("archive"),
+  }, (key) => key);
+  assert.deepEqual(items.map((item) => item.key), ["rename", "pin", "archive", "hide"]);
+  assert.equal(items[1].label, "sidebar.unpin");
+  assert.equal(items[2].label, "sidebar.archive");
+  assert.equal(items[3].danger, true);
+  for (const item of items) item.onSelect();
+  assert.deepEqual(calls, ["rename", "pin", "archive", "hide"]);
+});
+
+test("project menu items mirror the former dropdown actions", () => {
+  const calls = [];
+  const items = projectMenuItems({
+    newSession: () => calls.push("new"),
+    copyPath: () => calls.push("copy"),
+    hideProject: () => calls.push("hide"),
+    removeProject: () => calls.push("remove"),
+  }, (key) => key);
+  assert.deepEqual(items.map((item) => item.key), ["new-session", "copy-path", "hide-project", "remove-project"]);
+  assert.equal(items[3].danger, true);
+  for (const item of items) item.onSelect();
+  assert.deepEqual(calls, ["new", "copy", "hide", "remove"]);
+});
+
+test("row model filters archived sessions and orders pinned families first", () => {
+  assert.match(source, /orderFamiliesWithPinned\(/);
+  assert.match(source, /showArchived \|\| !archivedSessionIds\.has\(family\.root\.id\)/);
+});
+
+test("project rows open the shared context menu on right-click and hover-reveal actions", () => {
+  assert.match(source, /className="project-row"/);
+  assert.match(source, /setProjectMenu\(\{ key: project\.key, root: project\.root, x: e\.clientX, y: e\.clientY \}\)/);
+  assert.match(source, /className="project-row-actions"/);
 });
 
 test("does not register row-level session deletion shortcuts", () => {

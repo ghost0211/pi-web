@@ -4,6 +4,21 @@ import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, typ
 import type { SessionInfo } from "@/lib/types";
 import { listSessionFamilies, type SessionFamily } from "@/lib/session-family";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
+import {
+  orderFamiliesWithPinned,
+  PINNED_SESSIONS_CHANGED_EVENT,
+  readPinnedSessionIds,
+  removePinnedSession,
+  togglePinnedSession,
+} from "@/lib/pinned-sessions";
+import {
+  ARCHIVED_SESSIONS_CHANGED_EVENT,
+  readArchivedSessionIds,
+  readShowArchivedSessions,
+  toggleArchivedSession,
+  writeShowArchivedSessions,
+} from "@/lib/archived-sessions";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
 import { readHiddenProjects, addHiddenProject } from "@/lib/hidden-projects";
@@ -868,8 +883,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [onSelectSession]);
 
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
-  const [openProjectMenuKey, setOpenProjectMenuKey] = useState<string | null>(null);
-  const projectMenuRef = useRef<HTMLDivElement>(null);
+  const [projectMenu, setProjectMenu] = useState<{ key: string; root: string; x: number; y: number } | null>(null);
+  const [sessionMenu, setSessionMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const rowActionsRef = useRef(new Map<string, SessionRowActions>());
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<Set<string>>(() => new Set(readPinnedSessionIds()));
+  const [archivedSessionIds, setArchivedSessionIds] = useState<Set<string>>(() => new Set(readArchivedSessionIds()));
+  const [showArchived, setShowArchived] = useState<boolean>(() => readShowArchivedSessions());
   const [hiddenProjects, setHiddenProjects] = useState<Set<string>>(() => {
     // Normalized over the legacy bare-array format; only keys matter here.
     return new Set(readHiddenProjects().map((entry) => entry.key));
@@ -897,16 +916,49 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     };
   }, []);
 
+  // Keep pin/archive state in sync with writes from other components or tabs.
   useEffect(() => {
-    if (!openProjectMenuKey) return;
-    const handleOutside = (e: MouseEvent) => {
-      if (projectMenuRef.current && !projectMenuRef.current.contains(e.target as Node)) {
-        setOpenProjectMenuKey(null);
-      }
+    const refreshPinArchive = () => {
+      setPinnedSessionIds(new Set(readPinnedSessionIds()));
+      setArchivedSessionIds(new Set(readArchivedSessionIds()));
+      setShowArchived(readShowArchivedSessions());
     };
-    document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
-  }, [openProjectMenuKey]);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "pi-web:pinned-sessions" || event.key === "pi-web:archived-sessions" || event.key === "pi-web:show-archived-sessions") refreshPinArchive();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(PINNED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
+    window.addEventListener(ARCHIVED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(PINNED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
+      window.removeEventListener(ARCHIVED_SESSIONS_CHANGED_EVENT, refreshPinArchive);
+    };
+  }, []);
+
+  const registerSessionRowActions = useCallback((id: string, actions: SessionRowActions | null) => {
+    const map = rowActionsRef.current;
+    if (actions) map.set(id, actions);
+    else map.delete(id);
+  }, []);
+
+  const handleTogglePinSession = useCallback((sessionId: string) => {
+    togglePinnedSession(sessionId);
+    setPinnedSessionIds(new Set(readPinnedSessionIds()));
+  }, []);
+
+  const handleToggleArchiveSession = useCallback((sessionId: string) => {
+    const archived = toggleArchivedSession(sessionId);
+    if (archived) removePinnedSession(sessionId);
+    setArchivedSessionIds(new Set(readArchivedSessionIds()));
+    setPinnedSessionIds(new Set(readPinnedSessionIds()));
+  }, []);
+
+  const handleToggleShowArchived = useCallback(() => {
+    const next = !readShowArchivedSessions();
+    writeShowArchivedSessions(next);
+    setShowArchived(next);
+  }, []);
 
   const handleRemoveProject = useCallback((projectKey: string, root?: string) => {
     // Hide the project AND every session under it, so restoring a single
@@ -921,7 +973,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (selectedSessionId && sessionsInProject.some((session) => session.id === selectedSessionId)) {
       onSessionDeleted?.(selectedSessionId);
     }
-    setOpenProjectMenuKey(null);
+    setProjectMenu(null);
   }, [allSessions, onSessionDeleted, selectedSessionId]);
 
   const handlePermanentlyRemoveProject = useCallback(async (projectKey: string) => {
@@ -932,7 +984,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     )));
     // Also remove any hide records so the project is fully gone.
     setHiddenProjects((prev) => { const next = new Set(prev); next.delete(projectKey); return next; });
-    setOpenProjectMenuKey(null);
+    setProjectMenu(null);
     await loadSessions();
   }, [allSessions, loadSessions]);
 
@@ -943,7 +995,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [onSessionDeleted]);
 
   const handleCopyProjectPath = useCallback(async (root: string) => {
-    setOpenProjectMenuKey(null);
+    setProjectMenu(null);
     try {
       await navigator.clipboard.writeText(root);
     } catch {}
@@ -1065,17 +1117,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       const isCollapsed = collapsedProjects.has(project.key);
       const projectSessions = sessionsByProject.get(project.key) ?? [];
       const projectFamilies = listSessionFamilies(projectSessions);
-      const visibleProjectFamilies = q
-        ? projectFamilies.filter((family) => {
-            const familySessions = [family.root, ...family.subagents];
-            return familySessions.some((s) => {
-              const name = (s.name ?? "").toLowerCase();
-              const firstMsg = (s.firstMessage ?? "").toLowerCase();
-              const id = s.id.toLowerCase();
-              return name.includes(q) || firstMsg.includes(q) || id.includes(q);
-            });
-          }).filter((family) => !hiddenSessions.has(family.root.id))
-        : projectFamilies.filter((family) => !hiddenSessions.has(family.root.id));
+      const visibleProjectFamilies = orderFamiliesWithPinned(
+        (q
+          ? projectFamilies.filter((family) => {
+              const familySessions = [family.root, ...family.subagents];
+              return familySessions.some((s) => {
+                const name = (s.name ?? "").toLowerCase();
+                const firstMsg = (s.firstMessage ?? "").toLowerCase();
+                const id = s.id.toLowerCase();
+                return name.includes(q) || firstMsg.includes(q) || id.includes(q);
+              });
+            })
+          : projectFamilies
+        ).filter((family) => !hiddenSessions.has(family.root.id)
+          && (showArchived || !archivedSessionIds.has(family.root.id))),
+        pinnedSessionIds,
+      );
       if (q && visibleProjectFamilies.length === 0) continue;
       rows.push({ kind: "project", key: `project:${project.key}`, top, height: PROJECT_HEADER_HEIGHT, project, isCollapsed });
       top += PROJECT_HEADER_HEIGHT;
@@ -1099,7 +1156,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       top += PROJECT_TRAILING_HEIGHT;
     }
     return { rows, totalHeight: top };
-  }, [allProjects, collapsedProjects, sessionsByProject, sessionSearch, hiddenSessions, expandedProjectSessions]);
+  }, [allProjects, collapsedProjects, sessionsByProject, sessionSearch, hiddenSessions, expandedProjectSessions, pinnedSessionIds, archivedSessionIds, showArchived]);
 
   const visibleRowIndices = getVisibleRowIndices(sidebarRows.rows, listScrollTop, listViewportH, focusedRowKey);
 
@@ -1629,6 +1686,34 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       type="button"
                       onClick={() => {
                         setListMenuOpen(false);
+                        handleToggleShowArchived();
+                      }}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8,
+                        width: "100%", padding: "6px 10px",
+                        background: "none", border: "none", borderRadius: 6,
+                        color: "var(--text)", fontSize: 12, textAlign: "left", cursor: "pointer",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="2" y="3" width="20" height="5" rx="1" />
+                        <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                        <line x1="10" y1="12" x2="14" y2="12" />
+                      </svg>
+                      <span style={{ flex: 1 }}>{t("sidebar.showArchived")}</span>
+                      {showArchived && (
+                        <svg width="11" height="11" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                        </svg>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setListMenuOpen(false);
                         handleToggleCollapseAll();
                       }}
                       style={{
@@ -1678,8 +1763,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     {/* Project Header Row */}
                     <div style={{ position: "relative", height: PROJECT_HEADER_HEIGHT - 2 }}>
                       <div
+                        className="project-row"
                         onClick={() => {
                           toggleProjectCollapse(project.key);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSessionMenu(null);
+                          setProjectMenu({ key: project.key, root: project.root, x: e.clientX, y: e.clientY });
                         }}
                         style={{
                           display: "flex",
@@ -1765,6 +1857,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
                         <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
                           {showProjectActivity(projectActivity.get(project.key), t)}
+                          <div className="project-row-actions">
                           <button
                             type="button"
                             onClick={(e) => {
@@ -1805,7 +1898,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setOpenProjectMenuKey(openProjectMenuKey === project.key ? null : project.key);
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setSessionMenu(null);
+                              setProjectMenu(projectMenu?.key === project.key
+                                ? null
+                                : { key: project.key, root: project.root, x: rect.right - 176, y: rect.bottom + 4 });
                             }}
                             title={t("sidebar.projectOptions")}
                             aria-label={t("sidebar.projectOptions")}
@@ -1816,10 +1913,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                               width: 22,
                               height: 22,
                               padding: 0,
-                              background: openProjectMenuKey === project.key ? "var(--bg-hover)" : "none",
+                              background: projectMenu?.key === project.key ? "var(--bg-hover)" : "none",
                               border: "none",
                               borderRadius: 4,
-                              color: openProjectMenuKey === project.key ? "var(--text)" : "var(--text-dim)",
+                              color: projectMenu?.key === project.key ? "var(--text)" : "var(--text-dim)",
                               cursor: "pointer",
                               transition: "color 0.12s, background 0.12s",
                             }}
@@ -1828,7 +1925,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                               e.currentTarget.style.background = "var(--bg-hover)";
                             }}
                             onMouseLeave={(e) => {
-                              if (openProjectMenuKey !== project.key) {
+                              if (projectMenu?.key !== project.key) {
                                 e.currentTarget.style.color = "var(--text-dim)";
                                 e.currentTarget.style.background = "none";
                               }
@@ -1840,152 +1937,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                               <circle cx="13" cy="8" r="1.5" />
                             </svg>
                           </button>
+                          </div>
                         </div>
                       </div>
-
-                      {/* Project Options Dropdown Menu */}
-                      {openProjectMenuKey === project.key && (
-                        <div
-                          ref={projectMenuRef}
-                          onClick={(e) => e.stopPropagation()}
-                          style={{
-                            position: "absolute",
-                            top: "calc(100% + 2px)",
-                            right: 12,
-                            zIndex: 80,
-                            minWidth: 152,
-                            padding: 4,
-                            background: "var(--bg-panel)",
-                            border: "1px solid var(--border)",
-                            borderRadius: 8,
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.24)",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 2,
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenProjectMenuKey(null);
-                              startNewSessionForCwd(project.root);
-                            }}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              width: "100%",
-                              padding: "6px 10px",
-                              background: "none",
-                              border: "none",
-                              borderRadius: 6,
-                              color: "var(--text)",
-                              fontSize: 12,
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <line x1="12" y1="5" x2="12" y2="19" />
-                              <line x1="5" y1="12" x2="19" y2="12" />
-                            </svg>
-                            <span>{t("sidebar.newSessionHere")}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleCopyProjectPath(project.root);
-                            }}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              width: "100%",
-                              padding: "6px 10px",
-                              background: "none",
-                              border: "none",
-                              borderRadius: 6,
-                              color: "var(--text)",
-                              fontSize: 12,
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            <span>{t("sidebar.copyPath")}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              handleRemoveProject(project.key, project.root);
-                            }}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              width: "100%",
-                              padding: "6px 10px",
-                              background: "none",
-                              border: "none",
-                              borderRadius: 6,
-                              color: "var(--text)",
-                              fontSize: 12,
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-                              <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-                              <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-                              <line x1="2" y1="2" x2="22" y2="22" />
-                            </svg>
-                            <span>{t("sidebar.hideProject")}</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handlePermanentlyRemoveProject(project.key);
-                            }}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              width: "100%",
-                              padding: "6px 10px",
-                              background: "none",
-                              border: "none",
-                              borderRadius: 6,
-                              color: "#ef4444",
-                              fontSize: 12,
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239, 68, 68, 0.1)"; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="3 6 5 6 21 6" />
-                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                              <path d="M10 11v6M14 11v6" />
-                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                            </svg>
-                            <span>{t("sidebar.removeProjectPermanently")}</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   </div>
                 );
@@ -2045,12 +1999,51 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       handleHideSession(id, row.projectKey);
                       loadSessions();
                     }}
+                    pinned={pinnedSessionIds.has(family.root.id)}
+                    archived={archivedSessionIds.has(family.root.id)}
+                    onTogglePin={() => handleTogglePinSession(family.root.id)}
+                    onToggleArchive={() => handleToggleArchiveSession(family.root.id)}
+                    onContextMenuOpen={(x, y) => {
+                      setProjectMenu(null);
+                      setSessionMenu({ id: family.root.id, x, y });
+                    }}
+                    registerActions={(actions) => registerSessionRowActions(family.root.id, actions)}
                   />
                 </div>
               );
             })}
           </div>
-        )}      </div>
+        )}
+        {projectMenu && (
+          <ContextMenu
+            x={projectMenu.x}
+            y={projectMenu.y}
+            ariaLabel={t("sidebar.projectOptions")}
+            onClose={() => setProjectMenu(null)}
+            items={projectMenuItems({
+              newSession: () => startNewSessionForCwd(projectMenu.root),
+              copyPath: () => void handleCopyProjectPath(projectMenu.root),
+              hideProject: () => handleRemoveProject(projectMenu.key, projectMenu.root),
+              removeProject: () => void handlePermanentlyRemoveProject(projectMenu.key),
+            }, t)}
+          />
+        )}
+        {sessionMenu && (
+          <ContextMenu
+            x={sessionMenu.x}
+            y={sessionMenu.y}
+            ariaLabel={sessionMenu.id}
+            onClose={() => setSessionMenu(null)}
+            items={sessionMenuItems({
+              pinned: pinnedSessionIds.has(sessionMenu.id),
+              archived: archivedSessionIds.has(sessionMenu.id),
+              actions: rowActionsRef.current.get(sessionMenu.id),
+              togglePin: () => handleTogglePinSession(sessionMenu.id),
+              toggleArchive: () => handleToggleArchiveSession(sessionMenu.id),
+            }, t)}
+          />
+        )}
+      </div>
 
     </div>
   );
@@ -2121,6 +2114,161 @@ function UnreadSessionIndicator() {
   );
 }
 
+/** Imperative handles a session row registers so the row-level context menu
+ * (rendered at the sidebar root) can trigger its in-row rename/hide flows. */
+interface SessionRowActions {
+  startRename: () => void;
+  requestHide: () => void;
+}
+
+const menuIconProps = {
+  width: 13,
+  height: 13,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+} as const;
+
+const pinIcon = (
+  <svg {...menuIconProps}>
+    <path d="M12 17v5" />
+    <path d="M9 10.76a2 2 0 0 1-1.11 1.66L5 14.1V15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.9l-2.89-1.68A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+  </svg>
+);
+const archiveIcon = (
+  <svg {...menuIconProps}>
+    <rect x="2" y="3" width="20" height="5" rx="1" />
+    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+    <line x1="10" y1="12" x2="14" y2="12" />
+  </svg>
+);
+const archiveRestoreIcon = (
+  <svg {...menuIconProps}>
+    <rect x="2" y="3" width="20" height="5" rx="1" />
+    <path d="M4 8v11a2 2 0 0 0 2 2h2" />
+    <path d="M20 8v11a2 2 0 0 1-2 2h-2" />
+    <path d="m9 15 3-3 3 3" />
+    <path d="M12 12v9" />
+  </svg>
+);
+
+/** Items of the project-row context menu (right-click or the "..." button). */
+export function projectMenuItems(
+  handlers: {
+    newSession: () => void;
+    copyPath: () => void;
+    hideProject: () => void;
+    removeProject: () => void;
+  },
+  t: (key: string) => string,
+): ContextMenuItem[] {
+  return [
+    {
+      key: "new-session",
+      label: t("sidebar.newSessionHere"),
+      icon: (
+        <svg {...menuIconProps}>
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      ),
+      onSelect: handlers.newSession,
+    },
+    {
+      key: "copy-path",
+      label: t("sidebar.copyPath"),
+      icon: (
+        <svg {...menuIconProps}>
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      ),
+      onSelect: handlers.copyPath,
+    },
+    {
+      key: "hide-project",
+      label: t("sidebar.hideProject"),
+      icon: (
+        <svg {...menuIconProps}>
+          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+          <line x1="2" y1="2" x2="22" y2="22" />
+        </svg>
+      ),
+      onSelect: handlers.hideProject,
+    },
+    {
+      key: "remove-project",
+      label: t("sidebar.removeProjectPermanently"),
+      danger: true,
+      icon: (
+        <svg {...menuIconProps}>
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <path d="M10 11v6M14 11v6" />
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+        </svg>
+      ),
+      onSelect: handlers.removeProject,
+    },
+  ];
+}
+
+/** Items of the session-row context menu. */
+export function sessionMenuItems(
+  options: {
+    pinned: boolean;
+    archived: boolean;
+    actions?: SessionRowActions;
+    togglePin: () => void;
+    toggleArchive: () => void;
+  },
+  t: (key: string) => string,
+): ContextMenuItem[] {
+  return [
+    {
+      key: "rename",
+      label: t("sidebar.rename"),
+      icon: (
+        <svg {...menuIconProps}>
+          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+        </svg>
+      ),
+      onSelect: () => options.actions?.startRename(),
+    },
+    {
+      key: "pin",
+      label: t(options.pinned ? "sidebar.unpin" : "sidebar.pin"),
+      icon: pinIcon,
+      onSelect: options.togglePin,
+    },
+    {
+      key: "archive",
+      label: t(options.archived ? "sidebar.unarchive" : "sidebar.archive"),
+      icon: options.archived ? archiveRestoreIcon : archiveIcon,
+      onSelect: options.toggleArchive,
+    },
+    {
+      key: "hide",
+      label: t("sidebar.delete"),
+      danger: true,
+      icon: (
+        <svg {...menuIconProps}>
+          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+          <line x1="2" y1="2" x2="22" y2="22" />
+        </svg>
+      ),
+      onSelect: () => options.actions?.requestHide(),
+    },
+  ];
+}
+
 /**
  * Compact per-project activity badges for the workspace selector dropdown items:
  * a spinning running icon + count and an unread dot + count. Renders nothing
@@ -2175,6 +2323,12 @@ function SessionItem({
   hasChildren = false,
   collapsed = false,
   onToggleCollapse,
+  pinned = false,
+  archived = false,
+  onTogglePin,
+  onToggleArchive,
+  onContextMenuOpen,
+  registerActions,
 }: {
   session: SessionInfo;
   isSelected: boolean;
@@ -2187,6 +2341,12 @@ function SessionItem({
   hasChildren?: boolean;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  pinned?: boolean;
+  archived?: boolean;
+  onTogglePin?: () => void;
+  onToggleArchive?: () => void;
+  onContextMenuOpen?: (x: number, y: number) => void;
+  registerActions?: (actions: SessionRowActions | null) => void;
 }) {
   const { locale, t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -2210,12 +2370,19 @@ function SessionItem({
   const displayFirstMessage = skillExpansionToCommand(session.firstMessage) ?? session.firstMessage;
   const title = session.name || displayFirstMessage.slice(0, 50) || session.id.slice(0, 12);
 
-  const startRename = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
+  const startRename = useCallback(() => {
     if (session.transient) return;
     setRenameValue(session.name || displayFirstMessage.slice(0, 50) || session.id.slice(0, 12));
     setRenaming(true);
   }, [session.name, session.transient, displayFirstMessage, session.id]);
+
+  // The context menu lives at the sidebar root; expose the in-row rename and
+  // hide-confirmation flows to it while this row is mounted.
+  useEffect(() => {
+    if (!registerActions) return;
+    registerActions({ startRename, requestHide: () => setConfirmDelete(true) });
+    return () => registerActions(null);
+  }, [registerActions, startRename]);
 
   const commitRename = useCallback(async () => {
     const name = renameValue.trim();
@@ -2243,15 +2410,6 @@ function SessionItem({
     onHide?.(session.id);
   }, [session.id, session.transient, onHide]);
 
-  const handleDeleteClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (e.shiftKey) {
-      performDelete();
-    } else {
-      setConfirmDelete(true);
-    }
-  }, [performDelete]);
-
   const handleDeleteConfirm = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     performDelete();
@@ -2272,10 +2430,18 @@ function SessionItem({
       clientY: e.clientY,
       refresh: () => { onRenamed?.(); },
     });
-    if (!handled) return;
+    // An external listener (e.g. the desktop shell) claims the menu first.
+    if (handled || session.transient || !onContextMenuOpen) {
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
-  }, [onRenamed, session.cwd, session.id, session.name, session.path]);
+    onContextMenuOpen(e.clientX, e.clientY);
+  }, [onRenamed, onContextMenuOpen, session.cwd, session.id, session.name, session.path, session.transient]);
 
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
   return (
@@ -2392,6 +2558,12 @@ function SessionItem({
               }}
               title={title}
             >
+              {pinned && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--accent)" }}>
+                  <path d="M12 17v5" />
+                  <path d="M9 10.76a2 2 0 0 1-1.11 1.66L5 14.1V15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.9l-2.89-1.68A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+                </svg>
+              )}
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
                 {title}
               </span>
@@ -2431,13 +2603,14 @@ function SessionItem({
           {!session.transient && (
             <div className="session-row-actions" style={{ gap: 3, flexShrink: 0 }}>
               <button
-                onClick={startRename}
-                title={t("sidebar.rename")}
+                onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
+                title={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
+                aria-label={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: 24, height: 24, padding: 0,
                   background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 5, color: "var(--text-muted)",
+                  borderRadius: 5, color: pinned ? "var(--accent)" : "var(--text-muted)",
                   cursor: "pointer", flexShrink: 0,
                   transition: "all 0.12s ease",
                 }}
@@ -2447,16 +2620,18 @@ function SessionItem({
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
+                  e.currentTarget.style.color = pinned ? "var(--accent)" : "var(--text-muted)";
                 }}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                  <path d="M12 17v5" />
+                  <path d="M9 10.76a2 2 0 0 1-1.11 1.66L5 14.1V15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.9l-2.89-1.68A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
                 </svg>
               </button>
               <button
-                onClick={handleDeleteClick}
-                title={t("sidebar.deleteWithShiftClick")}
+                onClick={(e) => { e.stopPropagation(); onToggleArchive?.(); }}
+                title={t(archived ? "sidebar.unarchive" : "sidebar.archive")}
+                aria-label={t(archived ? "sidebar.unarchive" : "sidebar.archive")}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: 24, height: 24, padding: 0,
@@ -2474,12 +2649,21 @@ function SessionItem({
                   e.currentTarget.style.color = "var(--text-muted)";
                 }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-                  <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-                  <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-                  <line x1="2" y1="2" x2="22" y2="22" />
-                </svg>
+                {archived ? (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="3" width="20" height="5" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h2" />
+                    <path d="M20 8v11a2 2 0 0 1-2 2h-2" />
+                    <path d="m9 15 3-3 3 3" />
+                    <path d="M12 12v9" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="3" width="20" height="5" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <line x1="10" y1="12" x2="14" y2="12" />
+                  </svg>
+                )}
               </button>
             </div>
           )}

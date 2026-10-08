@@ -2202,6 +2202,19 @@ span.token.table {
 .session-row:focus-within .session-row-actions {
   display: flex;
 }
+
+/* Project header actions (new session / options) reveal on hover, mirroring
+   session rows; touch devices keep them visible via the coarse-pointer rule. */
+.project-row-actions {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.project-row:hover .project-row-actions,
+.project-row:focus-within .project-row-actions {
+  display: flex;
+}
 @media (pointer: coarse) {
   .branch-tree-row { min-height: 40px; height: auto !important; }
   .branch-tree-row .branch-bookmark-button {
@@ -2211,6 +2224,7 @@ span.token.table {
   }
   .session-info-copy-button { min-width: 36px; min-height: 36px; }
   .file-mention-option { min-height: 44px; }
+  .project-row-actions { display: flex; }
 }
 @media (hover: none) {
   .session-row-actions { display: flex; }

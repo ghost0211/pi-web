@@ -43,8 +43,59 @@ const PROVIDER_ICONS: Record<string, { symbol: string; color: boolean }> = {
   grok: { symbol: "grok", color: false },
 };
 
+const CUSTOM_PROVIDER_PREFIX = "custom-";
+
+function lookupProviderIcon(id: string): { symbol: string; color: boolean } | null {
+  const normalized = id.trim().toLowerCase();
+  if (!normalized) return null;
+  const exact = PROVIDER_ICONS[normalized];
+  if (exact) return exact;
+  // User-defined providers are commonly named `custom-<vendor>` (or
+  // `<team>-<vendor>`); fall back to the vendor icon when the tail matches a
+  // known provider at a separator boundary.
+  const withoutCustomPrefix = normalized.startsWith(CUSTOM_PROVIDER_PREFIX)
+    ? normalized.slice(CUSTOM_PROVIDER_PREFIX.length)
+    : null;
+  if (withoutCustomPrefix && PROVIDER_ICONS[withoutCustomPrefix]) return PROVIDER_ICONS[withoutCustomPrefix];
+  let best: { symbol: string; color: boolean; keyLength: number } | null = null;
+  for (const key of Object.keys(PROVIDER_ICONS)) {
+    if (normalized.endsWith(`-${key}`) || normalized.endsWith(`_${key}`)) {
+      if (!best || key.length > best.keyLength) best = { ...PROVIDER_ICONS[key], keyLength: key.length };
+    }
+  }
+  return best ? { symbol: best.symbol, color: best.color } : null;
+}
+
+/** Icon entry for a provider id, or null when no known provider matches. */
+export function resolveProviderIcon(id: string | null | undefined): { symbol: string; color: boolean } | null {
+  return id ? lookupProviderIcon(id) : null;
+}
+
+/** Generic chip glyph shown for providers without a known icon. */
+export function DefaultModelIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <rect x="9" y="9" width="6" height="6" />
+      <line x1="9" y1="1" x2="9" y2="4" /><line x1="15" y1="1" x2="15" y2="4" />
+      <line x1="9" y1="20" x2="9" y2="23" /><line x1="15" y1="20" x2="15" y2="23" />
+      <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
+      <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
+    </svg>
+  );
+}
+
+/**
+ * Fixed-size provider glyph for compact slots such as the model selector: the
+ * provider's icon when known, the default chip icon otherwise.
+ */
+export function ProviderGlyph({ id, size }: { id: string | null | undefined; size: number }) {
+  if (!resolveProviderIcon(id)) return <DefaultModelIcon size={size} />;
+  return <ProviderIcon id={id!} size={size} />;
+}
+
 export function ProviderIcon({ id, size }: { id: string; size: number }) {
-  const icon = PROVIDER_ICONS[id];
+  const icon = lookupProviderIcon(id);
   if (icon) {
     return (
       <svg

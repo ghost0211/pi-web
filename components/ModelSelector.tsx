@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { ProviderGlyph } from "./ProviderIcon";
 
 export interface ModelSelectorOption {
   provider: string;
@@ -216,14 +217,7 @@ export function ModelSelector({
             <path d="M21 12a9 9 0 1 1-2.64-6.36" />
           </svg>
         ) : (
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0 }}>
-            <rect x="4" y="4" width="16" height="16" rx="2" />
-            <rect x="9" y="9" width="6" height="6" />
-            <line x1="9" y1="1" x2="9" y2="4" /><line x1="15" y1="1" x2="15" y2="4" />
-            <line x1="9" y1="20" x2="9" y2="23" /><line x1="15" y1="20" x2="15" y2="23" />
-            <line x1="20" y1="9" x2="23" y2="9" /><line x1="20" y1="14" x2="23" y2="14" />
-            <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
-          </svg>
+          <ProviderGlyph id={currentProvider} size={14} />
         )}
         {currentProvider?.trim() && variant !== "field" && !isMobile ? (
           // Two-line chip: model name primary, provider id secondary — no more
@@ -367,6 +361,7 @@ function ModelOptionButton({ active, provider, label, onClick }: { active: boole
       {active
         ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
         : <span style={{ width: 10, flexShrink: 0 }} />}
+      {trimmedProvider && <ProviderGlyph id={trimmedProvider} size={14} />}
       {trimmedProvider && (
         <span style={{ flexShrink: 0, color: "var(--text-dim)", fontWeight: 400 }} title={trimmedProvider}>
           {trimmedProvider} ›

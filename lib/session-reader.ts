@@ -575,8 +575,9 @@ export function buildSessionContext(
  * Cheap stand-in for `entryToUiMessage` for the turn index. It only needs
  * prompt and answer text, while the full conversion (tool-call normalization,
  * base64 media rewriting) costs seconds on sessions with large attachments.
- * Roles that cannot anchor a turn (tool results, bash) are skipped: they never
- * change the turn list.
+ * Compaction entries are retained as display-group boundaries, but the shared
+ * turn builder does not make them navigable anchors. Tool results and bash are
+ * skipped; custom notices are cheap projections ignored by the turn builder.
  */
 function turnIndexMessage(entry: SessionEntry): Partial<AgentMessage> | null {
   switch (entry.type) {
@@ -630,7 +631,7 @@ export function buildSessionTurnIndex(
     messages.push(message);
     entryIds.push(entry.id);
   }
-  return buildTurnPreviews(messages, entryIds);
+  return buildTurnPreviews(messages, entryIds).filter((turn) => !turn.head);
 }
 
 /**

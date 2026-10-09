@@ -12,6 +12,7 @@ import { parseUnifiedPatch, type SplitDiffCell, type SplitDiffFile } from "@/lib
 import { applyPatchPreviewToFiles, applyPatchResultHasFailures, extractApplyPatchPaths, getApplyPatchInputText, parseApplyPatchInput } from "@/lib/apply-patch";
 import { isApplyPatchToolName, isEditToolName } from "@/lib/tool-names";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
+import { SubagentReport } from "./SubagentReport";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { formatToolExecutionDuration, getToolExecutionDuration, type ToolExecutionDuration } from "@/lib/tool-duration";
@@ -262,10 +263,14 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     return null;
   }
   if (message.role === "custom") {
-    if ((message as CustomMessage).customType === "compaction") {
-      return <CompactionMessageView message={message as CustomMessage} />;
+    const customMessage = message as CustomMessage;
+    if (customMessage.customType === "compaction") {
+      return <CompactionMessageView message={customMessage} />;
     }
-    return <CustomMessageView message={message as CustomMessage} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} />;
+    if (customMessage.customType === "pi-web:subagent-notification") {
+      return <SubagentReport message={customMessage} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} sessionId={sessionId} />;
+    }
+    return <CustomMessageView message={customMessage} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} />;
   }
   if (message.role === "bashExecution") {
     return <BashExecutionView message={message as BashExecutionMessage} sessionId={sessionId} />;

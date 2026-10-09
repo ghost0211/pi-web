@@ -3,13 +3,12 @@ import { normalizeDisplayMath } from "./markdown";
 import type { AgentMessage, AssistantMessage, CustomMessage, TextContent } from "./types";
 
 /**
- * One navigable turn: the prompt (or compaction heading) that anchors it plus a
- * plain-text digest of its final answer. The server builds these for the whole
- * active branch so the chat's turn rail can show every turn even though the
- * client only lazy-loads the most recent page of history.
+ * One navigable turn: a user prompt plus a plain-text digest of its answer.
+ * The server builds these for the whole active branch so the chat's turn rail
+ * can show every user turn even though the client only lazy-loads recent history.
  */
 export interface TurnPreview {
-  /** Entry id anchoring the turn — the lazy-load target when it is not loaded yet. */
+  /** User entry id for navigation; head-only window placeholders are not targets. */
   entryId: string;
   /** Prompt text shown in the turn's preview card. */
   previewText: string;
@@ -34,14 +33,19 @@ const PREVIEW_LIMIT = 120;
 const SUMMARY_LIMIT = 200;
 
 /**
- * A user prompt starts a turn; so does a compaction summary, mirroring
- * ChatWindow's grouping (otherwise every post-compaction message would render
- * standalone and never collapse).
+ * A user prompt and a compaction summary both start ChatWindow display groups.
+ * Only user prompts are navigable turn anchors: compaction cards remain visible
+ * group boundaries, but must not become independent rail nodes.
  */
-export function isTurnAnchor(message: AgentMessage | Partial<AgentMessage>): boolean {
+export function isTurnGroupBoundary(message: AgentMessage | Partial<AgentMessage>): boolean {
   if (message.role === "user") return true;
   return message.role === "custom"
     && (message as Partial<CustomMessage>).customType === "compaction";
+}
+
+/** Only a real user prompt can anchor a navigable chat turn. */
+export function isTurnAnchor(message: AgentMessage | Partial<AgentMessage>): boolean {
+  return message.role === "user";
 }
 
 export function getMessagePreview(message: unknown): string {
@@ -107,10 +111,11 @@ function clip(text: string, limit: number): string {
 }
 
 /**
- * Groups messages into turns. `entryIds` runs parallel to `messages` and may
- * hold `undefined` for optimistic/streaming messages. A window whose first
- * message is not an anchor opens a `head` turn for the segment above the first
- * anchor in range, so the rail is never empty on a long session.
+ * Builds navigable previews from messages. `entryIds` runs parallel to
+ * `messages` and may hold `undefined` for optimistic/streaming messages. A
+ * window starting mid-turn opens a non-navigable `head` placeholder for offset
+ * alignment. Compaction remains a display-group boundary, but its summary and
+ * following assistant output stay associated with the current user turn.
  */
 export function buildTurnPreviews(
   messages: (AgentMessage | Partial<AgentMessage>)[],
@@ -121,12 +126,16 @@ export function buildTurnPreviews(
 
   messages.forEach((message, index) => {
     const entryId = entryIds[index] ?? "";
-    if (isTurnAnchor(message)) {
-      const isCompaction = message.role === "custom";
+    if (isTurnGroupBoundary(message)) {
+      // A compaction card starts a separate ChatWindow process group, not a new
+      // user turn. Keep the current navigable turn so its post-compaction answer
+      // remains in the same rail preview.
+      if (!isTurnAnchor(message)) return;
+
       const preview = getMessagePreview(message);
       current = {
         entryId,
-        previewText: clip(isCompaction ? firstTextLine(preview) : preview || "…", PREVIEW_LIMIT),
+        previewText: clip(preview || "…", PREVIEW_LIMIT),
         summary: "",
         messageIndex: index,
       };
@@ -154,50 +163,48 @@ export function buildTurnPreviews(
   return turns;
 }
 
-/** What the turn rail could measure for one turn of the loaded window. */
+/** What the turn rail could measure for one user turn or head placeholder. */
 export interface LocalTurnMeasure {
-  /** Scroll offset of the element anchoring the turn, or null when nothing was measured. */
+  /** Scroll offset of the user/assistant element anchoring the turn, if measured. */
   top: number | null;
-  /**
-   * The turn anchors no element of its own (a compaction card), so it borrows
-   * the offset of the next measured turn.
-   */
-  borrowNext?: boolean;
 }
 
 /**
- * Maps the loaded window onto positions in the full turn list. The loaded
- * history is always a contiguous suffix of the active branch, so the window's
- * last turn is the index's last turn and everything lines up from there — no
- * entry-id lookups needed, which keeps optimistic (not yet persisted) turns
- * measurable too.
+ * Maps the loaded window onto positions in the full user-turn list. Loaded
+ * history is a contiguous suffix of the active branch, so its last real user
+ * turn aligns with the index's last turn. A leading `head` placeholder accounts
+ * for a partial turn above the first user prompt in the window; it is excluded
+ * from the displayed rail, but keeps suffix alignment correct when measured.
  */
 export function mapTurnOffsets(
   localTurns: LocalTurnMeasure[],
   turnCount: number,
-  endOfHistory?: number,
 ): Map<number, number> {
   const offsets = new Map<number, number>();
   if (localTurns.length === 0) return offsets;
   const firstIndex = turnCount - localTurns.length;
-  const pending: number[] = [];
 
   localTurns.forEach((turn, ordinal) => {
     const index = firstIndex + ordinal;
-    if (index < 0) return;
-    if (turn.top !== null) {
-      offsets.set(index, turn.top);
-      for (const earlier of pending) offsets.set(earlier, turn.top);
-      pending.length = 0;
-      return;
-    }
-    if (turn.borrowNext) pending.push(index);
+    if (index >= 0 && turn.top !== null) offsets.set(index, turn.top);
   });
-
-  // A trailing compaction has no following message element to borrow from.
-  // It lives at the end of the chat, not at the previous turn's offset.
-  if (endOfHistory !== undefined) {
-    for (const index of pending) offsets.set(index, endOfHistory);
-  }
   return offsets;
+}
+
+/**
+ * Combines the server's whole-branch index with user turns measured in the
+ * loaded suffix. A `head` item is only an alignment placeholder and must never
+ * be shown or navigated, including when a new session has no server index yet.
+ */
+export function mergeNavigableTurnPreviews(
+  turnIndex: TurnPreview[],
+  localTurns: TurnPreview[],
+): TurnPreview[] {
+  const navigableLocalTurns = localTurns.filter((turn) => !turn.head);
+  const navigableIndex = turnIndex.filter((turn) => !turn.head);
+  if (navigableIndex.length === 0) return navigableLocalTurns;
+
+  const known = new Set(navigableIndex.map((turn) => turn.entryId));
+  const extra = navigableLocalTurns.filter((turn) => turn.entryId && !known.has(turn.entryId));
+  return extra.length > 0 ? [...navigableIndex, ...extra] : navigableIndex;
 }

@@ -1,10 +1,11 @@
 "use client";
 import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AgentEndInfo, AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, BlockingExtensionUiRequest, CustomMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage, UserMessage } from "@/lib/types";
+import type { AgentEndInfo, AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, BlockingExtensionUiRequest, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage, UserMessage } from "@/lib/types";
 import { normalizeCustomPanelLines } from "@/lib/ansi";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
+import { buildChatMessageGroups, findFinalAssistantIndex, needsStreamingFollowUpLabel } from "@/lib/chat-message-groups";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { buildTurnOutcome } from "@/lib/turn-outcome";
 import { TurnOutcomeCard } from "./TurnOutcomeCard";
@@ -100,23 +101,6 @@ function phaseLabel(phase: AgentPhase, t: (key: string, params?: Record<string, 
 
 const CHAT_COLUMN_PADDING = 16;
 
-function hasFinalAssistantAnswer(message: AgentMessage): boolean {
-  if (message.role !== "assistant") return false;
-  return splitFinalAssistantBlocks(message as AssistantMessage).answerBlocks.some((block) => (
-    block.type === "image" || (block.type === "text" && block.text.trim().length > 0)
-  ));
-}
-
-function findFinalAssistantIndex(messages: AgentMessage[], userIdx: number, endIdx: number): number {
-  for (let candidateIdx = endIdx - 1; candidateIdx > userIdx; candidateIdx--) {
-    if (hasFinalAssistantAnswer(messages[candidateIdx])) return candidateIdx;
-  }
-  for (let candidateIdx = endIdx - 1; candidateIdx > userIdx; candidateIdx--) {
-    if (messages[candidateIdx]?.role === "assistant") return candidateIdx;
-  }
-  return -1;
-}
-
 function getUserInputText(message: AgentMessage): string | null {
   if (message.role !== "user") return null;
   if (typeof message.content === "string") {
@@ -146,19 +130,6 @@ function hasDisplayableProcessMessage(message: AgentMessage): boolean {
     return getDisplayableAssistantBlocks(message as AssistantMessage).length > 0;
   }
   return message.role === "custom";
-}
-
-// A user message normally anchors a turn (user prompt → process → final
-// answer), and the process messages in between get folded into a collapsed
-// ProcessDetailsGroup. When compaction fires mid-turn, pi drops the original
-// user prompt and inserts a compaction summary (role "custom", customType
-// "compaction") in its place; the agent then keeps producing tool calls and a
-// final answer with no user message left to anchor them. Treat a compaction
-// summary as an anchor too, otherwise every post-compaction message renders
-// standalone and never collapses.
-function isGroupAnchor(message: AgentMessage): boolean {
-  if (message.role === "user") return true;
-  return message.role === "custom" && (message as CustomMessage).customType === "compaction";
 }
 
 function withAssistantBlocks(
@@ -291,6 +262,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
   });
   // Keep the notification snippet source current (see wrappedOnAgentEnd).
   messagesForNotifyRef.current = messages;
+  const messageGroups = useMemo(() => buildChatMessageGroups(messages), [messages]);
   const sessionBusy = agentRunning || bashRunning;
   const handleConversationSend = useCallback(async (...args: Parameters<typeof handleSend>) => {
     if (isReadOnlyConversationRef.current) return;
@@ -915,16 +887,6 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               for (let i = messages.length - 1; i >= 0; i--) {
                 if (messages[i].role === "user") { lastUserIdx = i; break; }
               }
-              // Anchor for live-tail detection: the last user message, or a
-              // compaction summary when compaction has replaced it mid-turn.
-              // Computed independently from lastUserIdx (which is kept for the
-              // scroll-to-user ref) because a compaction summary can sit after
-              // the last user message and anchor the still-streaming segment.
-              let lastAnchorIdx = -1;
-              for (let i = messages.length - 1; i >= 0; i--) {
-                if (isGroupAnchor(messages[i])) { lastAnchorIdx = i; break; }
-              }
-
               const visibleRefIndexByMessage = new Map<number, number>();
               let refIdx = 0;
               messages.forEach((msg, idx) => {
@@ -938,7 +900,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 if (idx === lastUserIdx) { (lastUserMsgRef as { current: HTMLDivElement | null }).current = el; }
               };
 
-              const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; writtenFiles?: WrittenFile[] } = {}): ReactNode => {
+              const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; writtenFiles?: WrittenFile[]; parentFollowUp?: boolean } = {}): ReactNode => {
                 const msg = options.messageOverride ?? messages[idx];
                 const prevAssistantEntryId =
                   msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
@@ -966,7 +928,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                   }
                 }
                 if (options.showTimestamp !== undefined) showTimestamp = options.showTimestamp;
-                const view = (
+                const messageView = (
                   <MessageView
                     key={`${keyPrefix}-view-${messageKey}`}
                     message={msg}
@@ -987,6 +949,12 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     writtenFiles={options.writtenFiles}
                   />
                 );
+                const view = options.parentFollowUp && msg.role === "assistant" ? (
+                  <div key={`follow-up-${keyPrefix}-${messageKey}`}>
+                    <div className="chat-parent-follow-up" data-parent-follow-up="true">{t("subagent.parentFollowUp")}</div>
+                    {messageView}
+                  </div>
+                ) : messageView;
                 if (!isVisible || options.attachRef === false || currentRefIdx === undefined) return view;
                 return (
                   <div key={`${keyPrefix}-${messageKey}`} ref={attachVisibleRef(idx, currentRefIdx)}>
@@ -996,41 +964,28 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               };
 
               const rendered: ReactNode[] = [];
-              for (let idx = 0; idx < messages.length;) {
-                const msg = messages[idx];
-                if (!isGroupAnchor(msg)) {
-                  rendered.push(renderMessage(idx));
-                  idx += 1;
-                  continue;
-                }
-
-                const userIdx = idx;
-                let endIdx = userIdx + 1;
-                while (endIdx < messages.length && !isGroupAnchor(messages[endIdx])) endIdx += 1;
-
-                const finalAssistantIdx = findFinalAssistantIndex(messages, userIdx, endIdx);
-
-                if (finalAssistantIdx === -1) {
+              for (const group of messageGroups) {
+                const { startIndex: userIdx, endIndex: endIdx, contentStartIndex } = group;
+                const finalAssistantIdx = group.kind === "standalone" ? -1
+                  : findFinalAssistantIndex(messages, contentStartIndex - 1, endIdx);
+                const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length;
+                if (finalAssistantIdx === -1 || isLiveTail) {
+                  let labeled = false;
                   for (let renderIdx = userIdx; renderIdx < endIdx; renderIdx++) {
-                    rendered.push(renderMessage(renderIdx));
+                    const parentFollowUp = group.parentFollowUp && !labeled && messages[renderIdx].role === "assistant";
+                    if (parentFollowUp) labeled = true;
+                    rendered.push(renderMessage(renderIdx, { parentFollowUp }));
                   }
-                  idx = endIdx;
                   continue;
                 }
 
-                const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length && userIdx === lastAnchorIdx;
-                if (isLiveTail) {
-                  for (let renderIdx = userIdx; renderIdx < endIdx; renderIdx++) {
-                    rendered.push(renderMessage(renderIdx));
-                  }
-                  idx = endIdx;
-                  continue;
+                // Consecutive reports stay visible as source cards, never process details.
+                for (let anchorIdx = userIdx; anchorIdx < contentStartIndex; anchorIdx++) {
+                  rendered.push(renderMessage(anchorIdx));
                 }
-
-                rendered.push(renderMessage(userIdx));
 
                 const processIndices: number[] = [];
-                for (let processIdx = userIdx + 1; processIdx < finalAssistantIdx; processIdx++) {
+                for (let processIdx = contentStartIndex; processIdx < finalAssistantIdx; processIdx++) {
                   processIndices.push(processIdx);
                 }
                 const visibleProcessIndices = processIndices.filter((processIdx) => hasDisplayableProcessMessage(messages[processIdx]));
@@ -1057,7 +1012,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                       toolCallCount={countToolCalls(messages, visibleProcessIndices) + countToolCallBlocks(finalSplit.processBlocks)}
                     >
                       {visibleProcessIndices.map((processIdx) => renderMessage(processIdx, { attachRef: false, keyPrefix: "process" }))}
-                      {finalProcessMessage && renderMessage(finalAssistantIdx, { attachRef: false, keyPrefix: "process-final", messageOverride: finalProcessMessage, showTimestamp: false })}
+                      {finalProcessMessage && renderMessage(finalAssistantIdx, { attachRef: false, keyPrefix: "process-final", messageOverride: finalProcessMessage, showTimestamp: false, parentFollowUp: group.parentFollowUp && !finalAnswerMessage })}
                     </ProcessDetailsGroup>
                   );
                   rendered.push(
@@ -1071,7 +1026,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 }
 
                 if (finalAnswerMessage) {
-                  rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage }));
+                  rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage, parentFollowUp: group.parentFollowUp }));
                 }
                 for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
                   rendered.push(renderMessage(renderIdx));
@@ -1085,7 +1040,6 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     diffNotice={t("chat.reviewDiffNotice")}
                   />,
                 );
-                idx = endIdx;
               }
               const { startIndex } = getVisibleRenderWindow(rendered.length, visibleCount);
               const hasMore = startIndex > 0 || hasEarlierMessages;
@@ -1101,7 +1055,12 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               );
             })()}
             {streamState.isStreaming && hasStreamingContent && streamState.streamingMessage && (
-              <MessageView message={streamState.streamingMessage as AgentMessage} toolResults={toolResultsMap} isStreaming modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+              <>
+                {needsStreamingFollowUpLabel(messages, messageGroups.at(-1)) && (
+                  <div className="chat-parent-follow-up" data-parent-follow-up="true">{t("subagent.parentFollowUp")}</div>
+                )}
+                <MessageView message={streamState.streamingMessage as AgentMessage} toolResults={toolResultsMap} isStreaming modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+              </>
             )}
 
             {agentRunning && !hasStreamingContent && agentPhase && (

@@ -15,6 +15,7 @@ import {
 } from "./system-prompt-extension";
 import {
   subagentFinalText,
+  subagentNotificationContent,
   subagentToolDetails,
   type StartSubagentRequest,
   type SubagentExecution,
@@ -384,9 +385,11 @@ export function createSubagentController(
     if (!parent.isAlive()) throw new Error(`Parent session is no longer available: ${run.parentSessionId}`);
     await parent.inner.sendCustomMessage({
       customType: "pi-web:subagent-notification",
-      content: subagentFinalText(run),
+      content: subagentNotificationContent(run),
       display: true,
-      details: subagentToolDetails(run),
+      // Keep the original report for the UI; model-only attribution/guidance
+      // belongs to content because the SDK does not send details to the LLM.
+      details: { ...subagentToolDetails(run), reportText: subagentFinalText(run) },
     }, { deliverAs: "followUp", triggerTurn: true });
   }
 

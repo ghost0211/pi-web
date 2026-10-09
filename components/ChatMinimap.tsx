@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   buildTurnPreviews,
   mapTurnOffsets,
+  mergeNavigableTurnPreviews,
   type LocalTurnMeasure,
   type TurnPreview,
 } from "@/lib/turn-index";
@@ -296,12 +297,10 @@ export function ChatMinimap({
   // was fetched. Head turns — placeholders for a window that starts mid-turn —
   // are never appended: they belong to the turn above, which the index knows.
   const localTurns = useMemo(() => buildTurnPreviews(allMessages, allEntryIds), [allMessages, allEntryIds]);
-  const turns = useMemo(() => {
-    if (turnIndex.length === 0) return localTurns;
-    const known = new Set(turnIndex.map((turn) => turn.entryId));
-    const extra = localTurns.filter((turn) => !turn.head && turn.entryId && !known.has(turn.entryId));
-    return extra.length > 0 ? [...turnIndex, ...extra] : turnIndex;
-  }, [localTurns, turnIndex]);
+  const turns = useMemo(
+    () => mergeNavigableTurnPreviews(turnIndex, localTurns),
+    [localTurns, turnIndex],
+  );
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   const localTurnsRef = useRef(localTurns);
@@ -371,16 +370,15 @@ export function ChatMinimap({
           : refIndexByMessage.get(turn.messageIndex);
         const element = elementIndex === undefined ? null : refs?.[elementIndex] ?? null;
         if (!element) {
-          // Only a compaction card borrows an offset; an unrendered message
-          // must wait for its element instead of jumping to a neighbour.
-          const message = turn.messageIndex === undefined ? null : allMessagesRef.current[turn.messageIndex];
-          return { top: null, borrowNext: message?.role === "custom" && message.customType === "compaction" };
+          // An unrendered user/assistant element must wait for measurement
+          // instead of borrowing a neighbouring turn's offset.
+          return { top: null };
         }
         return {
           top: element.getBoundingClientRect().top - containerRect.top + scrollEl.scrollTop,
         };
       });
-      const nextOffsets = mapTurnOffsets(localMeasures, currentTurns.length, scrollEl.scrollHeight);
+      const nextOffsets = mapTurnOffsets(localMeasures, currentTurns.length);
       offsetsRef.current = nextOffsets;
       setRailHeight(scrollEl.clientHeight);
       setVisible(scrollEl.scrollHeight - scrollEl.clientHeight > 20);

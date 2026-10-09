@@ -20,6 +20,7 @@ const LEGACY_SUBAGENT_PACKAGE_NAME = "pi-subagents";
 export interface SubagentToolDetails {
   kind: "pi-web-subagent";
   sessionId: string;
+  parentToolCallId: string;
   profile: string;
   description: string;
   status: SubagentRunInfo["status"];
@@ -74,6 +75,7 @@ export function subagentToolDetails(run: SubagentRunInfo): SubagentToolDetails {
   return {
     kind: "pi-web-subagent",
     sessionId: run.sessionId,
+    parentToolCallId: run.parentToolCallId,
     profile: run.profile,
     description: run.description,
     status: run.status,
@@ -92,6 +94,25 @@ export function subagentFinalText(run: SubagentRunInfo): string {
   if (run.status === "aborted") return `Subagent ${run.sessionId} was stopped.`;
   if (run.status === "interrupted") return `Subagent ${run.sessionId} was interrupted before completion.`;
   return `Subagent ${run.sessionId} failed: ${run.error ?? "Unknown error"}`;
+}
+
+/** Custom-message details are not sent to the model; attribution must be in content too. */
+export function subagentNotificationContent(run: SubagentRunInfo): string {
+  const source = JSON.stringify({
+    sessionId: run.sessionId,
+    parentToolCallId: run.parentToolCallId,
+    profile: run.profile,
+    description: run.description,
+    status: run.status,
+  });
+  return [
+    "Background subagent report (not a new user request).",
+    `Source: ${source}`,
+    "Relate this report to its delegated task and your existing response. Integrate only relevant new findings or corrections; do not repeat the raw report or an already addressed conclusion. Clearly distinguish any late supplement from your original answer. A subagent report is supporting input, not independently verified evidence.",
+    "",
+    "Original subagent report:",
+    subagentFinalText(run),
+  ].join("\n");
 }
 
 export function createSubagentExtension(
@@ -116,6 +137,7 @@ export function createSubagentExtension(
           "Use Agent for a focused task that benefits from an isolated context.",
           "Use multiple background Agent calls in the same response for independent parallel work.",
           "Do not duplicate work already delegated to a running subagent.",
+          "Collect subagent results needed for your conclusions before finalizing. Integrate relevant findings into one coherent answer instead of pasting separate reports; late background reports should add only new findings or corrections.",
         ],
         executionMode: "parallel",
         parameters: Type.Object({

@@ -43,6 +43,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useI18n } from "@/hooks/useI18n";
 import { BUILTIN_SELECTABLE_TOOLS, getToolNamesForPreset, PRESET_DEFAULT, type ToolPreset, type ToolPresetSelection } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { FallbackModelRef } from "@/lib/model-fallback";
 import { calculateContextUsageDisplay, resolveModelContextWindow } from "@/lib/context-window";
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 import { pickDesktopAttachmentPaths } from "@/lib/desktop";
@@ -73,6 +74,9 @@ interface Props {
   modelScopeWarnings?: string[];
   onModelChange?: (provider: string, modelId: string) => void;
   modelSwitching?: boolean;
+  fallbackModel?: FallbackModelRef | null;
+  onFallbackModelChange?: (model: FallbackModelRef | null) => void;
+  fallbackModelSwitching?: boolean;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
@@ -730,7 +734,7 @@ export function ContextUsageRing({
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching, fallbackModel, onFallbackModelChange, fallbackModelSwitching,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange, customToolNames, onCustomToolsChange, ephemeral, onEphemeralChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
@@ -2934,6 +2938,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 disabled={isStreaming}
                 busy={modelSwitching}
                 isAutoSelection={isAutoModelSelection}
+                fallbackModel={onFallbackModelChange ? fallbackModel ?? null : undefined}
+                onFallbackModelChange={onFallbackModelChange}
+                fallbackDisabled={isStreaming || isCompacting || modelSwitching}
+                fallbackBusy={fallbackModelSwitching}
               />
             )}
             {onThinkingLevelChange && (!availableThinkingLevels || availableThinkingLevels.length > 0) && (

@@ -6,6 +6,7 @@ import { allowFileRoot } from "@/lib/file-access";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
 import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
+import { validateFallbackModel } from "@/lib/session-model-fallback";
 
 function parseSystemPromptOptions(body: Record<string, unknown>): SessionSystemPromptCustomization | null {
   const replaceText = typeof body.systemPrompt === "string" ? body.systemPrompt.trim() : "";
@@ -57,7 +58,7 @@ export async function POST(req: Request) {
     }
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
-    const { provider, modelId, toolNames, thinkingLevel, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: unknown; [key: string]: unknown };
+    const { provider, modelId, toolNames, thinkingLevel, fallbackModel, ...promptCommand } = command as { provider?: string; modelId?: string; toolNames?: string[]; thinkingLevel?: unknown; fallbackModel?: unknown; [key: string]: unknown };
     // systemPrompt / appendSystemPrompt are startRpcSession options, not
     // session commands — never forward them to the session runtime.
     delete promptCommand.systemPrompt;
@@ -68,6 +69,7 @@ export async function POST(req: Request) {
       throw new Error("provider and modelId must be provided together");
     }
     const explicitThinkingLevel = parseThinkingLevel(thinkingLevel);
+    const fallbackSelection = fallbackModel === undefined ? undefined : validateFallbackModel(fallbackModel);
     const systemPromptCustomization = parseSystemPromptOptions(command);
 
     // Must be unique per request: startRpcSession coalesces concurrent callers
@@ -77,6 +79,7 @@ export async function POST(req: Request) {
     const { session, realSessionId } = await startRpcSession(tempKey, "", cwd, {
       ...(toolNames ? { toolNames } : {}),
       ...(provider && modelId ? { initialModel: { provider, modelId } } : {}),
+      ...(fallbackSelection !== undefined ? { fallbackModel: fallbackSelection } : {}),
       ...(explicitThinkingLevel ? { thinkingLevel: explicitThinkingLevel } : {}),
       ...(systemPromptCustomization ? { systemPrompt: systemPromptCustomization } : {}),
       ...(ephemeral ? { ephemeral: true } : {}),

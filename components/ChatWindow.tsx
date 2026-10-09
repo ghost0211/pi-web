@@ -239,7 +239,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
   const {
     loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
     turnIndex, ensureEntryLoaded,
-    agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, toolPreset, customToolNames, thinkingLevel,
+    agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
@@ -250,7 +250,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     showScrollToBottom,
     sessionIdRef, messagesEndRef, scrollContainerRef,
     lastUserMsgRef, promptAnchorActive,
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
+    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFallbackModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
@@ -633,6 +633,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       modelScopeWarnings={modelScopeWarnings}
       onModelChange={isReadOnlyConversation ? undefined : handleModelChange}
       modelSwitching={modelSwitching}
+      fallbackModel={fallbackModel}
+      onFallbackModelChange={!isReadOnlyConversation && (session || isNew) ? handleFallbackModelChange : undefined}
+      fallbackModelSwitching={fallbackModelSwitching}
       onCompact={!isReadOnlyConversation && (session || isNew) ? handleCompact : undefined}
       onAbortCompaction={isReadOnlyConversation ? undefined : handleAbortCompaction}
       isCompacting={isCompacting}

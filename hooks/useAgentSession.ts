@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, useReducer } from "react";
 import { useRouter } from "next/navigation";
+import { useI18n } from "@/hooks/useI18n";
 import type {
   AgentMessage,
   BlockingExtensionUiRequest,
@@ -20,6 +21,8 @@ import { normalizeToolCalls } from "@/lib/normalize";
 import { isPromptRejectedError, sendAgentCommand } from "@/lib/agent-client";
 import { clearDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-store";
 import { getPreferredToolSelection, setPreferredToolSelection } from "@/lib/tool-preset-preference";
+import { getFallbackModelPreference, setFallbackModelPreference } from "@/lib/fallback-model-preference";
+import { parseFallbackModel, parseModelFallbackNotice, type FallbackModelRef, type ModelFallbackNotice } from "@/lib/model-fallback";
 import { getToolNamesForPreset, matchToolPresetOrCustom, PRESET_DEFAULT, type ToolEntry, type ToolPreset, type ToolPresetSelection } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
@@ -59,6 +62,9 @@ export interface SessionData {
   stats?: SessionFileStats;
   /** True when GET ?force=1 dropped a stale live wrapper and rebuilt from disk. */
   wrapperRebuilt?: boolean;
+  /** Persisted per-session quota fallback; absent on older detail routes. */
+  fallbackModel?: FallbackModelRef | null;
+  fallbackNotice?: ModelFallbackNotice | null;
 }
 
 interface AgentEvent {
@@ -76,6 +82,10 @@ interface LastAssistantTextResponse {
 }
 
 type AgentStateResponse = {
+  /** Current runtime model uses the RPC shape `{ provider, id }`. */
+  model?: unknown;
+  fallbackModel?: unknown;
+  fallbackNotice?: unknown;
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   systemPrompt?: string;
   customSystemPrompt?: SessionSystemPromptCustomization | null;
@@ -268,6 +278,16 @@ export interface AttachedImage {
 }
 
 type SelectedModel = { provider: string; modelId: string };
+const THINKING_LEVEL_OPTIONS: ThinkingLevelOption[] = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function parseRuntimeModel(value: unknown): SelectedModel | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.provider === "string" && typeof candidate.id === "string"
+    ? { provider: candidate.provider, modelId: candidate.id }
+    : null;
+}
+
 type ModelEntry = { id: string; name: string; provider: string; contextWindow?: number; maxTokens?: number };
 type ModelsResponse = {
   models: Record<string, string>;
@@ -286,6 +306,7 @@ type SlashCommandsResponse = {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const router = useRouter();
+  const { t } = useI18n();
   const {
     session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
@@ -319,6 +340,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [modelThinkingLevelPins, setModelThinkingLevelPins] = useState<Record<string, string>>({});
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
+  const [fallbackModel, setFallbackModelState] = useState<FallbackModelRef | null>(null);
+  const [fallbackModelSwitching, setFallbackModelSwitching] = useState(false);
   const [toolPreset, setToolPreset] = useState<ToolPresetSelection>("default");
   // Builtin tool names backing the "custom" selection; defaults to the
   // standard set so opening the picker for the first time shows those checked.
@@ -389,6 +412,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const contextUsageRef = useRef<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const displayModelRef = useRef<{ provider: string; modelId: string } | null>(null);
   const modelListRef = useRef<ModelEntry[]>([]);
+  const modelThinkingLevelsRef = useRef<Record<string, string[]>>({});
+  const modelThinkingLevelPinsRef = useRef<Record<string, string>>({});
+  const fallbackModelRef = useRef<FallbackModelRef | null>(null);
+  const fallbackPreferenceInitializedRef = useRef(false);
+  const fallbackPreferenceTouchedRef = useRef(false);
+  const fallbackSelectionKnownRef = useRef(false);
+  const fallbackChangePendingRef = useRef(false);
+  const fallbackChangeRequestRef = useRef(0);
+  const fallbackNoticeFingerprintRef = useRef<string | null>(null);
+  const fallbackNoticeTimestampRef = useRef(-1);
   const estimateContextAfterMessageRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
@@ -436,6 +469,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
   const existingSessionId = session?.id;
+  const initializeFreshFallbackPreference = useCallback(() => {
+    if (!fallbackPreferenceInitializedRef.current) {
+      fallbackPreferenceInitializedRef.current = true;
+      if (!fallbackPreferenceTouchedRef.current) {
+        const preferred = getFallbackModelPreference();
+        fallbackModelRef.current = preferred;
+        setFallbackModelState(preferred);
+        fallbackSelectionKnownRef.current = true;
+      }
+    }
+    return fallbackModelRef.current;
+  }, []);
+
+  useEffect(() => {
+    if (!isNew || sessionIdRef.current || fallbackPreferenceInitializedRef.current || fallbackPreferenceTouchedRef.current) return;
+    initializeFreshFallbackPreference();
+  }, [initializeFreshFallbackPreference, isNew]);
 
   useLayoutEffect(() => {
     if (!existingSessionId && (!isNew || sessionIdRef.current)) return;
@@ -451,11 +501,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
-  const displayModel = isNew ? (newSessionModel ?? newSessionDefaultModel) : currentModel;
+  const displayModel = isNew ? (currentModelOverride ?? newSessionModel ?? newSessionDefaultModel) : currentModel;
   // Keep latest-value refs in sync for stale-closure-safe reads inside handleAgentEvent.
   displayModelRef.current = displayModel;
   contextUsageRef.current = contextUsage;
   modelListRef.current = modelList;
+  modelThinkingLevelsRef.current = modelThinkingLevels;
+  modelThinkingLevelPinsRef.current = modelThinkingLevelPins;
+  fallbackModelRef.current = fallbackModel;
 
   // Keep every producer (session-file estimates, SDK state, compaction events)
   // on the authoritative model-catalog denominator once that metadata is loaded.
@@ -540,8 +593,74 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   }, [messages, sessionStatsOverride, contextUsage, data?.context.messages, data?.history?.messages, data?.filePath, data?.totalActiveMs, data?.stats, session?.id, session?.name]);
 
+  const applyFallbackThinkingLevel = useCallback((value: unknown, target: SelectedModel | null) => {
+    let level = THINKING_LEVEL_OPTIONS.includes(value as ThinkingLevelOption)
+      ? value as ThinkingLevelOption
+      : "auto";
+    if (target) {
+      const pinned = modelThinkingLevelPinsRef.current[`${target.provider}/${target.modelId}`];
+      if (pinned && THINKING_LEVEL_OPTIONS.includes(pinned as ThinkingLevelOption)) {
+        level = pinned as ThinkingLevelOption;
+      } else {
+        const available = modelThinkingLevelsRef.current[`${target.provider}:${target.modelId}`];
+        if (level !== "auto" && available && !available.includes(level)) level = "auto";
+      }
+    }
+    setThinkingLevel(level);
+  }, []);
+
+  const applyFallbackModelSelection = useCallback((value: unknown) => {
+    const parsed = parseFallbackModel(value);
+    if (parsed === undefined) return undefined;
+    fallbackModelRef.current = parsed;
+    setFallbackModelState(parsed);
+    fallbackPreferenceInitializedRef.current = true;
+    fallbackSelectionKnownRef.current = true;
+    return parsed;
+  }, []);
+
+  const applyFallbackNotice = useCallback((value: unknown, announce: boolean, activeModel?: SelectedModel | null) => {
+    const notice = parseModelFallbackNotice(value);
+    if (!notice || notice.timestamp < fallbackNoticeTimestampRef.current) return null;
+    const fingerprint = `${notice.timestamp}|${notice.ruleId}|${notice.from.provider}/${notice.from.modelId}|${notice.to.provider}/${notice.to.modelId}`;
+    if (!activeModel || (activeModel.provider === notice.to.provider && activeModel.modelId === notice.to.modelId)) {
+      setCurrentModelOverride(notice.to);
+    }
+    if (announce && fallbackNoticeFingerprintRef.current !== fingerprint) {
+      const label = (model: FallbackModelRef) => (
+        modelListRef.current.find((entry) => entry.provider === model.provider && entry.id === model.modelId)?.name
+        ?? `${model.provider} / ${model.modelId}`
+      );
+      dispatchNotice({
+        type: "add",
+        notice: {
+          id: createNoticeId(),
+          message: t("chat.fallbackNotice", { from: label(notice.from), to: label(notice.to) }),
+          type: "warning",
+        },
+      });
+    }
+    fallbackNoticeFingerprintRef.current = fingerprint;
+    fallbackNoticeTimestampRef.current = Math.max(fallbackNoticeTimestampRef.current, notice.timestamp);
+    return notice;
+  }, [t]);
+
+  const applyAgentStateMetadata = useCallback((state: AgentStateResponse | undefined, announce = true) => {
+    if (!state) return;
+    const runtimeModel = parseRuntimeModel(state.model);
+    if (runtimeModel && !modelSwitchPendingRef.current) setCurrentModelOverride(runtimeModel);
+    if (state.fallbackModel !== undefined && !fallbackChangePendingRef.current) applyFallbackModelSelection(state.fallbackModel);
+    const notice = state.fallbackNotice === undefined
+      ? null
+      : applyFallbackNotice(state.fallbackNotice, announce, runtimeModel);
+    if (state.thinkingLevel !== undefined) {
+      applyFallbackThinkingLevel(state.thinkingLevel, runtimeModel ?? notice?.to ?? displayModelRef.current);
+    }
+  }, [applyFallbackModelSelection, applyFallbackNotice, applyFallbackThinkingLevel]);
+
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, options?: { force?: boolean }) => {
     let messagesLoaded = false;
+    const loadRunId = promptRunIdRef.current;
     try {
       if (showLoading) setLoading(true);
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
@@ -580,6 +699,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setToolPresetState("default");
       }
       setCurrentModelOverride((current) => modelSwitchPendingRef.current ? current : null);
+      let persistedFallbackNotice: ModelFallbackNotice | null = null;
+      if (promptRunIdRef.current === loadRunId) {
+        if (d.fallbackModel !== undefined && !fallbackChangePendingRef.current) applyFallbackModelSelection(d.fallbackModel);
+        if (d.fallbackNotice !== undefined) {
+          persistedFallbackNotice = applyFallbackNotice(d.fallbackNotice, true, d.context.model);
+        }
+      }
       setError(null);
       if (d.wrapperRebuilt) {
         // The wrapper serving our SSE was evicted and rebuilt from disk —
@@ -587,8 +713,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         eventConnectionRef.current?.close();
         eventConnectionRef.current?.maintain(sid);
       }
-      if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
-        setThinkingLevel(d.context.thinkingLevel as ThinkingLevelOption);
+      if (promptRunIdRef.current === loadRunId && d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
+        applyFallbackThinkingLevel(d.context.thinkingLevel, d.context.model ?? persistedFallbackNotice?.to ?? null);
       }
 
       messagesLoaded = true;
@@ -612,10 +738,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
         const liveState = agentState.state;
         if (liveState) {
+          if (promptRunIdRef.current === loadRunId) applyAgentStateMetadata(liveState);
           if (liveState.contextUsage?.tokens !== null && liveState.contextUsage?.tokens !== undefined) setContextUsage(liveState.contextUsage);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
           if (liveState.customSystemPrompt !== undefined) setCustomSystemPrompt(liveState.customSystemPrompt ?? null);
-          if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
           if (liveState.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
@@ -633,7 +759,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading && !messagesLoaded) setLoading(false);
     }
-  }, [setToolPresetState]);
+  }, [applyAgentStateMetadata, applyFallbackModelSelection, applyFallbackNotice, applyFallbackThinkingLevel, setToolPresetState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null, before?: string | null, tail?: number) => {
     try {
@@ -758,6 +884,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // enabledModels scope atomically with AgentSession construction.
       const selectedModel = newSessionModelOverrideRef.current;
       const selectedThinkingLevel = thinkingLevelOverrideRef.current;
+      const selectedFallbackModel = initializeFreshFallbackPreference();
       if (selectedModel) setPendingModel(selectedModel);
       const toolNames = toolPreset === "custom" ? customToolNames : getToolNamesForPreset(toolPreset);
       const res = await fetch("/api/agent/new", {
@@ -767,6 +894,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           cwd: newSessionCwd,
           type: "ensure_session",
           toolNames,
+          ...(selectedFallbackModel || fallbackPreferenceTouchedRef.current
+            ? { fallbackModel: selectedFallbackModel }
+            : {}),
           ...(selectedModel ? { provider: selectedModel.provider, modelId: selectedModel.modelId } : {}),
           ...(selectedThinkingLevel
             ? { thinkingLevel: selectedThinkingLevel }
@@ -801,7 +931,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       ensuringNewSessionRef.current = null;
     }
-  }, [isNew, newSessionCwd, toolPreset, customToolNames]);
+  }, [initializeFreshFallbackPreference, isNew, newSessionCwd, toolPreset, customToolNames]);
 
   // Opening the System or Tools panel may initialize an otherwise dormant
   // session. This is deliberately a non-prompt command: it creates no message
@@ -815,9 +945,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       loadTools(sid),
     ]);
     if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
+    applyAgentStateMetadata(state);
     setSystemPrompt(state.systemPrompt ?? "");
     if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
-  }, [ensureNewSession, loadTools]);
+  }, [applyAgentStateMetadata, ensureNewSession, loadTools]);
 
   // Set or clear the per-session system prompt override (append/replace),
   // persisted in the session file by the server, then refresh the displayed
@@ -1029,6 +1160,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         ) return;
 
         const state = data.state;
+        applyAgentStateMetadata(state);
         const promptActive = Boolean(data.running && state && (state.isStreaming || state.isPromptRunning));
         if (promptActive) {
           eventStreamGraceActiveRef.current = false;
@@ -1062,7 +1194,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     };
 
     eventStreamGraceTimerRef.current = setTimeout(() => void checkServerIdle(), EVENT_STREAM_IDLE_GRACE_MS);
-  }, [cancelEventStreamGrace, closeEvents]);
+  }, [applyAgentStateMetadata, cancelEventStreamGrace, closeEvents]);
 
   const finishPromptWithoutStream = useCallback(async (
     sid: string | null = sessionIdRef.current,
@@ -1161,6 +1293,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // flight) — everything in it is stale, drop it.
       if (sessionIdRef.current !== sid || promptRunIdRef.current !== runId) return;
       const state = data.state;
+      applyAgentStateMetadata(state);
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
@@ -1185,7 +1318,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }
-  }, [finishPromptWithoutStream]);
+  }, [applyAgentStateMetadata, finishPromptWithoutStream]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -1226,6 +1359,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case "model_fallback": {
+        if (!sessionHookMountedRef.current || !sessionIdRef.current) break;
+        const notice = applyFallbackNotice(event.notice, true);
+        if (notice && event.thinkingLevel !== undefined) {
+          applyFallbackThinkingLevel(event.thinkingLevel, notice.to);
+        }
+        break;
+      }
       case "connected": {
         dispatch({ type: "end" });
         if (event.isStreaming === true) {
@@ -1256,10 +1397,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setRetryInfo(null);
         dispatch({ type: "end" });
         if (sessionIdRef.current) {
-          loadSession(sessionIdRef.current);
-          fetch(`/api/agent/${encodeURIComponent(sessionIdRef.current)}`)
+          const sid = sessionIdRef.current;
+          const eventRunId = promptRunIdRef.current;
+          loadSession(sid);
+          fetch(`/api/agent/${encodeURIComponent(sid)}`)
             .then((r) => r.json())
             .then((d: { state?: AgentStateResponse }) => {
+              if (sessionIdRef.current !== sid || promptRunIdRef.current !== eventRunId) return;
+              applyAgentStateMetadata(d.state);
               if (d.state?.contextUsage?.tokens !== null && d.state?.contextUsage?.tokens !== undefined) setContextUsage(d.state.contextUsage);
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
         if (d.state?.customSystemPrompt !== undefined) setCustomSystemPrompt(d.state.customSystemPrompt ?? null);
@@ -1497,7 +1642,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
+  }, [addNotice, applyAgentStateMetadata, applyFallbackNotice, applyFallbackThinkingLevel, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1840,6 +1985,57 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, currentModelOverride, isNew, loadSession, modelThinkingLevels, modelThinkingLevelPins, setNewSessionModel, thinkingLevel]);
 
+  const handleFallbackModelChange = useCallback(async (model: FallbackModelRef | null) => {
+    if (fallbackChangePendingRef.current || modelSwitchPendingRef.current || agentRunningRef.current || bashRunningRef.current || isCompacting) return;
+    const parsed = parseFallbackModel(model);
+    if (parsed === undefined) return;
+
+    const previous = fallbackModelRef.current;
+    fallbackPreferenceTouchedRef.current = true;
+    fallbackPreferenceInitializedRef.current = true;
+    fallbackSelectionKnownRef.current = true;
+    fallbackModelRef.current = parsed;
+    setFallbackModelState(parsed);
+
+    const currentSid = sessionIdRef.current;
+    const pendingSession = currentSid ? null : ensuringNewSessionRef.current;
+    if (!currentSid && !pendingSession) {
+      setFallbackModelPreference(parsed);
+      return;
+    }
+
+    const requestId = ++fallbackChangeRequestRef.current;
+    fallbackChangePendingRef.current = true;
+    setFallbackModelSwitching(true);
+    try {
+      const sid = currentSid ?? await pendingSession;
+      if (!sid) return;
+      const confirmedValue = await sendAgentCommand<unknown>(sid, {
+        type: "set_fallback_model",
+        model: parsed,
+      });
+      if (requestId !== fallbackChangeRequestRef.current || sessionIdRef.current !== sid) return;
+      const confirmed = parseFallbackModel(confirmedValue);
+      if (confirmed !== undefined) applyFallbackModelSelection(confirmed);
+      setFallbackModelPreference(parsed);
+    } catch (e) {
+      if (requestId === fallbackChangeRequestRef.current) {
+        applyFallbackModelSelection(previous);
+        addNotice({
+          type: "error",
+          message: e instanceof Error ? e.message : String(e),
+        });
+        const sid = sessionIdRef.current;
+        if (sid) void loadSession(sid);
+      }
+    } finally {
+      if (requestId === fallbackChangeRequestRef.current) {
+        fallbackChangePendingRef.current = false;
+        setFallbackModelSwitching(false);
+      }
+    }
+  }, [addNotice, applyFallbackModelSelection, isCompacting, loadSession]);
+
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid || isCompacting) return;
@@ -2136,10 +2332,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       const result = await sendAgentCommand<{ sessionId?: string; recreated?: boolean }>(sid, { type: "set_tools", toolNames });
       const activeSessionId = result?.sessionId ?? sid;
-      if (activeSessionId !== sid) {
+      const recreated = Boolean(result?.recreated || activeSessionId !== sid);
+      if (recreated) {
         cancelEventStreamGrace();
         closeEvents();
-        sessionIdRef.current = activeSessionId;
+        if (activeSessionId !== sid) sessionIdRef.current = activeSessionId;
+      }
+      if (recreated && fallbackSelectionKnownRef.current && fallbackModelRef.current) {
+        const selectedFallbackModel = fallbackModelRef.current;
+        try {
+          const confirmed = await sendAgentCommand<unknown>(activeSessionId, {
+            type: "set_fallback_model",
+            model: selectedFallbackModel,
+          });
+          applyFallbackModelSelection(confirmed);
+        } catch (e) {
+          console.error("Failed to restore fallback model after tool change:", e);
+        }
       }
       setSlashCommands([]);
       setExtensionStatuses([]);
@@ -2149,13 +2358,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         loadTools(activeSessionId),
       ]);
       if (sessionHookMountedRef.current && sessionIdRef.current === activeSessionId) {
+        applyAgentStateMetadata(state);
         setSystemPrompt(state.systemPrompt ?? "");
         if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
       }
     } catch (e) {
       console.error("Failed to set tools:", e);
     }
-  }, [cancelEventStreamGrace, closeEvents, loadTools]);
+  }, [applyAgentStateMetadata, applyFallbackModelSelection, cancelEventStreamGrace, closeEvents, loadTools]);
 
   const handleToolPresetChange = useCallback(async (preset: ToolPreset) => {
     const toolNames = getToolNamesForPreset(preset);
@@ -2255,7 +2465,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (agentState.state.contextUsage?.tokens !== null && agentState.state.contextUsage?.tokens !== undefined) setContextUsage(agentState.state.contextUsage);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.customSystemPrompt !== undefined) setCustomSystemPrompt(agentState.state.customSystemPrompt ?? null);
-          if (agentState.state.thinkingLevel !== undefined) setThinkingLevel((agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto");
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
           if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
           if (agentState.state.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(agentState.state.queuedMessages));
@@ -2402,12 +2611,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // State
     data, loading, error, activeLeafId, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
     turnIndex, ensureEntryLoaded,
-    agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, customToolNames, thinkingLevel,
+    agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
-    isAutoModelSelection: isNew && newSessionModel === null,
+    isAutoModelSelection: isNew && newSessionModel === null && currentModelOverride === null,
     agentPhase,
     isNew,
     promptAnchorActive,
@@ -2416,7 +2625,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionIdRef, messagesEndRef, scrollContainerRef,
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
-    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
+    handleSend, handleAbort, handleFork, handleNavigate, handleModelChange, handleFallbackModelChange,
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,

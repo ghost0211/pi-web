@@ -17,6 +17,7 @@ const { ModelSelector } = await jiti.import("./ModelSelector.tsx");
 const { clearDraft, getDraft, mergeRestoredSubmissionDraft, mergeRestoredSubmissionText, rekeyDraft, setDraft } = await jiti.import("@/lib/draft-store.ts");
 const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const source = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
+const modelSelectorSource = await readFile(new URL("./ModelSelector.tsx", import.meta.url), "utf8");
 
 test("renders the upstream model error", () => {
   const html = renderToStaticMarkup(
@@ -517,4 +518,38 @@ test("image-unsupported warning wiring lives in the composer", () => {
     source.indexOf("imageNotSupportedTitle") < source.indexOf("<textarea"),
     "warning banner renders above the composer textarea",
   );
+});
+
+test("renders a visible configured quota backup chip", () => {
+  const html = renderToStaticMarkup(
+    React.createElement(
+      I18nProvider,
+      null,
+      React.createElement(ModelSelector, {
+        options: [
+          { provider: "openai", modelId: "primary", name: "Primary" },
+          { provider: "anthropic", modelId: "backup", name: "Backup" },
+        ],
+        value: { provider: "openai", modelId: "primary" },
+        onChange() {},
+        fallbackModel: { provider: "anthropic", modelId: "backup" },
+        onFallbackModelChange() {},
+      }),
+    ),
+  );
+
+  assert.match(html, /↪/);
+  assert.match(html, /Quota backup configured/);
+  assert.match(html, /anthropic › backup/);
+});
+
+test("quota fallback picker keeps primary and backup distinct and explains the policy", () => {
+  assert.match(modelSelectorSource, /chat\.fallbackQuotaOnly/);
+  assert.match(modelSelectorSource, /chat\.fallbackCrossProviderWarning/);
+  assert.match(modelSelectorSource, /sameAsCurrentPrimary/);
+  assert.match(modelSelectorSource, /sameAsConfiguredFallback/);
+  assert.match(modelSelectorSource, /if \(sameModelLocked\) return/);
+  assert.match(modelSelectorSource, /chat\.fallbackSameAsPrimary/);
+  assert.match(source, /fallbackModelSwitching/);
+  assert.match(source, /onFallbackModelChange/);
 });

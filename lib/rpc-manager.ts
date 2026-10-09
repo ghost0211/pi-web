@@ -23,6 +23,14 @@ import {
 import { cacheSessionPath, invalidateSessionListCache, readLatestSessionEntryId, resolveSessionPath } from "./session-reader";
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { persistExplicitStartupPreferences } from "./startup-preferences";
+import { sameFallbackModel, type FallbackModelRef } from "./model-fallback";
+import {
+  appendSessionModelFallback,
+  readSessionModelFallback,
+  readSessionModelFallbackNotice,
+  validateFallbackModel,
+} from "./session-model-fallback";
+import { createModelFallbackExtension, observeModelFallbackErrors, type ModelFallbackRuntimeState } from "./model-fallback-runtime";
 import { notifySessionComplete } from "./web-push";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
@@ -139,6 +147,7 @@ type AgentSessionWrapperOptions = {
   onAgentRunComplete?: AgentRunCompleteListener;
   suppressCompletionNotifications?: boolean;
   mcpRuntime?: McpWebRuntime;
+  modelFallbackState?: ModelFallbackRuntimeState;
 };
 
 const IDLE_RESET_EVENT_TYPES = new Set([
@@ -169,6 +178,8 @@ const COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT = new Set([
 export interface RpcSessionStartOptions {
   toolNames?: string[];
   initialModel?: { provider: string; modelId: string };
+  /** Optional quota-only backup; never inherited from browser preferences for old sessions. */
+  fallbackModel?: FallbackModelRef | null;
   allowInitialModelFallback?: boolean;
   thinkingLevel?: ThinkingLevel;
   /**
@@ -325,6 +336,7 @@ export class AgentSessionWrapper {
   private readonly onAgentRunComplete?: AgentRunCompleteListener;
   private readonly suppressCompletionNotifications: boolean;
   private readonly mcpRuntime?: McpWebRuntime;
+  private readonly modelFallbackState?: ModelFallbackRuntimeState;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
@@ -346,6 +358,14 @@ export class AgentSessionWrapper {
     this.onAgentRunComplete = options.onAgentRunComplete;
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
     this.mcpRuntime = options.mcpRuntime;
+    this.modelFallbackState = options.modelFallbackState;
+    if (this.modelFallbackState) {
+      this.modelFallbackState.onSwitch = (notice, thinkingLevel) => {
+        if (!this._alive) return;
+        invalidateSessionListCache();
+        this.emit({ type: "model_fallback", notice, thinkingLevel });
+      };
+    }
   }
 
   get sessionId(): string {
@@ -411,6 +431,15 @@ export class AgentSessionWrapper {
   /** In-memory (ephemeral) sessions never write a JSONL file. */
   isEphemeral(): boolean {
     return this.ephemeral;
+  }
+
+  getFallbackModel(): FallbackModelRef | null {
+    return this.modelFallbackState?.selection ?? null;
+  }
+
+  getFallbackModelConfiguration(): FallbackModelRef | null | undefined {
+    const state = this.modelFallbackState;
+    return state?.configured ? state.selection : undefined;
   }
 
   hasMcpActionInProgress(): boolean { return this.mcpActionPending; }
@@ -867,6 +896,7 @@ export class AgentSessionWrapper {
       }
 
       case "abort":
+        if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
         this.forceShutdownOnIdle = true;
         try {
           await this.withFinalIdleReset(() => this.inner.abort());
@@ -883,6 +913,9 @@ export class AgentSessionWrapper {
           const rawMessages = (this.inner.messages ?? []) as AgentMessage[];
           contextUsage = calculateActiveContextTokens(rawMessages, contextWindow);
         }
+        const branchEntries = typeof this.inner.sessionManager.getBranch === "function"
+          ? this.inner.sessionManager.getBranch().map((entry) => entry as unknown as SessionEntry)
+          : undefined;
         return {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",
@@ -892,6 +925,10 @@ export class AgentSessionWrapper {
           isCompacting: this.inner.isCompacting,
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
+          fallbackModel: this.getFallbackModel(),
+          fallbackNotice: branchEntries
+            ? readSessionModelFallbackNotice(branchEntries)
+            : this.modelFallbackState?.notice ?? null,
           model: model ? { id: model.id, provider: model.provider } : undefined,
           messageCount: 0,
           pendingMessageCount: this.inner.pendingMessageCount,
@@ -911,6 +948,32 @@ export class AgentSessionWrapper {
         };
       }
 
+      case "set_fallback_model": {
+        if (this.isRunning() || this.activeMutatingCommands > 1) {
+          throw new Error("Wait for the current session operation to finish before changing the fallback model");
+        }
+        const selection = validateFallbackModel(command.model);
+        const state = this.modelFallbackState;
+        if (!state) throw new Error("Fallback models are not available for this session");
+        const resolved = selection ? await state.resolveModel(selection) : undefined;
+        if (selection && !resolved) {
+          throw new Error("Fallback model is unavailable or outside the enabled model scope");
+        }
+        const currentModel = this.inner.model;
+        if (selection && currentModel && sameFallbackModel(selection, { provider: currentModel.provider, modelId: currentModel.id })) {
+          throw new Error("Fallback model must be different from the primary model");
+        }
+        // Recheck after async availability resolution: a prompt may have started.
+        if (this.isRunning() || this.activeMutatingCommands > 1) {
+          throw new Error("Wait for the current session operation to finish before changing the fallback model");
+        }
+        appendSessionModelFallback(this.inner.sessionManager, selection);
+        state.selection = selection;
+        state.configured = true;
+        invalidateSessionListCache();
+        return selection;
+      }
+
       case "set_model": {
         const { provider, modelId } = command as { provider: string; modelId: string };
         let model = this.inner.modelRuntime.getModel(provider, modelId);
@@ -919,6 +982,10 @@ export class AgentSessionWrapper {
           model = this.inner.modelRuntime.getModel(provider, modelId);
         }
         if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
+        const configuredFallback = this.getFallbackModel();
+        if (configuredFallback && sameFallbackModel(configuredFallback, { provider: model.provider, modelId: model.id })) {
+          throw new Error("Primary model must be different from the configured fallback model");
+        }
         await this.inner.setModel(model);
         invalidateModelsCache();
         invalidateSessionListCache();
@@ -947,6 +1014,8 @@ export class AgentSessionWrapper {
             // Fork before the first message: create an empty session linked to this one
             const newManager = SessionManager.create(sessionManager.getCwd(), sessionDir);
             newManager.newSession({ parentSession: currentSessionFile });
+            const fallbackConfig = this.getFallbackModelConfiguration();
+            if (fallbackConfig !== undefined) appendSessionModelFallback(newManager, fallbackConfig);
             newSessionFile = newManager.getSessionFile() as string;
             persistDeferredSessionFile(newManager);
           } else {
@@ -955,6 +1024,8 @@ export class AgentSessionWrapper {
             const forkedPath = sourceManager.createBranchedSession(entry.parentId);
             if (!forkedPath) throw new Error("Failed to create forked session");
             newSessionFile = forkedPath;
+            const fallbackConfig = this.getFallbackModelConfiguration();
+            if (fallbackConfig !== undefined) appendSessionModelFallback(sourceManager, fallbackConfig);
             persistDeferredSessionFile(sourceManager);
           }
 
@@ -985,6 +1056,8 @@ export class AgentSessionWrapper {
           const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
           const clonedPath = sourceManager.createBranchedSession(leafId);
           if (!clonedPath || !existsSync(clonedPath)) throw new Error("Failed to clone current session branch");
+          const fallbackConfig = this.getFallbackModelConfiguration();
+          if (fallbackConfig !== undefined) appendSessionModelFallback(sourceManager, fallbackConfig);
 
           const newSessionId = SessionManager.open(clonedPath, sessionDir).getSessionId();
           cacheSessionPath(newSessionId, clonedPath);
@@ -1222,6 +1295,7 @@ export class AgentSessionWrapper {
   }
 
   destroy(): void {
+    if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
     this.mcpRuntime?.cancel();
     if (!this._alive) return;
     this._alive = false;
@@ -1275,6 +1349,7 @@ export class AgentSessionWrapper {
   }
 
   async shutdown(): Promise<void> {
+    if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
     this.mcpRuntime?.cancel();
     if (this.shutdownPromise) return this.shutdownPromise;
     if (!this._alive) return;
@@ -2066,6 +2141,7 @@ async function setRpcSessionToolsGuarded(
   const sessionCwd = existing.cwd;
   const model = existing.inner.model;
   const currentThinkingLevel = existing.inner.agent.state?.thinkingLevel;
+  const fallbackModel = existing.getFallbackModelConfiguration();
   await existing.shutdown();
 
   if (persistedFile) {
@@ -2076,6 +2152,7 @@ async function setRpcSessionToolsGuarded(
   const started = await startRpcSession(`__recreate__${randomUUID()}`, "", sessionCwd, {
     toolNames,
     systemPrompt: existing.getCustomSystemPrompt(),
+    fallbackModel,
     ephemeral: existing.isEphemeral(),
     ...(model ? { initialModel: { provider: model.provider, modelId: model.id } } : {}),
     allowInitialModelFallback: true,
@@ -2245,6 +2322,9 @@ async function startRpcSessionGuarded(
   const requestedToolNames = options.toolNames === undefined
     ? undefined
     : validateSessionToolSelection(options.toolNames);
+  const requestedFallbackModel = options.fallbackModel === undefined || sessionFile
+    ? undefined
+    : validateFallbackModel(options.fallbackModel);
   const registry = getRegistry();
   const locks = getLocks();
 
@@ -2329,6 +2409,15 @@ async function startRpcSessionGuarded(
       custom: chatOnly ? null : selectedSystemPrompt,
     };
     const systemPromptExtension = createSystemPromptExtension(systemPromptState);
+    const persistedFallbackModel = readSessionModelFallback(sessionManager.getEntries() as unknown as SessionEntry[]);
+    const modelFallbackState: ModelFallbackRuntimeState | undefined = subagentResources ? undefined : {
+      selection: persistedFallbackModel !== undefined ? persistedFallbackModel : requestedFallbackModel ?? null,
+      configured: persistedFallbackModel !== undefined || requestedFallbackModel !== undefined,
+      notice: readSessionModelFallbackNotice(sessionManager.getBranch().map((entry) => entry as unknown as SessionEntry)),
+      cancelled: false,
+      resolveModel: async () => undefined,
+    };
+    const modelFallbackExtension = modelFallbackState ? createModelFallbackExtension(modelFallbackState) : undefined;
     const mcpRuntime = !subagentResources && !chatOnly ? new McpWebRuntime() : undefined;
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
@@ -2353,12 +2442,13 @@ async function startRpcSessionGuarded(
         : chatOnly
           ? {
               ...CHAT_ONLY_RESOURCE_LOADER_OPTIONS,
-              extensionFactories: [systemPromptExtension],
+              extensionFactories: [systemPromptExtension, ...(modelFallbackExtension ? [modelFallbackExtension] : [])],
             }
         : {
             extensionFactories: [
               ...createPiBuiltinExtensions(mcpRuntime?.createExtension()),
               systemPromptExtension,
+              ...(modelFallbackExtension ? [modelFallbackExtension] : []),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
@@ -2378,6 +2468,16 @@ async function startRpcSessionGuarded(
       services.modelRuntime,
       services.settingsManager.getEnabledModels(),
     );
+    if (modelFallbackState) {
+      modelFallbackState.resolveModel = async (ref) => {
+        const currentScope = await resolveVisibleModels(services.modelRuntime, services.settingsManager.getEnabledModels());
+        return currentScope.visible.find((model) => model.provider === ref.provider && model.id === ref.modelId);
+      };
+      if (persistedFallbackModel === undefined && requestedFallbackModel !== undefined && requestedFallbackModel
+        && !scope.visible.some((model) => model.provider === requestedFallbackModel.provider && model.id === requestedFallbackModel.modelId)) {
+        throw new Error("Fallback model is unavailable or outside the enabled model scope");
+      }
+    }
     const effectiveInitialModel = initialModel && (
       !allowInitialModelFallback
       || scope.visible.some((model) => model.provider === initialModel.provider && model.id === initialModel.modelId)
@@ -2396,6 +2496,12 @@ async function startRpcSessionGuarded(
           : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
+    if (modelFallbackState && persistedFallbackModel === undefined && requestedFallbackModel !== undefined) {
+      if (requestedFallbackModel && initial.model && sameFallbackModel(requestedFallbackModel, { provider: initial.model.provider, modelId: initial.model.id })) {
+        throw new Error("Fallback model must be different from the primary model");
+      }
+      appendSessionModelFallback(sessionManager, requestedFallbackModel);
+    }
     const { session: inner } = await createAgentSessionFromServices({
       services,
       sessionManager,
@@ -2405,6 +2511,10 @@ async function startRpcSessionGuarded(
       ...(toolsOption !== undefined ? { tools: toolsOption } : {}),
       ...(subagentResources ? { excludeTools: [...SUBAGENT_CONTROL_TOOL_NAMES] } : {}),
     });
+
+    if (modelFallbackState) {
+      inner.agent.streamFunction = observeModelFallbackErrors(inner.agent.streamFunction, modelFallbackState);
+    }
 
     const persistedPreferences = await persistExplicitStartupPreferences(
       services.settingsManager,
@@ -2446,6 +2556,7 @@ async function startRpcSessionGuarded(
       },
       suppressCompletionNotifications: Boolean(subagentResources),
       mcpRuntime,
+      modelFallbackState,
     });
     const realSessionId = inner.sessionId as string;
     registerRpcWrapper(wrapper);

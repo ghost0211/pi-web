@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { ProviderGlyph } from "./ProviderIcon";
+import type { FallbackModelRef } from "@/lib/model-fallback";
 
 export interface ModelSelectorOption {
   provider: string;
@@ -25,6 +26,11 @@ interface ModelSelectorProps {
   ariaLabel?: string;
   variant?: "toolbar" | "field";
   placement?: "up" | "auto";
+  /** Optional composer-only quota fallback configuration. Omit to keep the standard selector. */
+  fallbackModel?: FallbackModelRef | null;
+  onFallbackModelChange?: (model: FallbackModelRef | null) => void;
+  fallbackDisabled?: boolean;
+  fallbackBusy?: boolean;
 }
 
 const MODEL_FILTER_THRESHOLD = 8;
@@ -73,6 +79,10 @@ export function ModelSelector({
   ariaLabel,
   variant = "toolbar",
   placement = "up",
+  fallbackModel,
+  onFallbackModelChange,
+  fallbackDisabled = false,
+  fallbackBusy = false,
 }: ModelSelectorProps) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
@@ -81,10 +91,24 @@ export function ModelSelector({
   const [open, setOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<{ top: number; right: number; bottom: number; left: number; width: number } | null>(null);
   const [filter, setFilter] = useState("");
+  const [pickerTab, setPickerTab] = useState<"primary" | "backup">("primary");
   const locked = disabled || busy;
+  const hasFallbackUi = fallbackModel !== undefined && Boolean(onFallbackModelChange);
+  const fallbackLocked = locked || fallbackDisabled || fallbackBusy;
   const sortedOptions = useMemo(() => [...options].sort(compareModelOptions), [options]);
-  const filteredOptions = filterModelOptions(sortedOptions, filter);
-  const showFilter = sortedOptions.length > MODEL_FILTER_THRESHOLD;
+  const backupOptions = useMemo(() => {
+    const currentIsConfiguredFallback = Boolean(value && fallbackModel
+      && value.provider === fallbackModel.provider && value.modelId === fallbackModel.modelId);
+    return sortedOptions.filter((option) => {
+      const sameAsPrimary = option.provider === value?.provider && option.modelId === value?.modelId;
+      // After an automatic failover the configured backup is temporarily the
+      // active model; keep it visible/selected instead of filtering it away.
+      return !sameAsPrimary || currentIsConfiguredFallback;
+    });
+  }, [sortedOptions, value, fallbackModel]);
+  const selectionOptions = hasFallbackUi && pickerTab === "backup" ? backupOptions : sortedOptions;
+  const filteredOptions = filterModelOptions(selectionOptions, filter);
+  const showFilter = selectionOptions.length > MODEL_FILTER_THRESHOLD;
   const modelsByProvider: { provider: string; options: ModelSelectorOption[] }[] = [];
 
   for (const option of filteredOptions) {
@@ -116,10 +140,10 @@ export function ModelSelector({
   }, []);
 
   useEffect(() => {
-    if (!locked) return;
+    if (!locked && !(hasFallbackUi && fallbackLocked)) return;
     setOpen(false);
     setFilter("");
-  }, [locked]);
+  }, [locked, hasFallbackUi, fallbackLocked]);
 
   const buttonStyle: CSSProperties = variant === "field"
     ? {
@@ -238,6 +262,13 @@ export function ModelSelector({
             {currentName}
           </span>
         )}
+        {hasFallbackUi && fallbackModel && (
+          <span
+            aria-label={t("chat.fallbackConfigured")}
+            title={`${t("chat.fallbackConfigured")}: ${fallbackModel.provider} › ${fallbackModel.modelId}`}
+            style={{ flexShrink: 0, padding: "2px 5px", borderRadius: 4, background: "rgba(234,179,8,0.14)", color: "var(--warning, #ca8a04)", fontSize: 9, fontWeight: 700 }}
+          >↪</span>
+        )}
         {variant === "field" && (
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}>
             <polyline points="6 9 12 15 18 9" />
@@ -263,7 +294,7 @@ export function ModelSelector({
           return (
             <div
               ref={panelRef}
-              role="listbox"
+              role={hasFallbackUi ? "dialog" : "listbox"}
               aria-label={ariaLabel}
               style={{
                 position: "fixed",
@@ -280,6 +311,27 @@ export function ModelSelector({
                 boxShadow: openAbove ? "0 -4px 16px rgba(0,0,0,0.18)" : "0 4px 16px rgba(0,0,0,0.18)",
               }}
             >
+              {hasFallbackUi && (
+                <div role="tablist" aria-label={t("chat.fallbackModelPicker")} style={{ display: "flex", flexShrink: 0, gap: 4, padding: "6px 8px 0", borderBottom: "1px solid var(--border)" }}>
+                  {(["primary", "backup"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={pickerTab === tab}
+                      disabled={tab === "backup" && fallbackLocked}
+                      onClick={() => { setPickerTab(tab); setFilter(""); }}
+                      style={{ flex: 1, padding: "6px 8px", border: "none", borderBottom: pickerTab === tab ? "2px solid var(--accent)" : "2px solid transparent", background: "none", color: pickerTab === tab ? "var(--text)" : "var(--text-muted)", cursor: tab === "backup" && fallbackLocked ? "not-allowed" : "pointer", fontSize: 11, fontWeight: pickerTab === tab ? 600 : 400, opacity: tab === "backup" && fallbackLocked ? 0.55 : 1 }}
+                    >{t(tab === "primary" ? "chat.fallbackPrimary" : "chat.fallbackBackup")}</button>
+                  ))}
+                </div>
+              )}
+              {hasFallbackUi && pickerTab === "backup" && (
+                <div style={{ flexShrink: 0, padding: "8px 10px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)", fontSize: 10, lineHeight: 1.45 }}>
+                  <div>{t("chat.fallbackQuotaOnly")}</div>
+                  <div style={{ marginTop: 4, color: "var(--warning, #ca8a04)" }}>{t("chat.fallbackCrossProviderWarning")}</div>
+                </div>
+              )}
               {showFilter && (
                 <div style={{ flexShrink: 0, padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
                   <input
@@ -306,8 +358,21 @@ export function ModelSelector({
                   />
                 </div>
               )}
-              <div style={{ minHeight: 0, overflowY: "auto" }}>
-                {onClear && !filter.trim() && (
+              <div role={hasFallbackUi ? "listbox" : undefined} aria-label={hasFallbackUi ? t(pickerTab === "backup" ? "chat.fallbackBackup" : "chat.fallbackPrimary") : undefined} style={{ minHeight: 0, overflowY: "auto" }}>
+                {hasFallbackUi && pickerTab === "backup" && onFallbackModelChange && !filter.trim() && (
+                  <ModelOptionButton
+                    active={!fallbackModel}
+                    disabled={fallbackLocked}
+                    label={t("chat.fallbackOff")}
+                    onClick={() => {
+                      if (fallbackLocked) return;
+                      setOpen(false);
+                      setFilter("");
+                      onFallbackModelChange(null);
+                    }}
+                  />
+                )}
+                {(!hasFallbackUi || pickerTab === "primary") && onClear && !filter.trim() && (
                   <ModelOptionButton active={!value} label={emptyLabel ?? "Default"} onClick={() => {
                     setOpen(false);
                     setFilter("");
@@ -325,15 +390,39 @@ export function ModelSelector({
                         {group.provider}
                       </div>
                     )}
-                    {group.options.map((option) => (
+                    {group.options.map((option) => {
+                      const sameAsConfiguredFallback = option.modelId === fallbackModel?.modelId && option.provider === fallbackModel?.provider;
+                      const sameAsCurrentPrimary = hasFallbackUi && pickerTab === "backup"
+                        && option.modelId === value?.modelId && option.provider === value?.provider
+                        && !sameAsConfiguredFallback;
+                      const sameAsFallbackOnPrimaryTab = hasFallbackUi && pickerTab === "primary" && sameAsConfiguredFallback;
+                      const sameModelLocked = sameAsCurrentPrimary || sameAsFallbackOnPrimaryTab;
+                      return (
                       <ModelOptionButton
                         key={`${option.provider}:${option.modelId}`}
-                        active={option.modelId === value?.modelId && option.provider === value?.provider}
+                        active={hasFallbackUi && pickerTab === "backup"
+                          ? option.modelId === fallbackModel?.modelId && option.provider === fallbackModel?.provider
+                          : option.modelId === value?.modelId && option.provider === value?.provider}
+                        disabled={(hasFallbackUi && pickerTab === "backup" && fallbackLocked) || sameModelLocked}
+                        title={sameModelLocked ? t("chat.fallbackSameAsPrimary") : undefined}
                         provider={option.provider}
                         label={option.name}
-                        onClick={() => choose(option)}
+                        onClick={() => {
+                          if (sameModelLocked) return;
+                          if (hasFallbackUi && pickerTab === "backup") {
+                            if (fallbackLocked) return;
+                            setOpen(false);
+                            setFilter("");
+                            if (!sameAsConfiguredFallback) {
+                              onFallbackModelChange?.({ provider: option.provider, modelId: option.modelId });
+                            }
+                          } else {
+                            choose(option);
+                          }
+                        }}
                       />
-                    ))}
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -346,17 +435,20 @@ export function ModelSelector({
   );
 }
 
-function ModelOptionButton({ active, provider, label, onClick }: { active: boolean; provider?: string; label: string; onClick: () => void }) {
+function ModelOptionButton({ active, provider, label, onClick, disabled = false, title }: { active: boolean; provider?: string; label: string; onClick: () => void; disabled?: boolean; title?: string }) {
   const trimmedProvider = provider?.trim() ?? "";
   return (
     <button
       type="button"
       role="option"
       aria-selected={active}
+      aria-disabled={disabled || undefined}
+      disabled={disabled}
+      title={title}
       onClick={onClick}
-      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 12px", border: "none", background: active ? "var(--bg-selected)" : "none", color: active ? "var(--text)" : "var(--text-muted)", cursor: "pointer", fontSize: 12, fontWeight: active ? 600 : 400, textAlign: "left", whiteSpace: "nowrap" }}
-      onMouseEnter={(event) => { if (!active) event.currentTarget.style.background = "var(--bg-hover)"; }}
-      onMouseLeave={(event) => { if (!active) event.currentTarget.style.background = "none"; }}
+      style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 12px", border: "none", background: active ? "var(--bg-selected)" : "none", color: active ? "var(--text)" : "var(--text-muted)", cursor: disabled ? "not-allowed" : "pointer", fontSize: 12, fontWeight: active ? 600 : 400, textAlign: "left", whiteSpace: "nowrap", opacity: disabled ? 0.55 : 1 }}
+      onMouseEnter={(event) => { if (!active && !disabled) event.currentTarget.style.background = "var(--bg-hover)"; }}
+      onMouseLeave={(event) => { if (!active && !disabled) event.currentTarget.style.background = "none"; }}
     >
       {active
         ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true"><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
@@ -367,7 +459,7 @@ function ModelOptionButton({ active, provider, label, onClick }: { active: boole
           {trimmedProvider} ›
         </span>
       )}
-      <span title={trimmedProvider ? `${trimmedProvider} › ${label}` : label} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      <span title={title ?? (trimmedProvider ? `${trimmedProvider} › ${label}` : label)} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
     </button>
   );
 }

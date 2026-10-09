@@ -57,3 +57,11 @@ test("detail route with an out-of-range tail still caps at 1000", () => {
   const ctx = buildSessionHistory(entries, "e4999", { tail: 5000 });
   assert.equal(ctx.messages.length, 5000);
 });
+
+test("detail response exposes nullable persisted fallback metadata", () => {
+  assert.match(routeSrc, /readSessionModelFallback, readSessionModelFallbackNotice/);
+  assert.match(routeSrc, /readSessionModelFallback\(sessionEntries\) \?\? null/);
+  assert.match(routeSrc, /sm\.getBranch\(leafId \?\? undefined\)/);
+  assert.match(routeSrc, /readSessionModelFallbackNotice\(branchEntries\)/);
+  assert.match(routeSrc, /fallbackModel,\s*fallbackNotice,/);
+});

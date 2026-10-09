@@ -737,3 +737,44 @@ test("keeps a detached viewport in place when streaming completes", () => {
   assert.doesNotMatch(scrollEffectSource, /\|\|/);
   assert.match(source, /addEventListener\("scroll", handleScrollPositionChange/);
 });
+
+test("quota fallback follows per-session state and only changes the backup model", () => {
+  const ensureSource = source.slice(
+    source.indexOf("  const ensureNewSession = useCallback"),
+    source.indexOf("  // Opening the System or Tools panel"),
+  );
+  const loadSessionSource = source.slice(
+    source.indexOf("  const loadSession = useCallback"),
+    source.indexOf("  const loadContext = useCallback"),
+  );
+  const fallbackChangeSource = source.slice(
+    source.indexOf("  const handleFallbackModelChange = useCallback"),
+    source.indexOf("  const handleCompact = useCallback"),
+  );
+  const fallbackEventSource = source.slice(
+    source.indexOf('case "model_fallback"'),
+    source.indexOf('case "connected"'),
+  );
+  const toolSelectionSource = source.slice(
+    source.indexOf("  const applyToolSelection = useCallback"),
+    source.indexOf("  const handleToolPresetChange"),
+  );
+
+  assert.match(ensureSource, /initializeFreshFallbackPreference\(\)/);
+  assert.match(ensureSource, /selectedFallbackModel \|\| fallbackPreferenceTouchedRef\.current/);
+  assert.match(ensureSource, /type: "ensure_session"[\s\S]*?fallbackModel: selectedFallbackModel/);
+  assert.match(loadSessionSource, /promptRunIdRef\.current === loadRunId[\s\S]*?d\.fallbackModel !== undefined[\s\S]*?applyFallbackModelSelection[\s\S]*?d\.fallbackNotice/);
+  assert.match(loadSessionSource, /applyAgentStateMetadata\(liveState\)/);
+  assert.match(fallbackChangeSource, /type: "set_fallback_model",\s*model: parsed/);
+  assert.match(fallbackChangeSource, /setFallbackModelPreference\(parsed\)/);
+  assert.doesNotMatch(fallbackChangeSource, /type: "set_model"/);
+  assert.match(fallbackEventSource, /applyFallbackNotice\(event\.notice, true\)/);
+  assert.match(fallbackEventSource, /applyFallbackThinkingLevel\(event\.thinkingLevel, notice\.to\)/);
+  assert.doesNotMatch(fallbackEventSource, /onAgentEnd|type: "success"/);
+  assert.match(toolSelectionSource, /if \(recreated && fallbackSelectionKnownRef\.current && fallbackModelRef\.current\)[\s\S]*?type: "set_fallback_model"/);
+  assert.match(toolSelectionSource, /applyAgentStateMetadata\(state\)/);
+  assert.match(source, /displayModel = isNew \? \(currentModelOverride \?\? newSessionModel \?\? newSessionDefaultModel\)/);
+  assert.match(fallbackChangeSource, /if \(!currentSid && !pendingSession\) \{\s*setFallbackModelPreference\(parsed\);/);
+  assert.match(fallbackChangeSource, /sendAgentCommand<unknown>[\s\S]*?applyFallbackModelSelection\(confirmed\);\s*setFallbackModelPreference\(parsed\);/);
+  assert.equal([...source.matchAll(/setFallbackModelPreference\(parsed\)/g)].length, 2);
+});

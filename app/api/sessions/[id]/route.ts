@@ -24,6 +24,7 @@ import { computeSessionStats } from "@/lib/session-stats";
 import type { SessionEntry } from "@/lib/types";
 import { readSubagentRun, readSubagentSessionResources, SUBAGENT_META_TYPE } from "@/lib/subagents";
 import { readSessionToolSelection } from "@/lib/session-tool-selection";
+import { readSessionModelFallback, readSessionModelFallbackNotice } from "@/lib/session-model-fallback";
 import lockfile from "proper-lockfile";
 import { jsonResponse } from "@/lib/json-response";
 import { forgetDeletedSessionMetadata } from "@/lib/session-management-store";
@@ -98,6 +99,10 @@ export async function GET(
       : null;
     const toolNames = readSubagentSessionResources(entries as never)?.tools
       ?? readSessionToolSelection(entries as never);
+    const sessionEntries = entries as unknown as SessionEntry[];
+    const branchEntries = sm.getBranch(leafId ?? undefined).map((entry) => entry as unknown as SessionEntry);
+    const fallbackModel = readSessionModelFallback(sessionEntries) ?? null;
+    const fallbackNotice = readSessionModelFallbackNotice(branchEntries);
     const info = header ? (await attachSessionProjectInfo([{
       path: filePath,
       id: header.id,
@@ -135,6 +140,8 @@ export async function GET(
         stats,
         totalActiveMs,
         ...(toolNames !== undefined ? { toolNames } : {}),
+        fallbackModel,
+        fallbackNotice,
         ...(wrapperRebuilt ? { wrapperRebuilt: true } : {}),
       },
     );

@@ -23,6 +23,7 @@ import { clearDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-stor
 import { getPreferredToolSelection, setPreferredToolSelection } from "@/lib/tool-preset-preference";
 import { getFallbackModelPreference, setFallbackModelPreference } from "@/lib/fallback-model-preference";
 import { parseFallbackModel, parseModelFallbackNotice, type FallbackModelRef, type ModelFallbackNotice } from "@/lib/model-fallback";
+import { normalizeThinkingLevelOption, type ThinkingLevelOption } from "@/lib/thinking-level-options";
 import { getToolNamesForPreset, matchToolPresetOrCustom, PRESET_DEFAULT, type ToolEntry, type ToolPreset, type ToolPresetSelection } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
@@ -184,7 +185,7 @@ export interface UseAgentSessionOptions {
   setToolPreset?: (preset: ToolPresetSelection) => void;
 }
 
-export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type { ThinkingLevelOption } from "@/lib/thinking-level-options";
 
 const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
 const PROMPT_SETTLE_POLL_MS = 600;
@@ -278,7 +279,6 @@ export interface AttachedImage {
 }
 
 type SelectedModel = { provider: string; modelId: string };
-const THINKING_LEVEL_OPTIONS: ThinkingLevelOption[] = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 function parseRuntimeModel(value: unknown): SelectedModel | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -353,6 +353,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
+  const contextUsageRequestIdRef = useRef(0);
+  // Highest request id whose reply was applied. A reply applies only when it
+  // is newer, so a failed newer read never discards an older good one.
+  const contextUsageAppliedIdRef = useRef(0);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [customSystemPrompt, setCustomSystemPrompt] = useState<SessionSystemPromptCustomization | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
@@ -593,18 +597,35 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } satisfies SessionStatsInfo;
   }, [messages, sessionStatsOverride, contextUsage, data?.context.messages, data?.history?.messages, data?.filePath, data?.totalActiveMs, data?.stats, session?.id, session?.name]);
 
+  const applyContextUsage = useCallback((state: Pick<AgentStateResponse, "contextUsage"> | undefined, sid: string, runId: number, requestId: number) => {
+    if (!sessionHookMountedRef.current || sessionIdRef.current !== sid
+      || promptRunIdRef.current !== runId || requestId <= contextUsageAppliedIdRef.current
+      || state?.contextUsage === undefined) return;
+    contextUsageAppliedIdRef.current = requestId;
+    setContextUsage(state.contextUsage ?? null);
+  }, []);
+
+  const refreshContextUsage = useCallback(async (sid: string) => {
+    const runId = promptRunIdRef.current;
+    const requestId = ++contextUsageRequestIdRef.current;
+    try {
+      const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+      if (!res.ok) return;
+      const data = await res.json() as { state?: AgentStateResponse };
+      applyContextUsage(data.state, sid, runId, requestId);
+    } catch {
+      // A later message or the running-state poll retries the usage read.
+    }
+  }, [applyContextUsage]);
+
   const applyFallbackThinkingLevel = useCallback((value: unknown, target: SelectedModel | null) => {
-    let level = THINKING_LEVEL_OPTIONS.includes(value as ThinkingLevelOption)
-      ? value as ThinkingLevelOption
-      : "auto";
-    if (target) {
+    const available = target ? modelThinkingLevelsRef.current[`${target.provider}:${target.modelId}`] : undefined;
+    let level = normalizeThinkingLevelOption(value, available);
+    // The runtime's actual level wins. A scope pin is only a missing-value
+    // default, not permission to overwrite an explicit backup preference.
+    if (level === "auto" && target) {
       const pinned = modelThinkingLevelPinsRef.current[`${target.provider}/${target.modelId}`];
-      if (pinned && THINKING_LEVEL_OPTIONS.includes(pinned as ThinkingLevelOption)) {
-        level = pinned as ThinkingLevelOption;
-      } else {
-        const available = modelThinkingLevelsRef.current[`${target.provider}:${target.modelId}`];
-        if (level !== "auto" && available && !available.includes(level)) level = "auto";
-      }
+      level = normalizeThinkingLevelOption(pinned, available);
     }
     setThinkingLevel(level);
   }, []);
@@ -661,6 +682,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, options?: { force?: boolean }) => {
     let messagesLoaded = false;
     const loadRunId = promptRunIdRef.current;
+    const estimateRequestId = ++contextUsageRequestIdRef.current;
     try {
       if (showLoading) setLoading(true);
       const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
@@ -725,12 +747,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       );
       const computedUsage = calculateActiveContextTokens(d.context.messages, windowSize);
       if (computedUsage.tokens > 0) {
-        setContextUsage(computedUsage);
+        applyContextUsage({ contextUsage: computedUsage }, sid, loadRunId, estimateRequestId);
       }
       if (showLoading) setLoading(false);
       if (!includeState) return null;
 
       try {
+        const runId = promptRunIdRef.current;
+        const usageRequestId = ++contextUsageRequestIdRef.current;
         const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
         if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
         const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse };
@@ -739,7 +763,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const liveState = agentState.state;
         if (liveState) {
           if (promptRunIdRef.current === loadRunId) applyAgentStateMetadata(liveState);
-          if (liveState.contextUsage?.tokens !== null && liveState.contextUsage?.tokens !== undefined) setContextUsage(liveState.contextUsage);
+          applyContextUsage(liveState, sid, runId, usageRequestId);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
           if (liveState.customSystemPrompt !== undefined) setCustomSystemPrompt(liveState.customSystemPrompt ?? null);
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
@@ -759,7 +783,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading && !messagesLoaded) setLoading(false);
     }
-  }, [applyAgentStateMetadata, applyFallbackModelSelection, applyFallbackNotice, applyFallbackThinkingLevel, setToolPresetState]);
+  }, [applyAgentStateMetadata, applyContextUsage, applyFallbackModelSelection, applyFallbackNotice, applyFallbackThinkingLevel, setToolPresetState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null, before?: string | null, tail?: number) => {
     try {
@@ -1284,6 +1308,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const reconcileAgentState = useCallback(async (sid: string) => {
     if (!agentRunningRef.current || sessionIdRef.current !== sid) return;
     const runId = promptRunIdRef.current;
+    const usageRequestId = ++contextUsageRequestIdRef.current;
     try {
       const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
       if (!res.ok) return;
@@ -1294,6 +1319,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (sessionIdRef.current !== sid || promptRunIdRef.current !== runId) return;
       const state = data.state;
       applyAgentStateMetadata(state);
+      applyContextUsage(state, sid, runId, usageRequestId);
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
@@ -1308,7 +1334,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       if (!agentRunningRef.current) return;
       if (state) {
-        if (state.contextUsage?.tokens !== null && state.contextUsage?.tokens !== undefined) setContextUsage(state.contextUsage);
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
         if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
         if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
@@ -1318,7 +1343,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }
-  }, [applyAgentStateMetadata, finishPromptWithoutStream]);
+  }, [applyAgentStateMetadata, applyContextUsage, finishPromptWithoutStream]);
 
   // Recovery net for missed SSE events: while the agent is running, verify
   // against the server periodically and whenever the tab returns to the
@@ -1399,15 +1424,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (sessionIdRef.current) {
           const sid = sessionIdRef.current;
           const eventRunId = promptRunIdRef.current;
+          const usageRequestId = ++contextUsageRequestIdRef.current;
           loadSession(sid);
           fetch(`/api/agent/${encodeURIComponent(sid)}`)
-            .then((r) => r.json())
-            .then((d: { state?: AgentStateResponse }) => {
-              if (sessionIdRef.current !== sid || promptRunIdRef.current !== eventRunId) return;
+            .then((r) => r.ok ? r.json() : null)
+            .then((d: { state?: AgentStateResponse } | null) => {
+              if (!d || !sessionHookMountedRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== eventRunId) return;
               applyAgentStateMetadata(d.state);
-              if (d.state?.contextUsage?.tokens !== null && d.state?.contextUsage?.tokens !== undefined) setContextUsage(d.state.contextUsage);
+              applyContextUsage(d.state, sid, eventRunId, usageRequestId);
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
-        if (d.state?.customSystemPrompt !== undefined) setCustomSystemPrompt(d.state.customSystemPrompt ?? null);
+              if (d.state?.customSystemPrompt !== undefined) setCustomSystemPrompt(d.state.customSystemPrompt ?? null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
               // Aborted turns can leave messages queued in pi (delivered with the
@@ -1526,6 +1552,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const normalized = normalizeToolCalls(completed);
           estimateContextAfterMessageRef.current = true;
           setMessages((prev) => [...prev, normalized]);
+          if (completed.role === "assistant") {
+            const sid = sessionIdRef.current;
+            if (sid) void refreshContextUsage(sid);
+          }
         }
         dispatch({ type: "end" });
         setAgentPhase({ kind: "waiting_model" });
@@ -1619,6 +1649,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } else if (!event.aborted) {
           const res = readCompactResult(event.result, (event.reason as string | undefined) ?? "auto");
           setCompactResult(res);
+          contextUsageAppliedIdRef.current = ++contextUsageRequestIdRef.current;
           if (res?.estimatedTokensAfter) {
             setContextUsage((prev) => {
               const windowSize = resolveModelContextWindow(
@@ -1635,14 +1666,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               };
             });
           }
-          if (sessionIdRef.current) loadSession(sessionIdRef.current);
+          if (sessionIdRef.current) {
+            void loadSession(sessionIdRef.current);
+            void refreshContextUsage(sessionIdRef.current);
+          }
         }
         break;
       case "extension_ui_request":
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyAgentStateMetadata, applyFallbackNotice, applyFallbackThinkingLevel, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
+  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyFallbackThinkingLevel, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1922,13 +1956,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [addNotice, loadSession]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
+    if (modelSwitchPendingRef.current || fallbackChangePendingRef.current || agentRunningRef.current || bashRunningRef.current || isCompacting) return;
     const modelKey = `${provider}:${modelId}`;
     const targetLevels = modelThinkingLevels[modelKey];
     const pinned = modelThinkingLevelPins[`${provider}/${modelId}`];
-    if (pinned) {
-      setThinkingLevel(pinned as ThinkingLevelOption);
-    } else if (targetLevels && thinkingLevel !== "auto" && !targetLevels.includes(thinkingLevel)) {
-      setThinkingLevel("auto");
+    const nextThinkingLevel = normalizeThinkingLevelOption(pinned ?? thinkingLevel, targetLevels);
+    const previousDraftModel = newSessionModelOverrideRef.current;
+    const previousThinkingOverride = thinkingLevelOverrideRef.current;
+    setThinkingLevel(nextThinkingLevel);
+    if (isNew) {
+      // A previous model's explicit draft level must not leak into startup.
+      // Scoped pins remain implicit and must not be persisted as user picks.
+      if (pinned || nextThinkingLevel === "auto") thinkingLevelOverrideRef.current = null;
     }
 
     if (isNew) {
@@ -1936,17 +1975,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       newSessionModelOverrideRef.current = selectedModel;
       setNewSessionModel(selectedModel);
       setPendingModel(selectedModel);
-      const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-      if (!sid) return;
+      if (!sessionIdRef.current && !ensuringNewSessionRef.current) return;
+      modelSwitchPendingRef.current = true;
+      setModelSwitching(true);
       try {
+        const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
+        if (!sid) return;
         await sendAgentCommand(sid, { type: "set_model", provider, modelId });
-        if (pinned) {
-          await sendAgentCommand(sid, { type: "set_thinking_level", level: pinned });
-        } else if (targetLevels && thinkingLevel !== "auto" && !targetLevels.includes(thinkingLevel)) {
-          await sendAgentCommand(sid, { type: "set_thinking_level", level: "auto" });
-        }
+        await sendAgentCommand(sid, { type: "set_thinking_level", level: nextThinkingLevel });
       } catch (e) {
         console.error("Failed to set model:", e);
+        newSessionModelOverrideRef.current = previousDraftModel;
+        thinkingLevelOverrideRef.current = previousThinkingOverride;
+        setNewSessionModel(previousDraftModel);
+        setPendingModel(previousDraftModel);
+        setThinkingLevel(thinkingLevel);
+        addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+        modelSwitchPendingRef.current = false;
+        const sid = sessionIdRef.current;
+        if (sid) await loadSession(sid, false, true);
+      } finally {
+        modelSwitchPendingRef.current = false;
+        setModelSwitching(false);
       }
       return;
     }
@@ -1959,11 +2009,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setModelSwitching(true);
     try {
       await sendAgentCommand(sid, { type: "set_model", provider, modelId });
-      if (pinned) {
-        await sendAgentCommand(sid, { type: "set_thinking_level", level: pinned });
-      } else if (targetLevels && thinkingLevel !== "auto" && !targetLevels.includes(thinkingLevel)) {
-        await sendAgentCommand(sid, { type: "set_thinking_level", level: "auto" });
-      }
+      await sendAgentCommand(sid, { type: "set_thinking_level", level: nextThinkingLevel });
       // Pi persists model_change synchronously. Reload the canonical session so
       // the model, thinking level, and active leaf all advance together.
       modelSwitchPendingRef.current = false;
@@ -1983,7 +2029,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       modelSwitchPendingRef.current = false;
       setModelSwitching(false);
     }
-  }, [addNotice, currentModelOverride, isNew, loadSession, modelThinkingLevels, modelThinkingLevelPins, setNewSessionModel, thinkingLevel]);
+  }, [addNotice, currentModelOverride, isCompacting, isNew, loadSession, modelThinkingLevels, modelThinkingLevelPins, setNewSessionModel, thinkingLevel]);
 
   const handleFallbackModelChange = useCallback(async (model: FallbackModelRef | null) => {
     if (fallbackChangePendingRef.current || modelSwitchPendingRef.current || agentRunningRef.current || bashRunningRef.current || isCompacting) return;
@@ -2017,7 +2063,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (requestId !== fallbackChangeRequestRef.current || sessionIdRef.current !== sid) return;
       const confirmed = parseFallbackModel(confirmedValue);
       if (confirmed !== undefined) applyFallbackModelSelection(confirmed);
-      setFallbackModelPreference(parsed);
+      setFallbackModelPreference(confirmed === undefined ? parsed : confirmed);
     } catch (e) {
       if (requestId === fallbackChangeRequestRef.current) {
         applyFallbackModelSelection(previous);
@@ -2036,6 +2082,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [addNotice, applyFallbackModelSelection, isCompacting, loadSession]);
 
+  const handleFallbackThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
+    const selected = fallbackModelRef.current;
+    if (!selected) return;
+    const available = modelThinkingLevelsRef.current[`${selected.provider}:${selected.modelId}`];
+    if (level !== "auto" && (!available || !available.includes(level))) return;
+    // Reuse the atomic configuration write/rollback. Never set the active
+    // session's thinking level when editing its backup preference.
+    await handleFallbackModelChange({ ...selected, thinkingLevel: level });
+  }, [handleFallbackModelChange]);
+
   const handleCompact = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid || isCompacting) return;
@@ -2046,6 +2102,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const result = await sendAgentCommand<CompactCommandResult>(sid, { type: "compact" });
       const compactRes = readCompactResult(result, "manual");
       setCompactResult(compactRes);
+      // Advance usage request IDs so any pre-compaction poll/read arriving later is discarded as stale.
+      const compactUsageRequestId = ++contextUsageRequestIdRef.current;
+      contextUsageAppliedIdRef.current = compactUsageRequestId;
       if (compactRes?.estimatedTokensAfter) {
         setContextUsage((prev) => {
           const windowSize = resolveModelContextWindow(
@@ -2063,13 +2122,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         });
       }
       await loadSession(sid, true);
+      void refreshContextUsage(sid);
     } catch (e) {
       setCompactError(e instanceof Error ? e.message : String(e));
       setCompactResult(null);
     } finally {
       setIsCompacting(false);
     }
-  }, [isCompacting, loadSession]);
+  }, [isCompacting, loadSession, refreshContextUsage]);
 
   const loadModels = useCallback(async (signal?: AbortSignal) => {
     const modelCwd = newSessionCwd ?? session?.cwd ?? "";
@@ -2309,19 +2369,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [opts.chatInputRef, addNotice]);
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
-    setThinkingLevel(level);
-    if (isNew && !sessionIdRef.current) {
-      thinkingLevelOverrideRef.current = level === "auto" ? null : level;
-    }
-    if (level === "auto") return; // "auto" leaves pi's current setting untouched
-    const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-    if (!sid) return;
+    if (modelSwitchPendingRef.current || fallbackChangePendingRef.current || agentRunningRef.current || bashRunningRef.current || isCompacting) return;
+    const target = displayModelRef.current;
+    const available = target ? modelThinkingLevelsRef.current[`${target.provider}:${target.modelId}`] : undefined;
+    const selectedLevel = normalizeThinkingLevelOption(level, available);
+    const previousLevel = thinkingLevel;
+    setThinkingLevel(selectedLevel);
+    if (isNew) thinkingLevelOverrideRef.current = selectedLevel === "auto" ? null : selectedLevel;
+    if (!sessionIdRef.current && !ensuringNewSessionRef.current) return;
+    // Lock model changes until the active-model-only update completes.
+    modelSwitchPendingRef.current = true;
+    setModelSwitching(true);
     try {
-      await sendAgentCommand(sid, { type: "set_thinking_level", level });
+      const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
+      if (sid) await sendAgentCommand(sid, { type: "set_thinking_level", level: selectedLevel });
     } catch (e) {
-      console.error("Failed to set thinking level:", e);
+      setThinkingLevel(previousLevel);
+      if (isNew) thinkingLevelOverrideRef.current = previousLevel === "auto" ? null : previousLevel;
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      modelSwitchPendingRef.current = false;
+      setModelSwitching(false);
     }
-  }, [isNew]);
+  }, [addNotice, isCompacting, isNew, thinkingLevel]);
 
   // Shared set_tools flow for preset and custom selections. The server may
   // rebuild the session when crossing the chat-only boundary; in that case the
@@ -2437,8 +2507,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // Load session on mount
   useEffect(() => {
     sessionHookMountedRef.current = true;
+    // Usage reads started before a remount are stale.
+    contextUsageAppliedIdRef.current = contextUsageRequestIdRef.current;
     if (session) {
       sessionIdRef.current = session.id;
+      const runId = promptRunIdRef.current;
+      const usageRequestId = ++contextUsageRequestIdRef.current;
       loadSession(session.id, true, true, { force: true }).then((agentState) => {
         if (agentState?.running) {
           loadTools(session.id);
@@ -2462,7 +2536,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
-          if (agentState.state.contextUsage?.tokens !== null && agentState.state.contextUsage?.tokens !== undefined) setContextUsage(agentState.state.contextUsage);
+          applyContextUsage(agentState.state, session.id, runId, usageRequestId);
           if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
           if (agentState.state.customSystemPrompt !== undefined) setCustomSystemPrompt(agentState.state.customSystemPrompt ?? null);
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
@@ -2630,7 +2704,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleRecallQueue,
     handleBuiltinSlashCommand,
     setNoticePaused: setPausedNoticeId,
-    handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages, loadContext,
+    handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, handleFallbackThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages, loadContext,
     scrollToBottom, scrollUserMsgToTop,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,

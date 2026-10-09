@@ -20,6 +20,13 @@ const allowedDevOrigins = [
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: configDir,
+  experimental: {
+    // proxy.ts matches /api/:path*, and Next buffers the request body whenever
+    // a proxy is present, capped at 10 MB by default. The upload route accepts
+    // up to 100 MB per request, so raise the buffer above that or large uploads
+    // are truncated and fail with "Failed to parse body as FormData."
+    proxyClientMaxBodySize: "128mb",
+  },
   // Only the desktop (Tauri) build needs the self-contained standalone server;
   // keep it out of the npm release build so `next start` output stays as-is.
   ...(process.env.PI_WEB_STANDALONE_BUILD === "1" ? { output: "standalone" as const } : {}),

@@ -14,6 +14,7 @@ import {
   type ModelFallbackNotice,
 } from "./model-fallback";
 import { MODEL_FALLBACK_EVENT_TYPE } from "./session-model-fallback";
+import { resolveModelThinkingLevel } from "./model-thinking-level";
 
 export interface ModelFallbackRuntimeState {
   selection: FallbackModelRef | null;
@@ -22,6 +23,8 @@ export interface ModelFallbackRuntimeState {
   notice: ModelFallbackNotice | null;
   cancelled: boolean;
   resolveModel: (ref: FallbackModelRef) => Promise<Model<Api> | undefined>;
+  /** Model-specific settings/scope pin only; never the primary session's level. */
+  resolveDefaultThinkingLevel?: (ref: FallbackModelRef) => Promise<string | undefined>;
   onSwitch?: (notice: ModelFallbackNotice, thinkingLevel?: string) => void;
 }
 
@@ -298,11 +301,17 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
 
         let switched = false;
         try {
+          const modelDefault = await state.resolveDefaultThinkingLevel?.(selection);
+          const thinkingLevel = resolveModelThinkingLevel(target, selection.thinkingLevel, modelDefault);
+          if (state.cancelled) return undefined;
           switched = await pi.setModel(target);
+          if (!switched || state.cancelled) return undefined;
+          // setModel has one active thinking state. Override its inherited/clamped
+          // primary value with this backup's independent preference before continuing.
+          pi.setThinkingLevel(thinkingLevel);
         } catch {
           return undefined;
         }
-        if (!switched || state.cancelled) return undefined;
 
         const notice: ModelFallbackNotice = {
           from: refFromModel(current),

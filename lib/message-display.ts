@@ -23,6 +23,26 @@ export function getAssistantErrorMessage(
   return message.errorMessage?.trim() || "Unknown provider error";
 }
 
+/**
+ * `stopReason: "length"` marks an output-budget truncation, with or without
+ * partial answer text. When reasoning consumes it all, the missing answer can
+ * look like a hung session. The notice copy lives in i18n.
+ */
+export function isAssistantTruncated(
+  message: AssistantMessage,
+  options: DisplayOptions = {},
+): boolean {
+  return !options.isStreaming && message.stopReason === "length";
+}
+
+/** Text, an image, or a tool call is an answer. Thinking alone is not. */
+export function hasAssistantAnswer(message: AssistantMessage): boolean {
+  return (message.content ?? []).some((block) => {
+    if (block.type === "text") return block.text.trim().length > 0;
+    return block.type === "image" || block.type === "toolCall";
+  });
+}
+
 function isFinalAnswerBlock(block: AssistantContentBlock): boolean {
   return block.type === "text" || block.type === "image";
 }

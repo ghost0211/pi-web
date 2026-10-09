@@ -308,9 +308,21 @@ test("DELETE refuses busy targets and loaded dependent sessions, including idle 
   assert.equal(await readFile(targetPath, "utf8"), `${header(targetId)}\n`);
   assert.equal(await readFile(childPath, "utf8"), `${header(childId, targetPath)}\n`);
 
+  globalThis.__piSessions = new Map([[childId, {
+    isAlive: () => false, isDisposing: () => true, isRunning: () => false,
+  }]]);
+  const closingChildResponse = await deleteSession(
+    new Request(`http://localhost/api/sessions/${targetId}`, {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }),
+    }),
+    { params: Promise.resolve({ id: targetId }) },
+  );
+  assert.equal(closingChildResponse.status, 409, "a closing child still owns its JSONL until SDK disposal");
+
   globalThis.__piSessions = new Map([[targetId, {
-    isAlive: () => true,
-    isRunning: () => true,
+    isAlive: () => false,
+    isDisposing: () => true,
+    isRunning: () => false,
     shutdown: async () => { throw new Error("must not shutdown a busy target"); },
   }]]);
   const busyTargetResponse = await deleteSession(
@@ -391,6 +403,18 @@ test("DELETE refuses an unpersisted running child discovered from its loaded ses
   assert.equal(childShutdowns, 0);
   assert.equal(globalThis.__piSessions.get(targetId), target);
   assert.equal(globalThis.__piSessions.get(childId), child);
+
+  child.isAlive = () => false;
+  child.isRunning = () => false;
+  child.isDisposing = () => true;
+  const closingResponse = await deleteSession(
+    new Request(`http://localhost/api/sessions/${targetId}`, {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }),
+    }),
+    { params: Promise.resolve({ id: targetId }) },
+  );
+  assert.equal(closingResponse.status, 409, "unpersisted closing dependents must remain protected");
+  assert.equal(await readFile(targetPath, "utf8"), targetHeader);
 });
 
 test("DELETE refuses a no-file metadata-only child of an ephemeral parent", async (t) => {

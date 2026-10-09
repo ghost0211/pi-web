@@ -116,6 +116,10 @@ export function AppShell() {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio, soundEnabledRef } = useAudio();
   const notifiedAttentionRequestIdsRef = useRef(new Set<string>());
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
+  // Latest selection readable from async callbacks whose captured state is
+  // stale (e.g. a delete that completes after the user navigated away).
+  const selectedSessionRef = useRef(selectedSession);
+  selectedSessionRef.current = selectedSession;
   const management = useSessionManagement();
   const [archivedRestoring, setArchivedRestoring] = useState(false);
   const archivedRestoringRef = useRef(false);
@@ -1006,8 +1010,13 @@ export function AppShell() {
   const handleSessionDeleted = useCallback((sessionId: string) => {
     invalidateWorkspaceRestore();
     setRefreshKey((k) => k + 1);
-    if (selectedSession?.id === sessionId) {
-      const cwd = selectedSession.cwd;
+    // The DELETE can outlive a session switch: this callback's captured
+    // selectedSession is from the delete click. Read the latest selection
+    // and only fall back to the empty composer when the user is still on
+    // the deleted session at the moment removal completes.
+    const active = selectedSessionRef.current;
+    if (active?.id === sessionId) {
+      const cwd = active.cwd;
       const draftId = typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
         : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -1023,9 +1032,9 @@ export function AppShell() {
       setSystemTools(null);
       setSystemInfoLoading(false);
       setActiveTopPanel(null);
-      router.replace("/", { scroll: false });
+      router.replace(cwd ? `?cwd=${encodeURIComponent(cwd)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
     }
-  }, [invalidateWorkspaceRestore, selectedSession, router]);
+  }, [invalidateWorkspaceRestore, router]);
 
   useEffect(() => {
     const onCatalogChanged = (event: Event) => {

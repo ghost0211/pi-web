@@ -130,6 +130,30 @@ test("shows and locks the optimistic model while a switch is pending", () => {
   assert.match(html, /animation:spin 0\.8s linear infinite/);
 });
 
+test("renders independent main/backup thinking controls and grays out an unset backup", () => {
+  const render = (extra = {}) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInput, {
+    onSend() {}, onAbort() {}, isStreaming: false,
+    model: { provider: "main", modelId: "reasoner" }, thinkingLevel: "max", availableThinkingLevels: ["off", "max"],
+    onThinkingLevelChange() {}, onFallbackThinkingLevelChange() {}, fallbackModel: null,
+    ...extra,
+  })));
+  const button = (html, label) => [...html.matchAll(/<button\b[^>]*>/g)].map((match) => match[0]).find((tag) => tag.includes(`aria-label="${label}"`));
+  const html = render();
+  const main = button(html, "Primary model thinking level");
+  const backup = button(html, "Fallback model thinking level");
+  assert.ok(main); assert.ok(backup);
+  assert.doesNotMatch(main, /disabled=""/);
+  assert.match(backup, /disabled=""/);
+  assert.match(backup, /opacity:0\.5/);
+  assert.match(backup, /Please select a fallback model first/);
+
+  const configured = render({ fallbackModel: { provider: "backup", modelId: "other" }, fallbackThinkingLevel: "low", fallbackAvailableThinkingLevels: ["low", "high"], fallbackThinkingLevelMap: { low: "lite", high: "strong" } });
+  assert.doesNotMatch(button(configured, "Fallback model thinking level"), /disabled=""/);
+  assert.match(configured, /Backup: lite/);
+  const busy = render({ modelSwitching: true });
+  assert.match(button(busy, "Primary model thinking level"), /disabled=""/);
+});
+
 test("filters model options by name, id, and provider", () => {
   const options = [
     { provider: "ollama", modelId: "qwen3:latest", name: "Qwen 3" },

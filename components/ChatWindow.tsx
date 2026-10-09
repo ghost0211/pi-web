@@ -4,12 +4,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { AgentEndInfo, AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, BlockingExtensionUiRequest, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage, UserMessage } from "@/lib/types";
 import { normalizeCustomPanelLines } from "@/lib/ansi";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
-import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
+import { countToolCallBlocks, getAssistantErrorMessage, getDisplayableAssistantBlocks, hasAssistantAnswer, isAssistantTruncated, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { buildChatMessageGroups, findFinalAssistantIndex, needsStreamingFollowUpLabel } from "@/lib/chat-message-groups";
 import type { WrittenFile } from "@/lib/turn-written-files";
 import { buildTurnOutcome } from "@/lib/turn-outcome";
 import { TurnOutcomeCard } from "./TurnOutcomeCard";
 import { getFileName } from "@/lib/file-paths";
+import { normalizeThinkingLevelOption } from "@/lib/thinking-level-options";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
@@ -138,7 +139,13 @@ function withAssistantBlocks(
   options: { omitUsage?: boolean } = {},
 ): AssistantMessage {
   const next = { ...message, content };
-  if (options.omitUsage) next.usage = undefined;
+  if (options.omitUsage) {
+    next.usage = undefined;
+    // This is only the process half of the message. Show terminal errors and
+    // output-limit notices once, on its answer/status card, not on both halves.
+    next.stopReason = undefined;
+    next.errorMessage = undefined;
+  }
   return next;
 }
 
@@ -254,7 +261,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
     handleRecallQueue,
     handleBuiltinSlashCommand,
-    handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, loadSlashCommands, scrollUserMsgToTop, scrollToBottom,
+    handleToolPresetChange, handleCustomToolsChange, ephemeral, setEphemeral, handleThinkingLevelChange, handleFallbackThinkingLevelChange, loadSlashCommands, scrollUserMsgToTop, scrollToBottom,
     loadContext, activeLeafId, data,
   } = useAgentSession({
     session, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd: wrappedOnAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession,
@@ -588,6 +595,14 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     ? (modelThinkingLevelMaps[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
     : null;
 
+  const fallbackAvailableThinkingLevels = fallbackModel
+    ? (modelThinkingLevels[`${fallbackModel.provider}:${fallbackModel.modelId}`] ?? null)
+    : null;
+  const fallbackThinkingLevelMap = fallbackModel
+    ? (modelThinkingLevelMaps[`${fallbackModel.provider}:${fallbackModel.modelId}`] ?? null)
+    : null;
+  const fallbackThinkingLevel = normalizeThinkingLevelOption(fallbackModel?.thinkingLevel, fallbackAvailableThinkingLevels);
+
   const readOnlyNotice = (
     <div role="status" data-subagent-read-only="true" style={{ padding: "10px 16px", textAlign: "center", fontSize: 12, color: "var(--text-muted)", borderTop: "1px solid var(--border)" }}>
       {t("subagent.readOnly")}
@@ -647,10 +662,14 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       onCustomToolsChange={!isReadOnlyConversation && (session || isNew) ? handleCustomToolsChange : undefined}
       ephemeral={ephemeral}
       onEphemeralChange={!isReadOnlyConversation && isNew && !session ? setEphemeral : undefined}
-      thinkingLevel={thinkingLevel}
+      thinkingLevel={normalizeThinkingLevelOption(thinkingLevel, availableThinkingLevels)}
       onThinkingLevelChange={!isReadOnlyConversation && (session || isNew) ? handleThinkingLevelChange : undefined}
       availableThinkingLevels={availableThinkingLevels}
       thinkingLevelMap={currentThinkingLevelMap}
+      fallbackThinkingLevel={fallbackThinkingLevel}
+      onFallbackThinkingLevelChange={!isReadOnlyConversation && (session || isNew) ? handleFallbackThinkingLevelChange : undefined}
+      fallbackAvailableThinkingLevels={fallbackAvailableThinkingLevels}
+      fallbackThinkingLevelMap={fallbackThinkingLevelMap}
       retryInfo={retryInfo}
       queuedMessages={queuedMessages}
       inputHistory={inputHistory}
@@ -903,7 +922,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 if (idx === lastUserIdx) { (lastUserMsgRef as { current: HTMLDivElement | null }).current = el; }
               };
 
-              const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; writtenFiles?: WrittenFile[]; parentFollowUp?: boolean } = {}): ReactNode => {
+              const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; writtenFiles?: WrittenFile[]; parentFollowUp?: boolean; recoverTruncation?: boolean } = {}): ReactNode => {
                 const msg = options.messageOverride ?? messages[idx];
                 const prevAssistantEntryId =
                   msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
@@ -950,6 +969,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
                     sessionId={session?.id ?? sessionIdRef.current ?? undefined}
                     writtenFiles={options.writtenFiles}
+                    onCompact={options.recoverTruncation ? handleCompact : undefined}
+                    isCompacting={options.recoverTruncation ? isCompacting : undefined}
+                    compactError={options.recoverTruncation ? compactError : undefined}
                   />
                 );
                 const view = options.parentFollowUp && msg.role === "assistant" ? (
@@ -969,8 +991,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               const rendered: ReactNode[] = [];
               for (const group of messageGroups) {
                 const { startIndex: userIdx, endIndex: endIdx, contentStartIndex } = group;
-                const finalAssistantIdx = group.kind === "standalone" ? -1
-                  : findFinalAssistantIndex(messages, contentStartIndex - 1, endIdx);
+                const finalAssistantIdx = findFinalAssistantIndex(messages, contentStartIndex - 1, endIdx);
                 const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length;
                 if (finalAssistantIdx === -1 || isLiveTail) {
                   let labeled = false;
@@ -997,7 +1018,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 const finalProcessMessage = finalSplit.processBlocks.length > 0
                   ? withAssistantBlocks(finalAssistant, finalSplit.processBlocks, { omitUsage: true })
                   : null;
-                const finalAnswerMessage = finalSplit.answerBlocks.length > 0 || getAssistantErrorMessage(finalAssistant)
+                const finalAnswerMessage = finalSplit.answerBlocks.length > 0 || getAssistantErrorMessage(finalAssistant) || isAssistantTruncated(finalAssistant)
                   ? withAssistantBlocks(finalAssistant, finalSplit.answerBlocks)
                   : null;
 
@@ -1009,6 +1030,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     ?? (finalAnswerMessage ? undefined : visibleRefIndexByMessage.get(finalAssistantIdx));
                   const processGroup = (
                     <ProcessDetailsGroup
+                      key={finalAnswerMessage ? "answered" : "unanswered"}
                       messageCount={processCount}
                       defaultExpanded={!finalAnswerMessage}
                       t={t}
@@ -1029,7 +1051,11 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 }
 
                 if (finalAnswerMessage) {
-                  rendered.push(renderMessage(finalAssistantIdx, { messageOverride: finalAnswerMessage, parentFollowUp: group.parentFollowUp }));
+                  rendered.push(renderMessage(finalAssistantIdx, {
+                    messageOverride: finalAnswerMessage, parentFollowUp: group.parentFollowUp,
+                    recoverTruncation: !isReadOnlyConversation && endIdx === messages.length && !streamState.isStreaming
+                      && isAssistantTruncated(finalAssistant) && !hasAssistantAnswer(finalAssistant),
+                  }));
                 }
                 for (let renderIdx = finalAssistantIdx + 1; renderIdx < endIdx; renderIdx++) {
                   rendered.push(renderMessage(renderIdx));
@@ -1037,7 +1063,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 rendered.push(
                   <TurnOutcomeCard
                     key={`outcome-${entryIds[userIdx] ?? userIdx}`}
-                    outcome={buildTurnOutcome(messages.slice(userIdx + 1, endIdx), messageCwd)}
+                    outcome={buildTurnOutcome(messages.slice(contentStartIndex, endIdx), messageCwd)}
                     onOpenFile={onOpenFile}
                     onOpenGitDiff={onOpenGitDiff}
                     diffNotice={t("chat.reviewDiffNotice")}

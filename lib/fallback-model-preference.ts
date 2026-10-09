@@ -15,7 +15,7 @@ export function getFallbackModelPreference(): FallbackModelRef | null {
   }
 }
 
-/** Store only the public provider/model reference; storage failures are non-fatal. */
+/** Store only the public model and its independent thinking preference; failures are non-fatal. */
 export function setFallbackModelPreference(model: FallbackModelRef | null): void {
   try {
     if (typeof window === "undefined") return;

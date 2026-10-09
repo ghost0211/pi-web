@@ -202,6 +202,7 @@ function isSessionBusy(session: ReturnType<typeof getRpcSession>): boolean {
     sessionReplacement?: unknown;
   };
   return session.isRunning()
+    || Boolean(session.isDisposing?.())
     || Boolean(session.hasMcpActionInProgress?.())
     || (typeof internals.activeMutatingCommands === "number" && internals.activeMutatingCommands > 0)
     || Boolean(internals.sessionReplacement);
@@ -321,7 +322,7 @@ function makeSessionRewritePlans(
       throw new SessionDeleteConflictError(`Cannot delete this session while dependent session ${boundedHeader.id} is starting in Pi Web`);
     }
     const childLive = getRpcSession(boundedHeader.id);
-    if (childLive?.isAlive()) {
+    if (childLive?.isAlive() || childLive?.isDisposing?.()) {
       throw new SessionDeleteConflictError(`Cannot delete this session while dependent session ${boundedHeader.id} is loaded in Pi Web (even if idle); wait until it is unloaded, then retry`);
     }
 

@@ -1,6 +1,10 @@
+import { isThinkingLevelOption, type ThinkingLevelOption } from "./thinking-level-options";
+
 export interface FallbackModelRef {
   provider: string;
   modelId: string;
+  /** Independent backup preference. Missing legacy values use model-default. */
+  thinkingLevel?: ThinkingLevelOption;
 }
 
 export interface ModelFallbackNotice {
@@ -11,16 +15,21 @@ export interface ModelFallbackNotice {
   timestamp: number;
 }
 
-/** Undefined means malformed; null is an explicit opt-out. Never accept credentials. */
+/** Undefined means malformed; null is an explicit opt-out. Only public model/preferences. */
 export function parseFallbackModel(value: unknown): FallbackModelRef | null | undefined {
   if (value === null) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
-  if (Object.keys(candidate).some((key) => key !== "provider" && key !== "modelId")) return undefined;
+  if (Object.keys(candidate).some((key) => key !== "provider" && key !== "modelId" && key !== "thinkingLevel")) return undefined;
+  if (candidate.thinkingLevel !== undefined && !isThinkingLevelOption(candidate.thinkingLevel)) return undefined;
   if (typeof candidate.provider !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(candidate.provider)) return undefined;
   if (typeof candidate.modelId !== "string" || candidate.modelId.length < 1 || candidate.modelId.length > 512
     || candidate.modelId.trim() !== candidate.modelId || /[\u0000-\u001f\u007f]/.test(candidate.modelId)) return undefined;
-  return { provider: candidate.provider, modelId: candidate.modelId };
+  return {
+    provider: candidate.provider,
+    modelId: candidate.modelId,
+    ...(candidate.thinkingLevel !== undefined ? { thinkingLevel: candidate.thinkingLevel as ThinkingLevelOption } : {}),
+  };
 }
 
 export function sameFallbackModel(a: FallbackModelRef | null | undefined, b: FallbackModelRef | null | undefined): boolean {

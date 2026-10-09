@@ -303,3 +303,29 @@ test("custom model edits pass through samplingParams and samplingParamsByThinkin
   assert.match(source, /const next = \{ \.\.\.model \};/);
   assert.match(source, /const set = <K extends keyof ModelEntry>\(k: K, v: ModelEntry\[K\]\) => onChange\(\{ \.\.\.model, \[k\]: v \}\);/);
 });
+
+test("omitted provider api protocol is preserved for catalog discovery and never auto-assigned", () => {
+  // Opening an existing provider with no explicit api must not auto-fill a guessed protocol
+  assert.doesNotMatch(
+    source,
+    /if\s*\(!provider\.api\)\s*onChange\(\{\s*\.\.\.provider,\s*api:\s*"openai-completions"\s*\}\)/,
+  );
+  // ProviderDetail API field allows empty value so catalog fallback takes effect
+  assert.match(
+    source,
+    /<Select value=\{provider\.api \?\? ""\} onChange=\{\(v\) => set\("api", v \|\| undefined\)\} options=\{API_OPTIONS\} \/>/,
+  );
+});
+
+test("unreadable models.json disables Save and surfaces error in footer", () => {
+  // loadError state tracks read failures
+  assert.match(source, /const \[loadError, setLoadError\] = useState<string \| null>\(null\);/);
+  // Fetch /api/models-config catches non-ok or error responses into loadError
+  assert.match(source, /if \(!r\.ok \|\| d\.error\) throw new Error\(d\.error \?\? `HTTP \$\{r\.status\}`\);/);
+  assert.match(source, /\.catch\(\(e: unknown\) => setLoadError\(e instanceof Error \? e\.message : String\(e\)\)\)/);
+  // Do not replace models.json before the read completes or after it fails.
+  assert.match(source, /const handleSave = useCallback\(async \(\) => \{\s*if \(loading \|\| loadError\) return;/);
+  assert.match(source, /disabled=\{loading \|\| saving \|\| savedOk \|\| loadError !== null\}/);
+  // Footer surfaces unreadable error message
+  assert.match(source, /loadError \? t\("models\.configUnreadable", \{ error: loadError \}\) : saveError/);
+});

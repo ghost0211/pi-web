@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
@@ -24,6 +25,8 @@ import { cacheSessionPath, invalidateSessionListCache, readLatestSessionEntryId,
 import { getProjectTrustStatus, projectTrustReloadOptions } from "./project-trust";
 import { persistExplicitStartupPreferences } from "./startup-preferences";
 import { sameFallbackModel, type FallbackModelRef } from "./model-fallback";
+import { isThinkingLevelOption, normalizeThinkingLevelOption } from "./thinking-level-options";
+import { resolveModelThinkingLevel } from "./model-thinking-level";
 import {
   appendSessionModelFallback,
   readSessionModelFallback,
@@ -205,8 +208,22 @@ export function resolveSessionIdleTimeoutMs(): number {
   const raw = process.env.PI_WEB_SESSION_IDLE_TIMEOUT_MS;
   if (raw === undefined || raw.trim() === "") return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2_147_483_647) return DEFAULT_SESSION_IDLE_TIMEOUT_MS;
   return Math.floor(parsed);
+}
+
+const DEFAULT_SESSION_SHUTDOWN_DEADLINE_MS = 5_000;
+
+/** Extension cleanup must always have a finite deadline, including direct destroy(). */
+export function resolveSessionShutdownDeadlineMs(
+  rawValue: string | undefined = process.env.PI_WEB_SHUTDOWN_DEADLINE_MS,
+): number {
+  if (rawValue !== undefined && rawValue.trim() !== "") {
+    const parsed = Number(rawValue);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 2_147_483_647) return Math.floor(parsed);
+    console.warn("[pi-web] invalid PI_WEB_SHUTDOWN_DEADLINE_MS; falling back to 5 seconds");
+  }
+  return DEFAULT_SESSION_SHUTDOWN_DEADLINE_MS;
 }
 
 /**
@@ -343,7 +360,12 @@ export class AgentSessionWrapper {
   private shutdownPromise: Promise<void> | null = null;
   private sessionShutdownEmitted = false;
   private forceShutdownOnIdle = false;
+  private forcedIdleTimerArmed = false;
   private _alive = true;
+  private closing = false;
+  private sdkDisposed = false;
+  private resolveDisposed: () => void = () => {};
+  private readonly disposed = new Promise<void>((resolve) => { this.resolveDisposed = resolve; });
 
   constructor(
     public readonly inner: AgentSessionLike,
@@ -389,7 +411,12 @@ export class AgentSessionWrapper {
   }
 
   isAlive(): boolean {
-    return this._alive;
+    return this._alive && !this.closing;
+  }
+
+  /** Not routable, but still owns its file/resources and must block deletion. */
+  isDisposing(): boolean {
+    return !this.isAlive() && !this.sdkDisposed;
   }
 
   isRunning(): boolean {
@@ -445,13 +472,13 @@ export class AgentSessionWrapper {
   hasMcpActionInProgress(): boolean { return this.mcpActionPending; }
 
   async getMcpRuntimeStatus(): Promise<McpRuntimeStatus> {
-    if (!this._alive || !this.mcpRuntime) return { available: false, reason: "No live built-in MCP runtime in this session. Chat-only and subagent sessions do not load it." };
+    if (!this.isAlive() || !this.mcpRuntime) return { available: false, reason: "No live built-in MCP runtime in this session. Chat-only and subagent sessions do not load it." };
     this.resetIdleTimer();
     return this.mcpRuntime.status();
   }
 
   assertMcpActionAvailable(): void {
-    if (!this._alive || !this.mcpRuntime?.isAvailable()) throw new McpRuntimeError("No live built-in MCP runtime in this session");
+    if (!this.isAlive() || !this.mcpRuntime?.isAvailable()) throw new McpRuntimeError("No live built-in MCP runtime in this session");
     if (this.isRunning() || this.mcpActionPending || this.activeMutatingCommands > 0 || this.sessionReplacement) {
       throw new McpRuntimeError("Wait for the current session operation to finish before managing MCP");
     }
@@ -665,13 +692,20 @@ export class AgentSessionWrapper {
   }
 
   private resetIdleTimer(): void {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    if (!this._alive) return;
+    if (!this.isAlive()) {
+      if (this.idleTimer) clearTimeout(this.idleTimer);
+      return;
+    }
     if (!this.isRunning()) this.forceShutdownOnIdle = false;
-    const idleTimeoutMs = resolveSessionIdleTimeoutMs();
+    // Repeated Stop/reconnect commands must not keep moving a stuck run's deadline.
+    if (this.forceShutdownOnIdle && this.forcedIdleTimerArmed) return;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    const idleTimeoutMs = resolveSessionIdleTimeoutMs()
+      || (this.forceShutdownOnIdle ? DEFAULT_SESSION_IDLE_TIMEOUT_MS : 0);
+    this.forcedIdleTimerArmed = idleTimeoutMs !== 0 && this.forceShutdownOnIdle;
     if (idleTimeoutMs === 0) return;
     this.idleTimer = setTimeout(() => {
-      if (this.mcpActionPending || (this.isRunning() && !this.forceShutdownOnIdle)) {
+      if (!this.forceShutdownOnIdle && (this.mcpActionPending || this.isRunning())) {
         this.resetIdleTimer();
         return;
       }
@@ -712,6 +746,16 @@ export class AgentSessionWrapper {
 
   onDestroy(cb: () => void): void {
     this.onDestroyCallback = cb;
+  }
+
+  /** Wait for SDK disposal, not merely isAlive() becoming false. */
+  waitUntilDisposed(timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+    });
+    return Promise.race([this.disposed.then(() => true), timedOut]).finally(() => clearTimeout(timer));
   }
 
   private async withSessionReplacement<T>(
@@ -761,6 +805,7 @@ export class AgentSessionWrapper {
     if (this.sessionReplacement && !allowedDuringReplacement) {
       throw new Error("Session is being copied to a new session");
     }
+    if (!this.isAlive()) throw new Error("Session is shutting down");
     if (SESSION_REPLACEMENT_COMMAND_TYPES.has(type) && this.activeMutatingCommands > 0) {
       throw new Error(`Cannot ${type} while another session command is running`);
     }
@@ -775,6 +820,7 @@ export class AgentSessionWrapper {
       if (this.sessionReplacement && !allowedDuringReplacement) {
         throw new Error("Session is being copied to a new session");
       }
+      if (!this.isAlive()) throw new Error("Session is shutting down");
 
       if (type === "prompt" || type === "steer" || type === "follow_up") {
         const imageError = validateAgentImages(command.images);
@@ -788,6 +834,7 @@ export class AgentSessionWrapper {
         // this submission starts a run or joins its streaming queue.
         const releaseAdmission = await this.acquirePromptAdmission();
         try {
+          if (!this.isAlive()) throw new Error("Session is shutting down");
           if (this.inner.isBashRunning) {
             throw new Error("Cannot send a prompt while a shell command is running");
           }
@@ -898,6 +945,7 @@ export class AgentSessionWrapper {
       case "abort":
         if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
         this.forceShutdownOnIdle = true;
+        this.resetIdleTimer();
         try {
           await this.withFinalIdleReset(() => this.inner.abort());
           return null;
@@ -911,7 +959,9 @@ export class AgentSessionWrapper {
         let contextUsage = this.inner.getContextUsage();
         if (!contextUsage || contextUsage.tokens === null || contextUsage.tokens === undefined || contextUsage.tokens === 0) {
           const rawMessages = (this.inner.messages ?? []) as AgentMessage[];
-          contextUsage = calculateActiveContextTokens(rawMessages, contextWindow);
+          contextUsage = calculateActiveContextTokens(rawMessages, contextWindow, {
+            estimateOnly: contextUsage?.tokens === null,
+          });
         }
         const branchEntries = typeof this.inner.sessionManager.getBranch === "function"
           ? this.inner.sessionManager.getBranch().map((entry) => entry as unknown as SessionEntry)
@@ -952,15 +1002,19 @@ export class AgentSessionWrapper {
         if (this.isRunning() || this.activeMutatingCommands > 1) {
           throw new Error("Wait for the current session operation to finish before changing the fallback model");
         }
-        const selection = validateFallbackModel(command.model);
+        let selection = validateFallbackModel(command.model);
         const state = this.modelFallbackState;
         if (!state) throw new Error("Fallback models are not available for this session");
         const resolved = selection ? await state.resolveModel(selection) : undefined;
         if (selection && !resolved) {
           throw new Error("Fallback model is unavailable or outside the enabled model scope");
         }
+        if (selection?.thinkingLevel !== undefined && resolved) {
+          selection = { ...selection, thinkingLevel: normalizeThinkingLevelOption(selection.thinkingLevel, getSupportedThinkingLevels(resolved)) };
+        }
         const currentModel = this.inner.model;
-        if (selection && currentModel && sameFallbackModel(selection, { provider: currentModel.provider, modelId: currentModel.id })) {
+        if (selection && currentModel && sameFallbackModel(selection, { provider: currentModel.provider, modelId: currentModel.id })
+          && !sameFallbackModel(selection, state.selection)) {
           throw new Error("Fallback model must be different from the primary model");
         }
         // Recheck after async availability resolution: a prompt may have started.
@@ -1076,7 +1130,14 @@ export class AgentSessionWrapper {
       }
 
       case "set_thinking_level": {
-        const level = command.level as string;
+        const requested = command.level;
+        if (!isThinkingLevelOption(requested)) throw new Error("Invalid thinking level");
+        const model = this.inner.model as Model<Api> | undefined;
+        const level = requested === "auto"
+          ? model ? resolveModelThinkingLevel(model, "auto",
+            this.inner.settingsManager?.getModelThinkingLevel?.(model.provider, model.id)
+              ?? this.inner.settingsManager?.getDefaultThinkingLevel?.()) : "off"
+          : requested;
         this.inner.setThinkingLevel(level);
         // setThinkingLevel clamps xhigh→high for models where supportsXhigh()===false.
         // If the model has DeepSeek thinking compat (reasoningEffortMap maps xhigh→max),
@@ -1282,6 +1343,7 @@ export class AgentSessionWrapper {
 
       case "abort_bash": {
         this.forceShutdownOnIdle = true;
+        this.resetIdleTimer();
         this.inner.abortBash();
         return null;
       }
@@ -1316,7 +1378,12 @@ export class AgentSessionWrapper {
       try {
         this.inner.dispose();
       } finally {
-        this.onDestroyCallback?.();
+        this.sdkDisposed = true;
+        try {
+          this.onDestroyCallback?.();
+        } finally {
+          this.resolveDisposed();
+        }
       }
     };
 
@@ -1335,10 +1402,7 @@ export class AgentSessionWrapper {
       return;
     }
 
-    void (async () => emit.call(
-      this.inner.extensionRunner,
-      { type: "session_shutdown", reason: "quit" },
-    ))()
+    void this.emitSessionShutdown(emit)
       .catch((error) => {
         console.error(
           "[pi-web] session_shutdown before dispose failed:",
@@ -1353,9 +1417,38 @@ export class AgentSessionWrapper {
     this.mcpRuntime?.cancel();
     if (this.shutdownPromise) return this.shutdownPromise;
     if (!this._alive) return;
+    this.closing = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
 
     this.shutdownPromise = (async () => {
       try {
+        if (!this.sessionShutdownEmitted) {
+          this.sessionShutdownEmitted = true;
+          const emit = this.inner.extensionRunner?.emit;
+          if (typeof emit === "function") await this.emitSessionShutdown(emit, true);
+        }
+      } finally {
+        this.destroy();
+      }
+    })();
+    return this.shutdownPromise;
+  }
+
+  private async emitSessionShutdown(
+    emit: NonNullable<AgentSessionLike["extensionRunner"]["emit"]>,
+    waitForBinding = false,
+  ): Promise<void> {
+    const timeoutMs = resolveSessionShutdownDeadlineMs();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), timeoutMs);
+      timer.unref?.();
+    });
+    // The race also handles a rejection that arrives after the deadline.
+    const handled = (async () => {
+      if (waitForBinding) {
+        // session_start/bindExtensions can hang too. Share the shutdown deadline
+        // rather than waiting forever before the bounded cleanup even begins.
         try {
           await this.waitForExtensionsBound();
         } catch (error) {
@@ -1364,15 +1457,19 @@ export class AgentSessionWrapper {
             error instanceof Error ? error.message : error,
           );
         }
-        if (!this.sessionShutdownEmitted) {
-          this.sessionShutdownEmitted = true;
-          await this.inner.extensionRunner.emit?.({ type: "session_shutdown", reason: "quit" });
-        }
-      } finally {
-        this.destroy();
+        // If binding resolves after forced disposal, do not call the dead runner.
+        if (!this._alive) return "handled" as const;
       }
+      await emit.call(this.inner.extensionRunner, { type: "session_shutdown", reason: "quit" });
+      return "handled" as const;
     })();
-    return this.shutdownPromise;
+    try {
+      if (await Promise.race([handled, deadline]) === "timeout") {
+        console.warn(`[pi-web] extensions did not finish session_shutdown for session ${this.sessionId} within ${timeoutMs} ms; disposing it anyway`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private resolveExtensionUiResponse(response: ExtensionUiResponse): void {
@@ -1955,7 +2052,14 @@ function registerRpcWrapper(wrapper: AgentSessionWrapper): void {
   const registry = getRegistry();
   const sessionId = wrapper.sessionId;
   if (wrapper.sessionFile) cacheSessionPath(sessionId, wrapper.sessionFile);
-  wrapper.onDestroy(() => registry.delete(sessionId));
+  wrapper.onDestroy(() => {
+    if (registry.get(sessionId) === wrapper) registry.delete(sessionId);
+  });
+  // A pre-HMR wrapper may still unregister by id alone. Neutralize its old callback.
+  const previous = registry.get(sessionId);
+  if (previous && previous !== wrapper && typeof previous.onDestroy === "function") {
+    previous.onDestroy(() => {});
+  }
   registry.set(sessionId, wrapper);
   wrapper.start();
   if (!wrapper.isChatOnly()) wrapper.beginExtensionBinding();
@@ -1999,6 +2103,26 @@ function getLocks(): Map<string, Promise<{ session: AgentSessionWrapper; realSes
   return globalThis.__piStartLocks;
 }
 
+const closingSessionWaits = new WeakMap<AgentSessionWrapper, { done: boolean; promise: Promise<void> }>();
+
+/** A closing wrapper still owns the file and provider resources until SDK disposal. */
+function closingRpcSessionWait(sessionId: string): Promise<void> | null {
+  const closing = getRegistry().get(sessionId);
+  if (!closing || closing.isAlive() || typeof closing.waitUntilDisposed !== "function") return null;
+  let wait = closingSessionWaits.get(closing);
+  if (!wait) {
+    const entry = { done: false, promise: Promise.resolve() };
+    entry.promise = closing.waitUntilDisposed(Math.min(resolveSessionShutdownDeadlineMs() + 1_000, 2_147_483_647))
+      .then((disposed) => {
+        if (!disposed) console.warn(`[pi-web] session ${sessionId} is still shutting down; starting it again anyway`);
+      })
+      .finally(() => { entry.done = true; });
+    closingSessionWaits.set(closing, entry);
+    wait = entry;
+  }
+  return wait.done ? null : wait.promise;
+}
+
 function normalizeRpcCwd(cwd: string): string {
   const resolvedCwd = resolve(cwd);
   try {
@@ -2037,7 +2161,7 @@ export function getLoadedRpcDependentSessionIds(parentSessionId: string, parentS
   const dependentIds = new Set<string>();
 
   for (const [registryId, session] of getRegistry()) {
-    if (!session.isAlive()) continue;
+    if (!session.isAlive() && !session.isDisposing?.()) continue;
 
     const runtime = session as unknown as {
       sessionId?: string;
@@ -2108,6 +2232,11 @@ async function setRpcSessionToolsGuarded(
 
   if (!existing?.isAlive()) {
     if (!sessionFile) throw new Error("Session not found");
+    const pending = closingRpcSessionWait(sessionId) ?? getLocks().get(sessionId);
+    if (pending) {
+      await pending.catch(() => undefined);
+      return setRpcSessionToolsGuarded(sessionId, sessionFile, requestedToolNames);
+    }
     const manager = SessionManager.open(sessionFile, undefined);
     if (readSubagentSessionResources(manager.getEntries() as unknown as SessionEntry[])) {
       throw new Error("Subagent tool selection is fixed by its profile");
@@ -2334,6 +2463,16 @@ async function startRpcSessionGuarded(
   const inflight = locks.get(sessionId);
   if (inflight) return inflight;
 
+  const closingWait = closingRpcSessionWait(sessionId);
+  if (closingWait) {
+    const waiting: Promise<{ session: AgentSessionWrapper; realSessionId: string }> = closingWait.then(() => {
+      if (locks.get(sessionId) === waiting) locks.delete(sessionId);
+      return startRpcSessionGuarded(sessionId, sessionFile, cwd, options);
+    });
+    locks.set(sessionId, waiting);
+    return waiting;
+  }
+
   let sessionManager: SessionManager;
   if (sessionFile) {
     sessionManager = SessionManager.open(sessionFile, undefined);
@@ -2473,9 +2612,21 @@ async function startRpcSessionGuarded(
         const currentScope = await resolveVisibleModels(services.modelRuntime, services.settingsManager.getEnabledModels());
         return currentScope.visible.find((model) => model.provider === ref.provider && model.id === ref.modelId);
       };
+      modelFallbackState.resolveDefaultThinkingLevel = async (ref) => {
+        const currentScope = await resolveVisibleModels(services.modelRuntime, services.settingsManager.getEnabledModels());
+        return currentScope.thinkingLevelPins[`${ref.provider}/${ref.modelId}`]
+          ?? services.settingsManager.getModelThinkingLevel(ref.provider, ref.modelId);
+      };
       if (persistedFallbackModel === undefined && requestedFallbackModel !== undefined && requestedFallbackModel
         && !scope.visible.some((model) => model.provider === requestedFallbackModel.provider && model.id === requestedFallbackModel.modelId)) {
         throw new Error("Fallback model is unavailable or outside the enabled model scope");
+      }
+      if (persistedFallbackModel === undefined && requestedFallbackModel?.thinkingLevel !== undefined) {
+        const target = scope.visible.find((model) => model.provider === requestedFallbackModel.provider && model.id === requestedFallbackModel.modelId);
+        if (target) modelFallbackState.selection = {
+          ...requestedFallbackModel,
+          thinkingLevel: normalizeThinkingLevelOption(requestedFallbackModel.thinkingLevel, getSupportedThinkingLevels(target)),
+        };
       }
     }
     const effectiveInitialModel = initialModel && (
@@ -2500,7 +2651,7 @@ async function startRpcSessionGuarded(
       if (requestedFallbackModel && initial.model && sameFallbackModel(requestedFallbackModel, { provider: initial.model.provider, modelId: initial.model.id })) {
         throw new Error("Fallback model must be different from the primary model");
       }
-      appendSessionModelFallback(sessionManager, requestedFallbackModel);
+      appendSessionModelFallback(sessionManager, modelFallbackState.selection);
     }
     const { session: inner } = await createAgentSessionFromServices({
       services,

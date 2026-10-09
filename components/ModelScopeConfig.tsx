@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { ConfigButton, ConfigPanelShell } from "./SettingsUi";
 
@@ -40,6 +40,7 @@ function sameSelection(a: ReadonlySet<string> | null, b: ReadonlySet<string> | n
  */
 export function ModelScopeConfig({ embedded = false, onClose }: Props) {
   const { t } = useI18n();
+  const emptySelectionNoteId = useId();
   const [models, setModels] = useState<ScopeModelEntry[]>([]);
   const [baseline, setBaseline] = useState<ReadonlySet<string> | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string> | null>(null);
@@ -219,10 +220,17 @@ export function ModelScopeConfig({ embedded = false, onClose }: Props) {
             onClick={() => void save()}
             disabled={loading || saving || !dirty || emptySelection}
             title={emptySelection ? t("modelScope.emptySaveHint") : undefined}
+            aria-describedby={emptySelection && !loading ? emptySelectionNoteId : undefined}
           >
             {saving ? t("modelScope.saving") : savedOk && !dirty ? t("modelScope.saved") : t("modelScope.save")}
           </ConfigButton>
         </div>
+
+        {emptySelection && !loading && (
+          <div id={emptySelectionNoteId} className="model-scope-warnings" role="status">
+            {t("modelScope.emptySaveHint")}
+          </div>
+        )}
 
         {refreshNote && (
           <div className="model-scope-warnings" role="status" style={refreshNote.ok ? { color: "#16a34a" } : undefined}>

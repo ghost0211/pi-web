@@ -229,6 +229,51 @@ test("renders partial assistant content before the provider error", () => {
   assert.match(html, /Error: Connection closed/);
 });
 
+test("renders a truncation notice for stopReason length", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [{ type: "thinking", thinking: "Long reasoning chain" }],
+    stopReason: "length",
+  });
+
+  assert.match(html, /role="alert"/);
+  assert.match(html, /chat\.truncatedWithoutAnswer|No answer text/i);
+});
+
+test("keeps the follow-up hint when a truncated response already has text", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [{ type: "text", text: "Partial answer" }],
+    stopReason: "length",
+  });
+
+  assert.match(html, /Partial answer/);
+  assert.match(html, /chat\.truncatedByOutputLimit|output limit/i);
+  assert.doesNotMatch(html, /Compact context/);
+});
+
+test("offers compaction on an unanswered truncation and keeps its error with the reply", () => {
+  let compacted = 0;
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [],
+    stopReason: "length",
+  }, {
+    onCompact: () => { compacted += 1; },
+    compactError: "Summarization failed: generation hit the token cap",
+  });
+
+  assert.match(html, /Compact context/);
+  assert.match(html, /generation hit the token cap/);
+  assert.equal(compacted, 0);
+});
+
 test("renders a complete SDK skill expansion as a compact command", () => {
   const html = renderMessage({
     role: "user",

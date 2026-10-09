@@ -19,6 +19,20 @@ The result is `null` unless there is an explicit supported signal. The `kind` va
 
 A successful switch writes a bounded `pi-web:model-fallback-event` audit entry containing `{ from, to, ruleId, kind, timestamp }` and emits the same notice to the web client. Raw upstream response bodies, request headers, API keys, and prompt content are never persisted. Raw response capture is request/session isolated, bounded to 16 KiB, and is invalidated by a new request or a successful response. Google adapters are not forced onto a custom fetch because their SDK adapters reject one; non-Google adapters keep any existing `fetch`/`onResponse` behavior while the wrapper observes error responses.
 
+## Independent thinking levels
+
+The composer has separate primary/current-model and backup thinking controls. Each uses its own model's supported SDK levels and native `thinkingLevelMap` labels. The backup control is visible but disabled when no backup is selected; unknown capabilities, off-only models and busy/compacting sessions also disable editing. Changing a model closes its old menu, and an incompatible level returns to `auto` rather than carrying another model's level.
+
+The optional backup `thinkingLevel` is stored together with its public model reference in the existing session configuration and fresh-composer preference:
+
+```json
+{ "provider": "backup-provider", "modelId": "backup-model", "thinkingLevel": "low" }
+```
+
+Only the existing canonical levels plus `auto` are accepted; credentials and other fields remain rejected. Model-only legacy entries still work and mean `auto`. Configuring backup thinking never changes the active SDK thinking level or global primary defaults. Primary thinking changes never rewrite the backup configuration. Clearing the backup removes its level too. Forks, resumes and tool-selection rebuilds carry the same atomic configuration.
+
+On a confirmed quota failover, the server explicitly applies the backup's level **after** switching models and **before** continuing the run; it does not inherit the primary session's thinking. Backup `auto` uses that model's scope pin/per-model setting, otherwise SDK `medium` clamped to that model's capabilities. Unsupported legacy choices fall back to this same model-specific default; non-reasoning models resolve to `off`. The client displays the resulting actual level, without replacing an explicit choice with an implicit scope pin.
+
 ## Supported signals and boundaries
 
 - **OpenAI:** exact `credit_balance_exhausted`, `insufficient_quota`, `organization_usage_limit_exceeded`, `organization_spend_limit_exceeded`, and `project_spend_limit_exceeded` codes/types. The three organization/project codes classify as spend limits. `usage_limit_reached` and `subscription_sharing_usage_limit_exceeded` are exact subscription-limit tokens.

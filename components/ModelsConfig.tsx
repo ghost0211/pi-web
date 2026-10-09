@@ -330,11 +330,6 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
   }, [onNameDraft, editingName, name]);
 
   useEffect(() => {
-    if (!provider.api) onChange({ ...provider, api: "openai-completions" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider.api]);
-
-  useEffect(() => {
     discoveryRequestIdRef.current += 1;
     setDiscoveryState({ phase: "idle" });
     setDiscoveryQuery("");
@@ -454,7 +449,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete, onAddMod
       </Field>
 
       <Field label="API">
-        <Select value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
+        <Select value={provider.api ?? ""} onChange={(v) => set("api", v || undefined)} options={API_OPTIONS} />
       </Field>
 
       <Field label="Headers">
@@ -1885,6 +1880,9 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Set when models.json could not be read. Saving stays disabled: the draft
+  // would not contain the file's providers, and a save replaces the whole file.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(readRememberedSelection);
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
@@ -1913,8 +1911,12 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
 
   useEffect(() => {
     fetch("/api/models-config")
-      .then((r) => r.json())
-      .then((d: ModelsJson) => {
+      .then(async (r) => {
+        const d = (await r.json()) as ModelsJson & { error?: string };
+        if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`);
+        return d;
+      })
+      .then((d) => {
         const normalized = d.providers ? d : { ...d, providers: {} };
         setConfig(normalized);
         const keys = Object.keys(normalized.providers ?? {});
@@ -1924,7 +1926,7 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
             ? { type: "provider", name: keys[0] }
             : null);
       })
-      .catch(() => setConfig({ providers: {} }))
+      .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
     refreshAuthProviders();
   }, [refreshAuthProviders]);
@@ -2024,6 +2026,7 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
   }, []);
 
   const handleSave = useCallback(async () => {
+    if (loading || loadError) return;
     setSaving(true);
     setSaveError(null);
     setSavedOk(false);
@@ -2066,7 +2069,7 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
     } finally {
       setSaving(false);
     }
-  }, [config, t]);
+  }, [config, loading, loadError, t]);
 
   const providers = Object.entries(config.providers ?? {});
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
@@ -2233,12 +2236,16 @@ export function ModelsConfig({ onClose, embedded = false }: { onClose: () => voi
         </ConfigSplitView>
 
         {/* Footer */}
-        <ConfigFooter status={saveError && <span style={{ color: "#f87171" }}>{saveError}</span>}>
+        <ConfigFooter status={(loadError || saveError) && (
+          <span style={{ color: "#f87171" }}>
+            {loadError ? t("models.configUnreadable", { error: loadError }) : saveError}
+          </span>
+        )}>
           {!embedded && <ConfigButton onClick={onClose}>{t("i18n.cancel")}</ConfigButton>}
           <ConfigButton
             variant="primary"
             onClick={handleSave}
-            disabled={saving || savedOk}
+            disabled={loading || saving || savedOk || loadError !== null}
             className={savedOk ? "is-success" : undefined}
           >
             {savedOk && (

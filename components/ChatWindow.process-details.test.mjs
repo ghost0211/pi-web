@@ -36,3 +36,39 @@ test("expands process details when a completed turn has no final answer", () => 
     /<ProcessDetailsGroup[\s\S]*?defaultExpanded=\{!finalAnswerMessage\}/,
   );
 });
+
+test("resets process details when the turn gains or loses its final answer", () => {
+  // useState only reads defaultExpanded on mount; keying on answer availability
+  // makes an answered turn start collapsed even if it first rendered unanswered.
+  assert.match(
+    source,
+    /<ProcessDetailsGroup\s+key=\{finalAnswerMessage \? "answered" : "unanswered"\}[\s\S]*?defaultExpanded=\{!finalAnswerMessage\}/,
+  );
+});
+
+test("groups the leading segment when the history page starts mid-turn", () => {
+  // The first history page starts at a fixed entry count, so a turn longer than
+  // that page begins without an anchor. findFinalAssistantIndex scans from
+  // contentStartIndex - 1 (which is -1 for standalone head groups starting at 0).
+  assert.match(
+    source,
+    /const finalAssistantIdx = findFinalAssistantIndex\(messages, contentStartIndex - 1, endIdx\);/,
+  );
+  assert.doesNotMatch(
+    source,
+    /const finalAssistantIdx = group\.kind === "standalone" \? -1/,
+  );
+});
+
+test("process-only snapshots do not duplicate the final output-limit or error notice", () => {
+  const helper = source.slice(source.indexOf("function withAssistantBlocks("), source.indexOf("function ProcessDetailsGroup("));
+  assert.match(helper, /if \(options\.omitUsage\) \{[\s\S]*?next\.stopReason = undefined;[\s\S]*?next\.errorMessage = undefined;/);
+});
+
+test("surfaces output limit truncation as terminal answer and offers compact on unanswered truncation", () => {
+  assert.match(source, /isAssistantTruncated\(finalAssistant\)/);
+  assert.match(
+    source,
+    /recoverTruncation: !isReadOnlyConversation && endIdx === messages\.length && !streamState\.isStreaming\s*&& isAssistantTruncated\(finalAssistant\) && !hasAssistantAnswer\(finalAssistant\)/,
+  );
+});

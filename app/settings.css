@@ -938,6 +938,31 @@ select.config-input:disabled {
   min-height: 0;
 }
 
+.sessions-manager-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sessions-manager-header-info {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sessions-manager-refresh {
+  flex-shrink: 0;
+}
+
+/* Leave room for the desktop Settings close button floating above the panel. */
+.settings-section-host .sessions-manager-header {
+  padding-inline-end: 64px;
+}
+
 .settings-subtab-bar {
   display: flex;
   align-items: center;
@@ -1368,6 +1393,11 @@ select.config-input:disabled {
     gap: 10px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* On mobile the Settings close button has its own in-flow toolbar. */
+  .settings-section-host .sessions-manager-header {
+    padding-inline-end: 18px;
   }
 
   .settings-section-tabs {

@@ -161,6 +161,18 @@ function findButton(harness, predicate, message = "expected matching button") {
   return button;
 }
 
+test("header layout uses stylesheet spacing without overriding the close-button lane", async (t) => {
+  const { harness } = setup(t);
+  harness.render();
+  await settle(harness);
+  const header = harness.find((node) => node.type === "header" && node.props.className === "sessions-manager-header");
+  assert.ok(header);
+  assert.equal(header.props.style, undefined, "inline padding must not override responsive header spacing");
+  const info = harness.find((node) => node.props.className === "sessions-manager-header-info");
+  assert.ok(info, "long titles and descriptions have a shrinkable wrapping column");
+  assert.equal(harness.button("Refresh")?.props.className, "sessions-manager-refresh");
+});
+
 test("shows all sessions, filters statuses, and keeps project filtering inclusive of removed projects", async (t) => {
   const { harness, context } = setup(t);
   harness.render();

@@ -103,6 +103,16 @@ test("uses sidebar navigation on desktop and one compact section picker on mobil
   assert.doesNotMatch(panelSource, /style=\{\{/);
 });
 
+test("session manager reserves the floating Settings close button lane only on desktop", () => {
+  const desktopRule = cssSource.match(/\.settings-section-host \.sessions-manager-header \{([^}]+)\}/)?.[1];
+  assert.match(desktopRule ?? "", /padding-inline-end: 64px/);
+  const mobileRules = cssSource.slice(cssSource.indexOf("@media (max-width: 640px)"));
+  assert.match(mobileRules, /\.settings-dialog-header \{[^}]*position: relative/);
+  assert.match(mobileRules, /\.settings-section-host \.sessions-manager-header \{[^}]*padding-inline-end: 18px/);
+  assert.match(cssSource, /\.sessions-manager-header-info \{[^}]*min-width: 0;[^}]*overflow-wrap: anywhere/);
+  assert.match(cssSource, /\.sessions-manager-refresh \{[^}]*flex-shrink: 0/);
+});
+
 test("shows all SDK startup modes in a compact card-row selector", () => {
   assert.match(panelSource, /className="settings-shell-select settings-startup-select"/);
   for (const mode of ["false", "header", "true"]) assert.ok(panelSource.includes(`<option value="${mode}">`));

@@ -442,12 +442,12 @@ export function SessionsConfig({
       height="84vh"
     >
       <div className="sessions-manager" style={{ display: "flex", flexDirection: "column", minHeight: 0, maxHeight: embedded ? "78vh" : "calc(84vh - 54px)" }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px 10px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ minWidth: 0 }}>
+        <header className="sessions-manager-header">
+          <div className="sessions-manager-header-info">
             <div style={{ fontSize: 15, fontWeight: 650, color: "var(--text)" }}>{t("sessionsManager.heading")}</div>
             <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-dim)" }}>{t("sessionsManager.description")}</div>
           </div>
-          <button type="button" style={buttonStyle} disabled={controlsBusy} onClick={() => void retry()}>
+          <button type="button" className="sessions-manager-refresh" style={buttonStyle} disabled={controlsBusy} onClick={() => void retry()}>
             {controlsBusy ? t("sessionsManager.loading") : t("sessionsManager.refresh")}
           </button>
         </header>

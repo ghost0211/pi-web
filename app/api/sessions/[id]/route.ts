@@ -100,7 +100,9 @@ export async function GET(
     const toolNames = readSubagentSessionResources(entries as never)?.tools
       ?? readSessionToolSelection(entries as never);
     const sessionEntries = entries as unknown as SessionEntry[];
-    const branchEntries = sm.getBranch(leafId ?? undefined).map((entry) => entry as unknown as SessionEntry);
+    const branchEntries = typeof sm.getBranch === "function"
+      ? sm.getBranch(leafId ?? undefined).map((entry) => entry as unknown as SessionEntry)
+      : [];
     const fallbackModel = readSessionModelFallback(sessionEntries) ?? null;
     const fallbackNotice = readSessionModelFallbackNotice(branchEntries);
     const info = header ? (await attachSessionProjectInfo([{

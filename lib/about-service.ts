@@ -37,7 +37,10 @@ export interface SystemRuntimeInfo {
   nodeVersion: string;
   platform: string;
   arch: string;
+  /** Runtime working directory; distinct from the application install root. */
   cwd: string;
+  /** Absolute desktop install root when configured; null for web or invalid values. */
+  installationDir: string | null;
 }
 
 export interface AboutInfoResponse {
@@ -245,11 +248,16 @@ export async function getAboutInfo(forceCheck = false): Promise<AboutInfoRespons
     error: fetchError,
   };
 
+  const configuredInstallationDir = process.env.PI_WEB_DESKTOP_INSTALL_DIR?.trim();
   const system: SystemRuntimeInfo = {
     nodeVersion: process.version,
     platform: process.platform,
     arch: process.arch,
     cwd: process.cwd(),
+    installationDir:
+      isDesktop && configuredInstallationDir && path.isAbsolute(configuredInstallationDir)
+        ? path.normalize(configuredInstallationDir)
+        : null,
   };
 
   return {

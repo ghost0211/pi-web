@@ -41,6 +41,7 @@ interface Props {
   onSessionReloaded: () => void;
   sessionManagementRequest?: OpenSessionManagementDetail & { serial: number };
   onSelectSession?: (session: SessionInfo) => void;
+  onOperationBusyChange?: (busy: boolean) => void;
 }
 
 export function SettingsSectionIcon({ section, size = 16, strokeWidth = 1.8 }: { section: SettingsSection; size?: number; strokeWidth?: number }) {
@@ -597,10 +598,12 @@ function GeneralSettings({ sessionId, onSessionReloaded }: Pick<Props, "sessionI
   );
 }
 
-export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessionReloaded, sessionManagementRequest, onSelectSession }: Props) {
+export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessionReloaded, sessionManagementRequest, onSelectSession, onOperationBusyChange }: Props) {
   const { t } = useI18n();
   const [section, setSection] = useState<SettingsSection>(initialSection);
   const [sessionsBusy, setSessionsBusy] = useState(false);
+  useEffect(() => { onOperationBusyChange?.(sessionsBusy); }, [onOperationBusyChange, sessionsBusy]);
+  useEffect(() => () => onOperationBusyChange?.(false), [onOperationBusyChange]);
   const [mountedSections, setMountedSections] = useState<ReadonlySet<SettingsSection>>(
     () => new Set([section]),
   );

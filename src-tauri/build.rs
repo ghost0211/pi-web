@@ -14,6 +14,8 @@ fn main() {
             "prepare_desktop_update",
             "get_lan_access",
             "set_lan_access",
+            "sync_tray_menu",
+            "take_tray_action",
         ]),
     ))
     .expect("error while running tauri-build");

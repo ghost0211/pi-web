@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop-remote",
-  "description": "Grants the loopback-hosted pi-web pages access to desktop settings, native file picking/open, native notifications, and file-drop events.",
+  "description": "Grants loopback-hosted pi-web pages access to desktop settings, native tray synchronization/actions, file picking/open, native notifications, and file-drop events.",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
@@ -17,6 +17,8 @@
     "allow-prepare-desktop-update",
     "allow-get-lan-access",
     "allow-set-lan-access",
+    "allow-sync-tray-menu",
+    "allow-take-tray-action",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",

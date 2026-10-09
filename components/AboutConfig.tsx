@@ -38,6 +38,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [desktopInstallPhase, setDesktopInstallPhase] = useState<"downloading" | "installing">("downloading");
   const [desktopUpdateError, setDesktopUpdateError] = useState<string | null>(null);
   const [desktopChecked, setDesktopChecked] = useState(false);
+  const installationDir = info?.isDesktop ? info.system.installationDir : null;
 
   const checkDesktopRelease = useCallback(async () => {
     if (!desktopApp) return;
@@ -151,7 +152,8 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
       `- **Pi Agent Latest Registry:** ${info.piAgent.latestVersion ?? "unknown"}`,
       `- **Node.js:** ${info.system.nodeVersion}`,
       `- **OS / Arch:** ${info.system.platform} (${info.system.arch})`,
-      `- **CWD:** ${info.system.cwd}`,
+      ...(installationDir ? [`- **${t("about.installationDir")}:** ${installationDir}`] : []),
+      `- **${t("about.cwd")}:** ${info.system.cwd}`,
     ];
     try {
       await copyText(lines.join("\n"));
@@ -522,9 +524,11 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                 </div>
 
                 <div className="about-property-item is-full-row">
-                  <span className="about-property-label">{t("about.cwd")}</span>
-                  <span className="about-property-value about-text-mono" title={info?.system.cwd}>
-                    {info?.system.cwd ?? "-"}
+                  <span className="about-property-label">
+                    {installationDir ? t("about.installationDir") : t("about.cwd")}
+                  </span>
+                  <span className="about-property-value about-text-mono" title={installationDir ?? info?.system.cwd}>
+                    {installationDir ?? info?.system.cwd ?? "-"}
                   </span>
                 </div>
               </div>

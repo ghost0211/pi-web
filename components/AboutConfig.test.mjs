@@ -50,3 +50,25 @@ test("copies the current version and its source into diagnostics", () => {
   assert.match(source, /`- \*\*Pi Agent Current Version:\*\* \$\{info\.piAgent\.currentVersion \?\? "unknown"\}/);
   assert.match(source, /`- \*\*Pi Agent Latest Registry:\*\* \$\{info\.piAgent\.latestVersion \?\? "unknown"\}`/);
 });
+
+test("shows the install root only for desktop and keeps diagnostics cwd distinct", () => {
+  assert.match(source, /const installationDir = info\?\.isDesktop \? info\.system\.installationDir : null;/);
+  assert.match(source, /installationDir \? t\("about\.installationDir"\) : t\("about\.cwd"\)/);
+  assert.match(source, /installationDir \?\? info\?\.system\.cwd \?\? "-"/);
+  assert.match(source, /installationDir \? \[`- \*\*\$\{t\("about\.installationDir"\)\}:\*\* \$\{installationDir\}`\] : \[\]/);
+  assert.match(source, /`- \*\*\$\{t\("about\.cwd"\)\}:\*\* \$\{info\.system\.cwd\}`/);
+});
+
+test("defines installation and runtime working-directory labels in all supported locales", async () => {
+  const locales = [
+    { file: "../lib/i18n/messages/en.ts", installation: "Application Installation Directory", cwd: "Runtime Working Directory" },
+    { file: "../lib/i18n/messages/zh-CN.ts", installation: "应用安装目录", cwd: "运行时工作目录" },
+    { file: "../lib/i18n/messages/zh-TW.ts", installation: "應用程式安裝目錄", cwd: "執行時工作目錄" },
+  ];
+
+  for (const locale of locales) {
+    const messages = await readFile(new URL(locale.file, import.meta.url), "utf8");
+    assert.ok(messages.includes(`"about.installationDir": "${locale.installation}"`));
+    assert.ok(messages.includes(`"about.cwd": "${locale.cwd}"`));
+  }
+});

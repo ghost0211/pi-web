@@ -9,6 +9,8 @@ const LOCALE_STORAGE_KEY = "pi-locale";
 const defaultLocale: Locale = "en";
 
 interface I18nContextValue {
+  /** Prevent native preference sync from persisting the SSR English fallback. */
+  hydrated: boolean;
   locale: Locale;
   setLocale: (locale: Locale) => void;
   t: (key: string, params?: TranslationParams) => string;
@@ -67,7 +69,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const t = useCallback((key: string, params?: TranslationParams) => translateMessage(locale, key, messages, params), [locale, messages]);
-  const value = useMemo(() => ({ locale: hydrated ? locale : defaultLocale, setLocale, t, supportedLocales }), [hydrated, locale, setLocale, t, supportedLocales]);
+  const value = useMemo(() => ({ hydrated, locale: hydrated ? locale : defaultLocale, setLocale, t, supportedLocales }), [hydrated, locale, setLocale, t, supportedLocales]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

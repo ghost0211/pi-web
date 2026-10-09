@@ -23,6 +23,36 @@ file manager", and "copy full path". The browser build keeps the download link
 `open_local_path` / `open_local_path_with` / `reveal_local_path` commands, which
 reject relative and missing paths before touching the shell.
 
+## Localized tray and recent sessions
+
+The tray follows the UI language (English, Simplified Chinese, Traditional
+Chinese, or translated labels supplied by a locale plugin). It provides Show,
+New session, the three most recently modified normal conversations, the
+minimize-on-close checkbox, and Quit. Archived and subagent conversations are
+excluded; project removal affects only the sidebar, not this recent list.
+
+`sync_tray_menu({ menu })` accepts bounded translated labels and at most three
+opaque session IDs/titles. Only the language and labels are persisted in
+`desktop-settings.json` for startup before the UI hydrates; recent conversation
+IDs/titles are kept in memory. Settings writes are serialized, atomic and
+preserve unknown fields; corrupt settings fail closed. Native IDs encode actual
+session IDs, not mutable slot numbers. Windows ampersands are escaped literally.
+
+Explicit New/Recent clicks reveal the window, queue a pending action and emit
+`pi-web:tray-action` as a wake signal. `take_tray_action` consumes that action;
+the frontend drains it at startup and on wakes/focus, including clicks made
+before hydration. Focus or notifications alone never create a navigation target.
+Actions wait while legacy migration, confirmed session operations or project
+trust dialogs block navigation. Recent selection refreshes lifecycle metadata
+before opening, and never implicitly restores an archive. New session opens an
+empty composer in the current project; it does not submit a prompt or abort
+existing work. Ordinary browsers and older shells safely no-op on the bridge.
+
+The production sidecar receives `PI_WEB_DESKTOP_INSTALL_DIR` from the native
+executable's parent directory. About shows this installation root, not the
+`server/` runtime cwd; copied diagnostics retain both distinct values. Web mode
+(or an absent/invalid marker) labels the cwd as the runtime working directory.
+
 ## Native notifications
 
 Session-complete and extension-attention events use native Windows toasts via

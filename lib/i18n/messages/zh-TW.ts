@@ -1,6 +1,7 @@
 import type { LocalePlugin } from "../types";
 import { sessionsManagerMessagesZhTW } from "../../session-management-messages";
 import { sessionSidebarMessagesZhTW } from "../../session-sidebar-messages";
+import { desktopTrayMessagesZhTW } from "../../desktop-tray-messages";
 
 /** Pi Web 內建繁體中文語系。 */
 export const zhTWLocale: LocalePlugin = {
@@ -9,6 +10,7 @@ export const zhTWLocale: LocalePlugin = {
   messages: {
     ...sessionsManagerMessagesZhTW,
     ...sessionSidebarMessagesZhTW,
+    ...desktopTrayMessagesZhTW,
     "settings.codemode.title": "Codemode 進階設定",
     "settings.codemode.description": "在「工具 → 自訂」中選取 Codemode 後生效。此處僅調整全域預設行為，不啟用工具；受信任專案的設定可覆寫這些值。儲存後請重新載入既有工作階段。",
     "settings.codemode.mode": "執行模式",
@@ -180,7 +182,8 @@ export const zhTWLocale: LocalePlugin = {
     "about.systemInfo": "環境與系統資訊",
     "about.nodeVersion": "Node.js 版本",
     "about.platform": "作業系統與架構",
-    "about.cwd": "目前工作目錄",
+    "about.installationDir": "應用程式安裝目錄",
+    "about.cwd": "執行時工作目錄",
     "about.copyDiagnostics": "複製診斷資訊",
     "about.diagnosticsCopied": "已複製診斷資訊",
     "settings.title": "設定",

@@ -17,6 +17,7 @@ import { AgentSessionPanel } from "./AgentSessionPanel";
 import { RunningTasksPanel, type RunningTaskPhase } from "./RunningTasksPanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useI18n } from "@/hooks/useI18n";
+import { useDesktopTray } from "@/hooks/useDesktopTray";
 import { useSessionManagement } from "@/hooks/useSessionManagement";
 import { SESSION_CATALOG_CHANGED_EVENT } from "@/lib/session-management-client";
 import { OPEN_SESSION_MANAGEMENT_EVENT, type OpenSessionManagementDetail } from "@/lib/session-management-types";
@@ -88,7 +89,7 @@ export function AppShell() {
   const { preference, toggleTheme } = useTheme();
   const themeLabelKey =
     preference === "light" ? "theme.light" : preference === "dark" ? "theme.dark" : "theme.auto";
-  const { locale, setLocale, t: translate, supportedLocales } = useI18n();
+  const { locale, hydrated: localeReady, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
   const isNarrowMobile = useIsNarrowMobile();
   useViewportHeight();
@@ -168,6 +169,12 @@ export function AppShell() {
   const [searchJump, setSearchJump] = useState<{ entryId: string; requestId: number } | null>(null);
   const [explorerRefreshKey, setExplorerRefreshKey] = useState(0);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
+  const [settingsOperationBusy, setSettingsOperationBusy] = useState(false);
+  const settingsOperationBusyRef = useRef(false);
+  const handleSettingsOperationBusyChange = useCallback((busy: boolean) => {
+    settingsOperationBusyRef.current = busy;
+    setSettingsOperationBusy(busy);
+  }, []);
   const [sessionManagementRequest, setSessionManagementRequest] = useState<OpenSessionManagementDetail & { serial: number }>({ filter: "all", serial: 0 });
   useEffect(() => {
     const openManagement = (event: Event) => {
@@ -182,6 +189,8 @@ export function AppShell() {
   const [modelsRefreshKey, setModelsRefreshKey] = useState(0);
   const [projectTrust, setProjectTrust] = useState<ProjectTrustStatus | null>(null);
   const [projectTrustDialogOpen, setProjectTrustDialogOpen] = useState(false);
+  const projectTrustDialogOpenRef = useRef(projectTrustDialogOpen);
+  projectTrustDialogOpenRef.current = projectTrustDialogOpen;
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -1116,6 +1125,44 @@ export function AppShell() {
     if (sessionCatalog.length === 0) return null;
     return sessionCatalog[0].projectRoot ?? sessionCatalog[0].cwd ?? null;
   }, [sessionCatalog]);
+  useDesktopTray({
+    locale, localeReady, translate,
+    sessions: [...sessionCatalog, ...(selectedSession ? [selectedSession] : [])]
+      .filter((session) => !deletedSessionIdsRef.current.has(session.id)),
+    management: management.ready ? management.state : null,
+    enabled: management.ready && !settingsOperationBusy && !projectTrustDialogOpen,
+    onError: (error) => setArchiveRestoreError(translate("desktopTray.actionError") + " " + (error instanceof Error ? error.message : String(error))),
+    onAction: async (action) => {
+      setArchiveRestoreError(null);
+      const navigationToken = workspaceRestoreTokenRef.current;
+      if (action.type === "new-session") {
+        let cwd = selectedSession?.cwd ?? newSessionCwd ?? activeCwd ?? defaultFallbackCwd;
+        if (!cwd) {
+          const response = await fetch("/api/default-cwd", { method: "POST" });
+          const data = await response.json() as { cwd?: string; error?: string };
+          if (!response.ok || !data.cwd) throw new Error(data.error ?? `HTTP ${response.status}`);
+          cwd = data.cwd;
+        }
+        if (navigationToken !== workspaceRestoreTokenRef.current) return;
+        if (settingsOperationBusyRef.current || projectTrustDialogOpenRef.current) return false;
+        setSettingsSection(null);
+        handleNewSession(`tray-${crypto.randomUUID()}`, cwd);
+        return;
+      }
+      if (deletedSessionIdsRef.current.has(action.sessionId)) return;
+      // Refresh lifecycle before selecting: a stale native item cannot restore
+      // an archive or briefly make its composer writable.
+      await management.refresh();
+      const response = await fetch(`/api/sessions/${encodeURIComponent(action.sessionId)}`, { cache: "no-store" });
+      const data = await response.json() as { info?: SessionInfo; error?: string };
+      if (!response.ok || !data.info) throw new Error(data.error ?? `HTTP ${response.status}`);
+      if (navigationToken !== workspaceRestoreTokenRef.current || deletedSessionIdsRef.current.has(action.sessionId)) return;
+      if (settingsOperationBusyRef.current || projectTrustDialogOpenRef.current) return false;
+      setSettingsSection(null);
+      setActiveTopPanel(null);
+      handleAgentSessionSelect(data.info);
+    },
+  });
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null ? (activeCwd ?? defaultFallbackCwd) : null);
   const newSessionDraftKey = selectedSession === null && effectiveNewSessionCwd
     ? `new:${newSessionDraftId}:${effectiveNewSessionCwd}`
@@ -2986,6 +3033,7 @@ export function AppShell() {
         sessionId={selectedSession?.id ?? null}
         initialSection={settingsSection}
         sessionManagementRequest={sessionManagementRequest}
+        onOperationBusyChange={handleSettingsOperationBusyChange}
         onSelectSession={(session) => {
           setSettingsSection(null);
           handleAgentSessionSelect(session);

@@ -7,6 +7,8 @@
  * plain browser the bridge is absent and every helper degrades to a no-op.
  */
 
+import { isTrayMenu, normalizeTrayAction, type DesktopTrayAction, type DesktopTrayMenu } from "./desktop-tray";
+
 export type DesktopCloseBehavior = "minimize-to-tray" | "quit";
 
 const CLOSE_BEHAVIOR_TRAY: DesktopCloseBehavior = "minimize-to-tray";
@@ -149,6 +151,26 @@ export async function revealDesktopPath(path: string): Promise<boolean> {
   if (!invoke) return false;
   await invoke("reveal_local_path", { path });
   return true;
+}
+
+/** Sync bounded, translated native menu data; old shells and ordinary browsers are harmless no-ops. */
+export async function syncDesktopTrayMenu(menu: DesktopTrayMenu): Promise<boolean> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke || !isTrayMenu(menu)) return false;
+  try { await invoke("sync_tray_menu", { menu }); return true; } catch { return false; }
+}
+
+/** Consume only an action explicitly requested from the native tray menu. */
+export async function takeDesktopTrayAction(): Promise<DesktopTrayAction | null> {
+  const invoke = tauriBridge()?.core?.invoke;
+  if (!invoke) return null;
+  try { return normalizeTrayAction(await invoke("take_tray_action")); } catch { return null; }
+}
+
+export async function listenDesktopTrayActions(wake: () => void): Promise<DesktopUnlisten | null> {
+  const listen = tauriBridge()?.event?.listen;
+  if (!listen) return null;
+  try { return await listen("pi-web:tray-action", wake); } catch { return null; }
 }
 
 /** Current close behavior, or null when not running in the desktop shell. */

@@ -1,6 +1,7 @@
 import type { LocalePlugin } from "../types";
 import { sessionsManagerMessagesEn } from "../../session-management-messages";
 import { sessionSidebarMessagesEn } from "../../session-sidebar-messages";
+import { desktopTrayMessagesEn } from "../../desktop-tray-messages";
 
 /** Pi Web 内置英语语言包。 */
 export const enLocale: LocalePlugin = {
@@ -9,6 +10,7 @@ export const enLocale: LocalePlugin = {
   messages: {
     ...sessionsManagerMessagesEn,
     ...sessionSidebarMessagesEn,
+    ...desktopTrayMessagesEn,
     "settings.codemode.title": "Codemode (advanced)",
     "settings.codemode.description": "Enable Codemode from Tools → Custom. These global defaults do not enable tools; trusted project settings can override them. Reload existing sessions after saving.",
     "settings.codemode.mode": "Mode",
@@ -180,7 +182,8 @@ export const enLocale: LocalePlugin = {
     "about.systemInfo": "Environment & Diagnostics",
     "about.nodeVersion": "Node.js Version",
     "about.platform": "OS & Architecture",
-    "about.cwd": "Current Working Directory",
+    "about.installationDir": "Application Installation Directory",
+    "about.cwd": "Runtime Working Directory",
     "about.copyDiagnostics": "Copy Diagnostics",
     "about.diagnosticsCopied": "Diagnostics copied to clipboard",
     "settings.title": "Settings",

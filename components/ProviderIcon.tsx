@@ -97,6 +97,8 @@ export function ProviderGlyph({ id, size }: { id: string | null | undefined; siz
 export function ProviderIcon({ id, size }: { id: string; size: number }) {
   const icon = lookupProviderIcon(id);
   if (icon) {
+    // Brand-colored paths keep their authored fills; neutral paths in those
+    // symbols can opt into this theme-aware foreground with `currentColor`.
     return (
       <svg
         aria-hidden="true"

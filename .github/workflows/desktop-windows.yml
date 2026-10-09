@@ -131,14 +131,22 @@ jobs:
           dir=src-tauri/target/release/bundle/nsis
           exe="$dir/Pi Web Desktop_${GITHUB_REF_NAME#desktop-v}_x64-setup.exe"
           test -s "$exe" && test -s "$exe.sig" && test -s "$dir/desktop-latest.json"
+          notes_file="docs/releases/v${GITHUB_REF_NAME#desktop-v}.md"
+          notes_args=(--generate-notes)
+          if test -s "$notes_file"; then
+            notes_args=(--notes-file "$notes_file")
+          fi
           if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > draft-state.txt 2>/dev/null; then
             if [[ $(cat draft-state.txt) != true ]]; then
               echo 'Refusing to overwrite an already published release' >&2
               exit 1
             fi
             gh release upload "$GITHUB_REF_NAME" "$exe" "$exe.sig" "$dir/desktop-latest.json" --clobber
+            if test -s "$notes_file"; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file "$notes_file"
+            fi
           else
             gh release create "$GITHUB_REF_NAME" "$exe" "$exe.sig" "$dir/desktop-latest.json" \
-              --draft --verify-tag --title "Pi Web Desktop ${GITHUB_REF_NAME#desktop-v}" --generate-notes
+              --draft --verify-tag --title "Pi Web Desktop ${GITHUB_REF_NAME#desktop-v}" "${notes_args[@]}"
           fi
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest

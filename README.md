@@ -56,7 +56,7 @@ Visit `http://localhost:30141` in your browser.
 
 ### Windows Desktop App
 
-A Windows desktop client — **Pi Web Desktop** (Tauri + WebView2, with a bundled Node.js runtime, no Node.js installation required) — is in active development. Build the NSIS installer with `npm run desktop:build` or use the CI workflow; see [`desktop/README.md`](./desktop/README.md) for details.
+The Windows desktop client — **Pi Desktop** (Tauri + WebView2, with a bundled Node.js runtime, no Node.js installation required) — is available from [GitHub Releases](https://github.com/ghost0211/pi-web/releases/latest). The installer and existing installation identity remain **Pi Web Desktop** for upgrade compatibility. Build the NSIS installer with `npm run desktop:build` or use the CI workflow; see [`desktop/README.md`](./desktop/README.md) for details.
 
 ## Configuration & Options
 

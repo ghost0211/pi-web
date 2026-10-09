@@ -53,6 +53,11 @@ test("desktop updater is signed, confined to the local WebView and publishes its
   assert.match(workflow, /desktop-latest\.json/);
   assert.match(workflow, /gh release create[^\n]*[\s\S]*?--draft --verify-tag/);
   assert.match(workflow, /gh release edit "\$GITHUB_REF_NAME" --draft=false --latest/);
+  assert.ok(workflow.includes('notes_file="docs/releases/v${GITHUB_REF_NAME#desktop-v}.md"'));
+  assert.ok(workflow.includes('notes_args=(--generate-notes)'));
+  assert.ok(workflow.includes('notes_args=(--notes-file "$notes_file")'));
+  assert.ok(workflow.includes('"${notes_args[@]}"'));
+  assert.ok(workflow.includes('gh release edit "$GITHUB_REF_NAME" --notes-file "$notes_file"'));
   assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""/);
   assert.match(about, /installDesktopUpdate\(desktopUpdate/);
   assert.match(shell, /<DesktopUpdatePrompt \/>/);

@@ -348,5 +348,3 @@ is a separate work item.
 - code signing certificate
 - notification click activation / session deep-linking on Windows (the native
   toast itself is implemented; see "Native notifications" above)
-- localized tray menu labels (the web settings UI is fully localized; the
-  tray menu is English-only for now)

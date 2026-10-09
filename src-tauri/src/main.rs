@@ -126,6 +126,10 @@ struct TrayLabels {
     quit: String,
 }
 
+/// In-app desktop display name. The installer productName intentionally stays
+/// "Pi Web Desktop" so upgrades keep the existing install location and entry.
+const DESKTOP_DISPLAY_NAME: &str = "Pi Desktop";
+
 /// Bounds for notification text. The web page is trusted only as far as any
 /// other page on the loopback origin; keeping the payload small stops a broken
 /// or hostile caller from filling the Windows Action Center.
@@ -591,7 +595,7 @@ fn show_main_window(app: &AppHandle) {
 fn built_in_tray_labels(locale: &str) -> TrayLabels {
     match locale {
         "zh-CN" => TrayLabels {
-            show: "显示 Pi Web Desktop".to_string(),
+            show: format!("显示 {DESKTOP_DISPLAY_NAME}"),
             new_session: "新建会话".to_string(),
             recent_sessions: "最近会话".to_string(),
             empty_recent: "暂无最近会话".to_string(),
@@ -599,7 +603,7 @@ fn built_in_tray_labels(locale: &str) -> TrayLabels {
             quit: "退出".to_string(),
         },
         "zh-TW" => TrayLabels {
-            show: "顯示 Pi Web Desktop".to_string(),
+            show: format!("顯示 {DESKTOP_DISPLAY_NAME}"),
             new_session: "新增工作階段".to_string(),
             recent_sessions: "最近工作階段".to_string(),
             empty_recent: "沒有最近工作階段".to_string(),
@@ -607,7 +611,7 @@ fn built_in_tray_labels(locale: &str) -> TrayLabels {
             quit: "結束".to_string(),
         },
         _ => TrayLabels {
-            show: "Show Pi Web Desktop".to_string(),
+            show: format!("Show {DESKTOP_DISPLAY_NAME}"),
             new_session: "New session".to_string(),
             recent_sessions: "Recent sessions".to_string(),
             empty_recent: "No recent sessions".to_string(),
@@ -938,7 +942,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(app.default_window_icon().expect("no window icon").clone())
-        .tooltip("Pi Web Desktop")
+        .tooltip(DESKTOP_DISPLAY_NAME)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
@@ -1238,7 +1242,7 @@ fn open_in_system_browser(url: &Url) {
 
 fn build_main_window(app: &AppHandle, url: WebviewUrl, visible: bool) -> WebviewWindow {
     WebviewWindowBuilder::new(app, "main", url)
-        .title("Pi Web Desktop")
+        .title(DESKTOP_DISPLAY_NAME)
         .inner_size(1440.0, 900.0)
         .min_inner_size(900.0, 600.0)
         // Undecorated: the web UI draws its own titlebar controls (see
@@ -1493,6 +1497,9 @@ mod tests {
         for (key,value) in old { assert_eq!(merged.get(&key), Some(&value)); }
         assert!(!merged.contains_key("recentSessions"));
         assert_eq!(super::startup_tray_labels(&merged), labels);
+        assert_eq!(super::built_in_tray_labels("en").show, "Show Pi Desktop");
+        assert_eq!(super::built_in_tray_labels("zh-CN").show, "显示 Pi Desktop");
+        assert_eq!(super::built_in_tray_labels("zh-TW").show, "顯示 Pi Desktop");
         assert_eq!(super::built_in_tray_labels("zh-TW").quit, "結束");
         assert_eq!(super::built_in_tray_labels("unknown"), super::built_in_tray_labels("en"));
         let mut fallback = serde_json::Map::new(); fallback.insert("trayLocale".into(), serde_json::json!("zh-TW"));

@@ -223,7 +223,7 @@ export const zhCNLocale: LocalePlugin = {
     "settings.trustNever": "永不信任",
     "settings.tabDesktop": "桌面端",
     "settings.closeBehavior": "关闭行为",
-    "settings.closeBehaviorDescription": "选择关闭 Pi Web Desktop 窗口时的行为。最小化到系统托盘时，agent 会话会在后台继续运行；可通过托盘菜单彻底退出。",
+    "settings.closeBehaviorDescription": "选择关闭 Pi Desktop 窗口时的行为。最小化到系统托盘时，agent 会话会在后台继续运行；可通过托盘菜单彻底退出。",
     "settings.desktopWebService": "内置 Web 服务",
     "settings.desktopWebServiceDescription": "桌面端启动时已经同时运行此本机 Web 服务；最小化到托盘后仍会继续运行。",
     "settings.desktopLanAccess": "允许局域网访问",

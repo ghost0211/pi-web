@@ -23,6 +23,8 @@ import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAg
 import { extractAssistantSnippet } from "@/lib/notification-text";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
+import { appDisplayName } from "@/lib/app-brand";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { SessionSystemPromptCustomization } from "@/lib/session-system-prompt";
 import type { ToolEntry } from "@/lib/tool-presets";
@@ -214,6 +216,8 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
 
 export function ChatWindow({ session, searchJump, sessionRunning, readOnly = false, archived = false, managementPending = false, archivedRestoring = false, onRestoreArchived, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenGitDiff, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
+  const desktopShell = useIsDesktopApp();
+  const appName = appDisplayName(desktopShell);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [dirPickerOpen, setDirPickerOpen] = useState(false);
   const [remotePickerOpen, setRemotePickerOpen] = useState(false);
@@ -782,7 +786,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
         <div className="kimi-new-session flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
           <div className="kimi-new-session-stage w-full max-w-[760px]">
             <div className="text-center">
-              <h1 className="mb-16 text-[32px] font-semibold tracking-[-0.03em] text-text">Pi Web</h1>
+              <h1 className="mb-16 text-[32px] font-semibold tracking-[-0.03em] text-text">{appName}</h1>
               <p className="kimi-empty-copy text-[14px] text-text-muted">
                 {locale.startsWith("zh") ? "还没有消息 — 在下方开始对话" : "No messages yet — type below to start the conversation"}
               </p>

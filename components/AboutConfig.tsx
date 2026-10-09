@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { isDesktopApp } from "@/lib/desktop";
 import { checkDesktopUpdate, installDesktopUpdate, type DesktopUpdate } from "@/lib/desktop-update";
 import { useI18n } from "@/hooks/useI18n";
+import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
+import { appDisplayName } from "@/lib/app-brand";
 import { copyText } from "@/lib/clipboard";
 import type {
   AboutInfoResponse,
@@ -30,7 +31,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [showLog, setShowLog] = useState(false);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [desktopApp] = useState(isDesktopApp);
+  const desktopApp = useIsDesktopApp();
   const [desktopUpdate, setDesktopUpdate] = useState<DesktopUpdate | null>(null);
   const [desktopChecking, setDesktopChecking] = useState(false);
   const [desktopInstalling, setDesktopInstalling] = useState(false);
@@ -39,6 +40,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [desktopUpdateError, setDesktopUpdateError] = useState<string | null>(null);
   const [desktopChecked, setDesktopChecked] = useState(false);
   const installationDir = info?.isDesktop ? info.system.installationDir : null;
+  const appName = info?.appName ?? appDisplayName(desktopApp);
 
   const checkDesktopRelease = useCallback(async () => {
     if (!desktopApp) return;
@@ -144,7 +146,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const handleCopyDiagnostics = async () => {
     if (!info) return;
     const lines = [
-      `### Pi Web Diagnostics`,
+      `### ${appName} Diagnostics`,
       `- **Application:** ${info.appName} v${info.appVersion} (${info.isDesktop ? "Desktop" : "Web"})`,
       `- **Pi Agent Embedded SDK:** ${info.piAgent.installedVersion ?? "unknown"}`,
       `- **Pi Agent Global CLI:** ${info.piAgent.cliVersion ?? "not installed"}`,
@@ -168,7 +170,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
     <ConfigPanelShell
       embedded={embedded}
       title={t("about.title")}
-      subtitle={info?.appName ?? "Pi Web"}
+      subtitle={appName}
       onClose={onClose}
     >
       <div className="about-panel-container">
@@ -200,7 +202,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
               </div>
               <div className="about-hero-details">
                 <div className="about-hero-title-row">
-                  <h2 className="about-app-title">{info?.appName ?? "Pi Web"}</h2>
+                  <h2 className="about-app-title">{appName}</h2>
                   <span className="about-version-badge">v{info?.appVersion ?? "0.9.10"}</span>
                   <span className="about-edition-tag">
                     {info?.isDesktop ? t("about.appEditionDesktop") : t("about.appEditionWeb")}

@@ -22,6 +22,8 @@ import { getFileName } from "@/lib/file-paths";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { isDesktopApp } from "@/lib/desktop";
+import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
+import { appDisplayName } from "@/lib/app-brand";
 import type { RunningTaskPhase } from "./RunningTasksPanel";
 
 // Fixed row heights for the sidebar list. Every row renders at exactly its
@@ -282,9 +284,11 @@ function AnimatedDropdown({ open, children, style }: { open: boolean; children: 
 
 
 
-function PiWebTitle() {
+function AppBrandTitle() {
+  const desktop = useIsDesktopApp();
+  const appName = appDisplayName(desktop);
   return (
-    <div className="kimi-sidebar-brand" data-tauri-drag-region title={`Pi Web ${process.env.NEXT_PUBLIC_APP_VERSION ?? ""}`}>
+    <div className="kimi-sidebar-brand" data-tauri-drag-region title={`${appName} ${process.env.NEXT_PUBLIC_APP_VERSION ?? ""}`}>
       <span className="kimi-sidebar-brand-mark pi-brand-logo">
         <svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-hidden="true">
           <rect width="48" height="48" rx="12" fill="var(--bg)" stroke="var(--border)" strokeWidth="2.4" />
@@ -297,7 +301,7 @@ function PiWebTitle() {
           />
         </svg>
       </span>
-      <span>Pi Web</span>
+      <span>{appName}</span>
     </div>
   );
 }
@@ -1136,7 +1140,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 13 }}>
-          <PiWebTitle />
+          <AppBrandTitle />
           <div style={{ display: "flex", gap: 6 }}>
             <button
               onClick={() => onToggleSidebar ? onToggleSidebar() : loadSessions(false, true)}

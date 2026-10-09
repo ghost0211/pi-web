@@ -223,7 +223,7 @@ export const enLocale: LocalePlugin = {
     "settings.trustNever": "Never Trust",
     "settings.tabDesktop": "Desktop",
     "settings.closeBehavior": "Close Behavior",
-    "settings.closeBehaviorDescription": "Choose what happens when you close the Pi Web Desktop window. When minimized to the tray, agent sessions keep running in the background; quit from the tray menu.",
+    "settings.closeBehaviorDescription": "Choose what happens when you close the Pi Desktop window. When minimized to the tray, agent sessions keep running in the background; quit from the tray menu.",
     "settings.desktopWebService": "Built-in Web server",
     "settings.desktopWebServiceDescription": "Desktop already starts a Web server on this local address. It runs while Desktop is open or minimized to the tray.",
     "settings.desktopLanAccess": "Allow LAN access",

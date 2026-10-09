@@ -2,6 +2,7 @@ import { execSync, spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { isNewerStableVersion } from "./app-update";
+import { appDisplayName } from "./app-brand";
 import { locateGlobalPiCli } from "./pi-cli-locator";
 
 export interface GitRepoInfo {
@@ -261,7 +262,7 @@ export async function getAboutInfo(forceCheck = false): Promise<AboutInfoRespons
   };
 
   return {
-    appName: isDesktop ? "Pi Web Desktop" : "Pi Web",
+    appName: appDisplayName(isDesktop),
     appVersion,
     isDesktop,
     gitRepo,

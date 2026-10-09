@@ -22,6 +22,8 @@ import { useSessionManagement } from "@/hooks/useSessionManagement";
 import { SESSION_CATALOG_CHANGED_EVENT } from "@/lib/session-management-client";
 import { OPEN_SESSION_MANAGEMENT_EVENT, type OpenSessionManagementDetail } from "@/lib/session-management-types";
 import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
+import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
+import { appDisplayName } from "@/lib/app-brand";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
 import { useAudio } from "@/hooks/useAudio";
@@ -92,6 +94,8 @@ export function AppShell() {
   const { locale, hydrated: localeReady, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
   const isNarrowMobile = useIsNarrowMobile();
+  const desktopShell = useIsDesktopApp();
+  const appName = appDisplayName(desktopShell);
   useViewportHeight();
 
   // Once the user has granted notification permission, register a Web Push
@@ -1222,7 +1226,7 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
-  const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
+  const windowTitle = activeCwdName ? `${activeCwdName} - ${appName}` : appName;
 
   useEffect(() => {
     const syncWindowTitle = () => {
@@ -2431,7 +2435,7 @@ export function AppShell() {
             <>
               <div className="kimi-chat-head-copy">
                 <span className="kimi-chat-head-project">
-                  {getFileName(selectedSession?.projectRoot ?? selectedSession?.cwd ?? activeCwd ?? "") || "Pi Web"}
+                  {getFileName(selectedSession?.projectRoot ?? selectedSession?.cwd ?? activeCwd ?? "") || appName}
                 </span>
                 {selectedSession && <span className="kimi-chat-head-separator">/</span>}
                 {selectedSession && (
@@ -2462,7 +2466,7 @@ export function AppShell() {
               </button>
               {selectedSession?.branch && (
                 <div
-                  className={`kimi-chat-head-branch${isDesktopApp() ? " has-window-controls" : ""}`}
+                  className={`kimi-chat-head-branch${desktopShell ? " has-window-controls" : ""}`}
                   title={selectedSession.branch}
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="4" r="1.6"/><circle cx="5" cy="15.5" r="1.6"/><circle cx="14.5" cy="7" r="1.6"/><path d="M5 5.6v8.3M6.6 6.5h3.4a4.5 4.5 0 0 0 4.5-4.5v3.4"/></svg>

@@ -46,6 +46,14 @@ test("shows the check-failed state instead of a stale pill", () => {
   assert.match(row, /about\.statusCheckFailed/);
 });
 
+test("uses the shorter runtime brand only for the desktop shell", () => {
+  assert.match(source, /const desktopApp = useIsDesktopApp\(\)/);
+  assert.match(source, /const appName = info\?\.appName \?\? appDisplayName\(desktopApp\)/);
+  assert.match(source, /`### \$\{appName\} Diagnostics`/);
+  assert.match(source, /subtitle=\{appName\}/);
+  assert.match(source, /<h2 className="about-app-title">\{appName\}<\/h2>/);
+});
+
 test("copies the current version and its source into diagnostics", () => {
   assert.match(source, /`- \*\*Pi Agent Current Version:\*\* \$\{info\.piAgent\.currentVersion \?\? "unknown"\}/);
   assert.match(source, /`- \*\*Pi Agent Latest Registry:\*\* \$\{info\.piAgent\.latestVersion \?\? "unknown"\}`/);

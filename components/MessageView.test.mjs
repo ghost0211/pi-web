@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createJiti } from "jiti";
 import { componentHarness } from "./mcp-test-harness.mjs";
@@ -266,18 +267,61 @@ test("keeps attached images when restoring a compact command for editing", () =>
   ]);
 });
 
-test("renders user-message images as buttons that open a larger preview", () => {
+test("renders attached images outside the text bubble as uniform thumbnails", () => {
   const html = renderMessage({
     role: "user",
     content: [
       { type: "text", text: "inspect this" },
       { type: "image", data: "YWJj", mimeType: "image/png" },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QUJD" } },
     ],
     timestamp: Date.now(),
   });
 
+  assert.match(html, /<div class="user-message-images">/);
+  assert.equal((html.match(/user-message-image-button/g) ?? []).length, 2);
+  assert.equal((html.match(/user-message-image/g) ?? []).length >= 2, true);
   assert.match(html, /<button[^>]+aria-label="Preview image"[^>]*>/);
-  assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"/);
+  assert.match(html, /<img[^>]+src="data:image\/png;base64,YWJj"[^>]+class="user-message-image"/);
+  assert.match(html, /<img[^>]+src="data:image\/jpeg;base64,QUJD"[^>]+class="user-message-image"/);
+  assert.ok(html.indexOf("user-message-images") < html.indexOf("inspect this"), "gallery renders above the text bubble");
+  assert.ok(html.indexOf("data:image/png") < html.indexOf("background:var(--user-bg)"), "image data is outside the text bubble");
+});
+
+test("renders image-only user messages without an empty text bubble", () => {
+  const html = renderMessage({
+    role: "user",
+    content: [{ type: "image", data: "YWJj", mimeType: "image/png" }],
+    timestamp: Date.now(),
+  });
+
+  assert.match(html, /user-message-images/);
+  assert.match(html, /data:image\/png;base64,YWJj/);
+  assert.doesNotMatch(html, /markdown-user-message/);
+  assert.doesNotMatch(html, /background:var\(--user-bg\)/);
+});
+
+test("keeps skill command text inside the bubble while its attachments stay outside", () => {
+  const html = renderMessage({
+    role: "user",
+    content: [
+      { type: "text", text: COMPLETE_SKILL_EXPANSION },
+      { type: "image", data: "YWJj", mimeType: "image/png" },
+    ],
+  });
+
+  assert.match(html, /user-message-images/);
+  assert.match(html, /\/skill:review/);
+  assert.match(html, /aria-expanded="false"/);
+  assert.ok(html.indexOf("user-message-images") < html.indexOf("/skill:review"));
+});
+
+test("defines same-size responsive attached-image thumbnails", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.user-message-images \{[\s\S]*?justify-content: flex-end;[\s\S]*?max-width: 85%;/);
+  assert.match(css, /\.user-message-image-button \{[\s\S]*?width: 160px;[\s\S]*?height: 108px;[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.user-message-image \{[\s\S]*?width: 100%;[\s\S]*?height: 100%;[\s\S]*?object-fit: cover;/);
+  assert.match(css, /@media \(max-width: 640px\) \{[\s\S]*?\.user-message-image-button \{[\s\S]*?width: 112px;[\s\S]*?height: 80px;/);
 });
 
 test("marks apply_patch returned failures as errors even when isError is unset", () => {

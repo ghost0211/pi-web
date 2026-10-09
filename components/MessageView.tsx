@@ -335,7 +335,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   const editTarget = commandText ? replaceUserMessageText(message, commandText) : message;
 
   const imageBlocksNode = imageBlocks.length > 0 && (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: content ? 8 : 0 }}>
+    <div className="user-message-images">
       {imageBlocks.map((img, i) => {
         // lib/types.ts ImageContent uses {source:{type,data,media_type,url}}
         // pi-ai on-disk format uses flat {data, mimeType} — handle both
@@ -348,12 +348,17 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             ? `data:${flat.mimeType};base64,${flat.data}`
             : "";
         return (
-          <ImagePreview key={i} src={src}>
+          <ImagePreview
+            key={i}
+            src={src}
+            className="user-message-image-button"
+            style={{ border: "1px solid var(--border)", background: "var(--bg-panel)" }}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={src}
               alt=""
-              style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid rgba(59,130,246,0.15)" }}
+              className="user-message-image"
             />
           </ImagePreview>
         );
@@ -361,6 +366,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
     </div>
   );
   const canNavigate = !!prevAssistantEntryId && !!onNavigate;
+  const hasTextBubble = Boolean(content) || imageBlocks.length === 0;
 
   const copyContent = () => {
     copyText(copyTarget).then(() => {
@@ -375,6 +381,8 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
+      {imageBlocksNode}
+      {hasTextBubble && (
       <div style={{ display: "flex", alignItems: "flex-end", gap: 6, maxWidth: "85%" }}>
         <div
           style={{
@@ -392,7 +400,6 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
         >
           {commandText ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-              {imageBlocksNode}
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
                 <button
                   onClick={() => setExpanded((prev) => !prev)}
@@ -451,13 +458,13 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             </div>
           ) : (
           <>
-          {imageBlocksNode}
           {content && <SafeMarkdownBody className="markdown-user-message" preserveLineBreaks cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId}>{content}</SafeMarkdownBody>}
           </>
           )}
         </div>
 
       </div>
+      )}
 
       {/* Bottom row: action buttons + timestamp */}
       {(time || canFork || canNavigate || true) && (

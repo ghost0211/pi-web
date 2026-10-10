@@ -54,6 +54,8 @@ type FailedAssistant = {
   api: string;
   modelId: string;
   errorMessage?: string;
+  /** Machine code carried by the thrown provider error (e.g. CodexApiError.code). */
+  errorCode?: string;
 };
 
 type RuntimeInternal = {
@@ -83,6 +85,15 @@ function refFromModel(model: Pick<Model<Api>, "provider" | "id">): FallbackModel
 
 function errorMessage(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value.slice(0, 8_192) : undefined;
+}
+
+/** Bounded, normalized machine code from a thrown provider error object. */
+function thrownErrorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== "string") return undefined;
+  const normalized = code.trim().toLowerCase().slice(0, 128);
+  return /^[a-z0-9_]{1,128}$/.test(normalized) ? normalized : undefined;
 }
 
 function parseBoundedErrorBody(text: string): unknown {
@@ -193,6 +204,9 @@ export function observeModelFallbackErrors(streamFn: StreamFn, state: ModelFallb
           api: request.api,
           modelId: request.modelId,
           errorMessage: errorMessage(error instanceof Error ? error.message : String(error)),
+          // In-stream SSE/WebSocket errors have no HTTP evidence; keep the
+          // structured code so classification does not depend on phrasing.
+          errorCode: thrownErrorCode(error),
         };
       }
       throw error;
@@ -258,6 +272,7 @@ async function classificationFor(
     provider: failed.provider,
     api: failed.api,
     errorMessage: failed.errorMessage,
+    errorCode: failed.errorCode,
     providerError: observedFailure?.providerError,
   });
 }
@@ -319,8 +334,14 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
       pi.on("message_end", (event: MessageEndEvent) => {
         const failure = assistantFailure(event.message);
         const internal = internalFor(state);
-        if (failure) internal.failed = failure;
-        else if (event.message.role === "assistant") internal.failed = undefined;
+        if (failure) {
+          // The persisted assistant message carries only the flattened error
+          // text; keep the structured code captured from the thrown error.
+          const prior = internal.failed;
+          internal.failed = prior && prior.provider === failure.provider && prior.modelId === failure.modelId
+            ? { ...failure, errorCode: prior.errorCode }
+            : failure;
+        } else if (event.message.role === "assistant") internal.failed = undefined;
       });
 
       pi.on("agent_before_settle", async (event: AgentBeforeSettleEvent, ctx: ExtensionContext) => {

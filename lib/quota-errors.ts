@@ -2,6 +2,13 @@ export interface QuotaErrorInput {
   provider: string;
   api?: string;
   errorMessage?: string;
+  /**
+   * Machine code attached to the thrown provider error object. Codex delivers
+   * subscription exhaustion as an in-stream SSE/WebSocket `error` event where
+   * no HTTP error status/body exists; the thrown CodexApiError still carries
+   * the upstream `code` (for example `usage_limit_reached`).
+   */
+  errorCode?: unknown;
   providerError?: {
     status?: number;
     body?: unknown;
@@ -173,6 +180,15 @@ function matchesMiniMaxFiveHourLimit(messages: string[]): boolean {
   );
 }
 
+function matchesCodexUsageLimitMessage(messages: string[]): boolean {
+  // Codex subscription exhaustion arrives as an in-stream error event whose
+  // only text is this terminal phrase. Transient throttles say "rate limit"
+  // instead, and pi-ai itself treats "usage limit" failures as non-retryable.
+  // The friendlier "hit your ChatGPT usage limit" text stays unclassified:
+  // pi-ai also generates it for transient 429/rate_limit_exceeded responses.
+  return messages.some((message) => /\busage limit has been reached\b/i.test(message));
+}
+
 /**
  * Classify only explicit, documented quota/billing exhaustion signals.
  * This is a bounded, side-effect-free classifier; it does not infer quota from
@@ -191,7 +207,12 @@ export function classifyQuotaExhaustion(input: QuotaErrorInput): QuotaExhaustion
       : bodyValue;
     const errorJson = parseJsonObject(errorMessage, true);
     const shapes = [asShape(body), asShape(errorJson)];
-    const codes = shapes.flatMap((shape) => shape.codes);
+    // Thrown-error machine codes are as authoritative as response-body codes.
+    const thrownCode = codeValue(ownValue(input, "errorCode"));
+    const codes = [
+      ...(thrownCode !== undefined ? [thrownCode] : []),
+      ...shapes.flatMap((shape) => shape.codes),
+    ];
     const anthropicSpendCodes = shapes.flatMap((shape) => shape.anthropicSpendCodes);
     const messages = [
       ...shapes.flatMap((shape) => shape.messages),
@@ -240,6 +261,9 @@ export function classifyQuotaExhaustion(input: QuotaErrorInput): QuotaExhaustion
       }
       if (codes.includes("project_spend_limit_exceeded")) {
         return { ruleId: "openai.project_spend_limit_exceeded", kind: "spend-limit" };
+      }
+      if (matchesCodexUsageLimitMessage(messages)) {
+        return { ruleId: "openai.codex_usage_limit_message", kind: "subscription-limit" };
       }
     }
 

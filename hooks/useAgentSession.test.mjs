@@ -682,7 +682,7 @@ test("session reload context estimates use authoritative model metadata", () => 
   assert.match(source, /type ModelEntry = \{[^}]*contextWindow\?: number/);
   assert.match(loadSessionSource, /resolveModelContextWindow\(\s*d\.context\.model,\s*modelListRef\.current/);
   assert.match(loadSessionSource, /calculateActiveContextTokens\(d\.context\.messages, windowSize\)/);
-  assert.match(contextEstimateSource, /resolveModelContextWindow\(\s*displayModel,\s*modelList/);
+  assert.match(contextEstimateSource, /resolveModelContextWindow\(\s*contextModel,\s*modelList/);
   assert.match(contextEstimateSource, /calculateActiveContextTokens\(messages, windowSize\)/);
   assert.doesNotMatch(loadSessionSource, /inferModelContextWindow/);
 });
@@ -763,13 +763,16 @@ test("quota fallback follows per-session state and only changes the backup model
   assert.match(ensureSource, /initializeFreshFallbackPreference\(\)/);
   assert.match(ensureSource, /selectedFallbackModel \|\| fallbackPreferenceTouchedRef\.current/);
   assert.match(ensureSource, /type: "ensure_session"[\s\S]*?fallbackModel: selectedFallbackModel/);
-  assert.match(loadSessionSource, /promptRunIdRef\.current === loadRunId[\s\S]*?d\.fallbackModel !== undefined[\s\S]*?applyFallbackModelSelection[\s\S]*?d\.fallbackNotice/);
-  assert.match(loadSessionSource, /applyAgentStateMetadata\(liveState\)/);
+  assert.match(loadSessionSource, /metadataFresh = promptRunIdRef\.current === loadRunId[\s\S]*?d\.fallbackModel !== undefined[\s\S]*?applyFallbackModelSelection[\s\S]*?d\.fallbackNotice/);
+  assert.match(loadSessionSource, /applyAgentStateMetadata\(liveState, false, usageRequestId\)/);
+  assert.match(loadSessionSource, /applyFallbackNotice\(d\.fallbackNotice, false, !agentRunningRef\.current\)/);
   assert.match(fallbackChangeSource, /type: "set_fallback_model",\s*model: parsed/);
   assert.match(fallbackChangeSource, /setFallbackModelPreference\(parsed\)/);
   assert.doesNotMatch(fallbackChangeSource, /type: "set_model"/);
   assert.match(fallbackEventSource, /applyFallbackNotice\(event\.notice, true\)/);
-  assert.match(fallbackEventSource, /applyFallbackThinkingLevel\(event\.thinkingLevel, notice\.to\)/);
+  assert.match(fallbackEventSource, /applyRuntimeModel\(notice\.to\)/);
+  assert.match(fallbackEventSource, /applyPrimaryModelSelection\(event\.primaryModel\)/);
+  assert.doesNotMatch(fallbackEventSource, /setCurrentModelOverride\(notice\.to\)|ThinkingLevel\(event\.thinkingLevel/);
   assert.doesNotMatch(fallbackEventSource, /onAgentEnd|type: "success"/);
   assert.match(toolSelectionSource, /if \(recreated && fallbackSelectionKnownRef\.current && fallbackModelRef\.current\)[\s\S]*?type: "set_fallback_model"/);
   assert.match(toolSelectionSource, /applyAgentStateMetadata\(state\)/);

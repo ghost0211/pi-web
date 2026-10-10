@@ -247,7 +247,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
     turnIndex, ensureEntryLoaded,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
-    retryInfo, contextUsage, forkingEntryId,
+    retryInfo, contextUsage, contextModel, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, setNoticePaused,
@@ -641,6 +641,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       onPromptWithStreamingBehavior={!isReadOnlyConversation && agentRunning ? handlePromptWithStreamingBehavior : undefined}
       isStreaming={sessionBusy}
       model={displayModelValue}
+      contextModel={contextModel}
       isAutoModelSelection={isAutoModelSelection}
       modelNames={modelNames}
       modelList={modelList}

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { resolveSessionPath, buildSessionContext, buildSessionHistory, buildSessionTurnIndex } from "@/lib/session-reader";
 import { getRpcSession } from "@/lib/rpc-manager";
+import { readSessionPrimaryModel } from "@/lib/session-primary-model";
+import type { SessionEntry } from "@/lib/types";
 
 export async function GET(
   req: Request,
@@ -47,12 +49,17 @@ export async function GET(
       ? undefined
       : buildSessionTurnIndex(entries, targetLeafId);
 
+    const primaryModel = before ? undefined : readSessionPrimaryModel(
+      sm.getBranch(targetLeafId ?? undefined) as unknown as SessionEntry[],
+    );
+
     return NextResponse.json({
       context,
       history,
       ...(turnIndex ? { turnIndex } : {}),
       tail,
       before: before ?? null,
+      ...(primaryModel !== undefined ? { primaryModel } : {}),
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

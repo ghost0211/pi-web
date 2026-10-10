@@ -63,6 +63,8 @@ export interface SessionData {
   stats?: SessionFileStats;
   /** True when GET ?force=1 dropped a stale live wrapper and rebuilt from disk. */
   wrapperRebuilt?: boolean;
+  /** Configured primary, independent of temporary quota-backup execution. */
+  primaryModel?: FallbackModelRef | null;
   /** Persisted per-session quota fallback; absent on older detail routes. */
   fallbackModel?: FallbackModelRef | null;
   fallbackNotice?: ModelFallbackNotice | null;
@@ -85,6 +87,7 @@ interface LastAssistantTextResponse {
 type AgentStateResponse = {
   /** Current runtime model uses the RPC shape `{ provider, id }`. */
   model?: unknown;
+  primaryModel?: unknown;
   fallbackModel?: unknown;
   fallbackNotice?: unknown;
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
@@ -362,6 +365,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
   const [currentModelOverride, setCurrentModelOverride] = useState<{ provider: string; modelId: string } | null>(null);
   const [pendingModel, setPendingModel] = useState<{ provider: string; modelId: string } | null>(null);
+  const [runtimeModel, setRuntimeModel] = useState<SelectedModel | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactError, setCompactError] = useState<string | null>(null);
@@ -415,6 +419,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // displayModel and compute the ring against a 128k fallback window.
   const contextUsageRef = useRef<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const displayModelRef = useRef<{ provider: string; modelId: string } | null>(null);
+  const contextModelRef = useRef<SelectedModel | null>(null);
   const modelListRef = useRef<ModelEntry[]>([]);
   const modelThinkingLevelsRef = useRef<Record<string, string[]>>({});
   const modelThinkingLevelPinsRef = useRef<Record<string, string>>({});
@@ -426,6 +431,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const fallbackChangeRequestRef = useRef(0);
   const fallbackNoticeFingerprintRef = useRef<string | null>(null);
   const fallbackNoticeTimestampRef = useRef(-1);
+  // Audit reads and toast announcements are distinct. A silent mid-run read
+  // must not consume the new live event's one-time warning.
+  const fallbackNoticeAnnouncementRef = useRef<{ initialized: boolean; fingerprint: string | null }>({ initialized: false, fingerprint: null });
   const estimateContextAfterMessageRef = useRef(false);
   const handleAgentEventRef = useRef<((event: AgentEvent) => void) | null>(null);
   const initialScrollDoneRef = useRef(false);
@@ -504,10 +512,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (container) previousScrollTopRef.current = container.scrollTop;
   }, []);
 
-  const currentModel = currentModelOverride ?? data?.context.model ?? pendingModel ?? null;
+  const currentModel = currentModelOverride ?? data?.primaryModel ?? data?.context.model ?? pendingModel ?? null;
   const displayModel = isNew ? (currentModelOverride ?? newSessionModel ?? newSessionDefaultModel) : currentModel;
+  // Context limits follow actual execution, not the configured primary picker.
+  const contextModel = runtimeModel ?? displayModel;
   // Keep latest-value refs in sync for stale-closure-safe reads inside handleAgentEvent.
   displayModelRef.current = displayModel;
+  contextModelRef.current = contextModel;
   contextUsageRef.current = contextUsage;
   modelListRef.current = modelList;
   modelThinkingLevelsRef.current = modelThinkingLevels;
@@ -519,7 +530,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   useEffect(() => {
     setContextUsage((prev) => {
       if (!prev || prev.tokens === null || prev.tokens === undefined) return prev;
-      const contextWindow = resolveModelContextWindow(displayModel, modelList, prev.contextWindow);
+      const contextWindow = resolveModelContextWindow(contextModel, modelList, prev.contextWindow);
       if (contextWindow === prev.contextWindow) return prev;
       return {
         tokens: prev.tokens,
@@ -527,7 +538,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         percent: Math.min(100, Math.max(0, (prev.tokens / contextWindow) * 100)),
       };
     });
-  }, [displayModel, modelList, contextUsage?.contextWindow]);
+  }, [contextModel, modelList, contextUsage?.contextWindow]);
 
   const composerDraftKey = session?.id ?? newSessionDraftKey ?? undefined;
 
@@ -535,13 +546,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!estimateContextAfterMessageRef.current) return;
     estimateContextAfterMessageRef.current = false;
     const windowSize = resolveModelContextWindow(
-      displayModel,
+      contextModel,
       modelList,
       contextUsageRef.current?.contextWindow,
     );
     const computed = calculateActiveContextTokens(messages, windowSize);
     if (computed.tokens > 0) setContextUsage(computed);
-  }, [displayModel, messages, modelList]);
+  }, [contextModel, messages, modelList]);
 
   const resolveComposerDraftKey = useCallback((key: string | undefined) => {
     if (!key) return undefined;
@@ -618,16 +629,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [applyContextUsage]);
 
-  const applyFallbackThinkingLevel = useCallback((value: unknown, target: SelectedModel | null) => {
+  const applyPrimaryThinkingLevel = useCallback((value: unknown, target: SelectedModel | null) => {
     const available = target ? modelThinkingLevelsRef.current[`${target.provider}:${target.modelId}`] : undefined;
     let level = normalizeThinkingLevelOption(value, available);
-    // The runtime's actual level wins. A scope pin is only a missing-value
-    // default, not permission to overwrite an explicit backup preference.
+    // Explicit primary thinking wins; pins are only missing-value defaults.
     if (level === "auto" && target) {
       const pinned = modelThinkingLevelPinsRef.current[`${target.provider}/${target.modelId}`];
       level = normalizeThinkingLevelOption(pinned, available);
     }
     setThinkingLevel(level);
+  }, []);
+
+  const applyPrimaryModelSelection = useCallback((value: unknown) => {
+    if (modelSwitchPendingRef.current) return;
+    const primary = parseFallbackModel(value);
+    if (primary === undefined) return;
+    setCurrentModelOverride(primary);
+    if (primary) applyPrimaryThinkingLevel(primary.thinkingLevel, primary);
+  }, [applyPrimaryThinkingLevel]);
+
+  const applyRuntimeModel = useCallback((model: SelectedModel | null) => {
+    contextModelRef.current = model ?? displayModelRef.current;
+    setRuntimeModel(model);
   }, []);
 
   const applyFallbackModelSelection = useCallback((value: unknown) => {
@@ -640,14 +663,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return parsed;
   }, []);
 
-  const applyFallbackNotice = useCallback((value: unknown, announce: boolean, activeModel?: SelectedModel | null) => {
+  const applyFallbackNotice = useCallback((value: unknown, announce: boolean, historical = false) => {
+    const announcement = fallbackNoticeAnnouncementRef.current;
     const notice = parseModelFallbackNotice(value);
-    if (!notice || notice.timestamp < fallbackNoticeTimestampRef.current) return null;
-    const fingerprint = `${notice.timestamp}|${notice.ruleId}|${notice.from.provider}/${notice.from.modelId}|${notice.to.provider}/${notice.to.modelId}`;
-    if (!activeModel || (activeModel.provider === notice.to.provider && activeModel.modelId === notice.to.modelId)) {
-      setCurrentModelOverride(notice.to);
+    if (!notice) {
+      if (value === null) announcement.initialized = true;
+      return null;
     }
-    if (announce && fallbackNoticeFingerprintRef.current !== fingerprint) {
+    if (notice.timestamp < fallbackNoticeTimestampRef.current) return null;
+    const fingerprint = `${notice.timestamp}|${notice.ruleId}|${notice.from.provider}/${notice.from.modelId}|${notice.to.provider}/${notice.to.modelId}`;
+    // The first snapshot establishes a silent history baseline. Idle/restored
+    // snapshots also suppress old events, even when another run later starts.
+    if (historical || (!announce && !announcement.initialized)) announcement.fingerprint = fingerprint;
+    announcement.initialized = true;
+    // An audit notice is not a user configuration change.
+    if (announce && announcement.fingerprint !== fingerprint) {
       const label = (model: FallbackModelRef) => (
         modelListRef.current.find((entry) => entry.provider === model.provider && entry.id === model.modelId)?.name
         ?? `${model.provider} / ${model.modelId}`
@@ -660,24 +690,41 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           type: "warning",
         },
       });
+      announcement.fingerprint = fingerprint;
     }
     fallbackNoticeFingerprintRef.current = fingerprint;
     fallbackNoticeTimestampRef.current = Math.max(fallbackNoticeTimestampRef.current, notice.timestamp);
     return notice;
   }, [t]);
 
-  const applyAgentStateMetadata = useCallback((state: AgentStateResponse | undefined, announce = true) => {
-    if (!state) return;
-    const runtimeModel = parseRuntimeModel(state.model);
-    if (runtimeModel && !modelSwitchPendingRef.current) setCurrentModelOverride(runtimeModel);
-    if (state.fallbackModel !== undefined && !fallbackChangePendingRef.current) applyFallbackModelSelection(state.fallbackModel);
-    const notice = state.fallbackNotice === undefined
-      ? null
-      : applyFallbackNotice(state.fallbackNotice, announce, runtimeModel);
-    if (state.thinkingLevel !== undefined) {
-      applyFallbackThinkingLevel(state.thinkingLevel, runtimeModel ?? notice?.to ?? displayModelRef.current);
+  const applyAgentStateMetadata = useCallback((state: AgentStateResponse | undefined, announce = false, requestId?: number) => {
+    if (!state || (requestId !== undefined && requestId <= contextUsageAppliedIdRef.current)) return;
+    const actual = parseRuntimeModel(state.model);
+    if (!modelSwitchPendingRef.current) {
+      if (actual) applyRuntimeModel(actual);
+      if (state.primaryModel !== undefined) {
+        applyPrimaryModelSelection(state.primaryModel);
+      } else {
+        // Pre-separation servers may report a backup as the current selection.
+        const notice = parseModelFallbackNotice(state.fallbackNotice);
+        const isBackup = actual && notice
+          && actual.provider === notice.to.provider && actual.modelId === notice.to.modelId;
+        if (actual && !isBackup) {
+          setCurrentModelOverride(actual);
+          if (state.thinkingLevel !== undefined) applyPrimaryThinkingLevel(state.thinkingLevel, actual);
+        }
+      }
     }
-  }, [applyFallbackModelSelection, applyFallbackNotice, applyFallbackThinkingLevel]);
+    if (state.fallbackModel !== undefined && !fallbackChangePendingRef.current) applyFallbackModelSelection(state.fallbackModel);
+    if (state.fallbackNotice !== undefined) {
+      const notice = parseModelFallbackNotice(state.fallbackNotice);
+      const primary = parseFallbackModel(state.primaryModel);
+      const activeFallback = Boolean(agentRunningRef.current && (state.isStreaming || state.isPromptRunning)
+        && actual && notice && actual.provider === notice.to.provider && actual.modelId === notice.to.modelId
+        && (!primary || (primary.provider === notice.from.provider && primary.modelId === notice.from.modelId)));
+      applyFallbackNotice(state.fallbackNotice, announce && activeFallback && fallbackNoticeAnnouncementRef.current.initialized, !activeFallback);
+    }
+  }, [applyRuntimeModel, applyPrimaryModelSelection, applyPrimaryThinkingLevel, applyFallbackModelSelection, applyFallbackNotice]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, options?: { force?: boolean }) => {
     let messagesLoaded = false;
@@ -720,12 +767,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       } else {
         setToolPresetState("default");
       }
-      setCurrentModelOverride((current) => modelSwitchPendingRef.current ? current : null);
-      let persistedFallbackNotice: ModelFallbackNotice | null = null;
-      if (promptRunIdRef.current === loadRunId) {
+      const metadataFresh = promptRunIdRef.current === loadRunId && estimateRequestId > contextUsageAppliedIdRef.current;
+      setCurrentModelOverride((current) => modelSwitchPendingRef.current || !metadataFresh ? current : null);
+      if (metadataFresh) {
+        if (!modelSwitchPendingRef.current) {
+          applyRuntimeModel(d.context.model);
+          if (d.primaryModel !== undefined) applyPrimaryModelSelection(d.primaryModel);
+          else if (d.context.model) applyPrimaryModelSelection({ ...d.context.model, thinkingLevel: d.context.thinkingLevel });
+        }
         if (d.fallbackModel !== undefined && !fallbackChangePendingRef.current) applyFallbackModelSelection(d.fallbackModel);
         if (d.fallbackNotice !== undefined) {
-          persistedFallbackNotice = applyFallbackNotice(d.fallbackNotice, true, d.context.model);
+          applyFallbackNotice(d.fallbackNotice, false, !agentRunningRef.current);
         }
       }
       setError(null);
@@ -735,10 +787,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         eventConnectionRef.current?.close();
         eventConnectionRef.current?.maintain(sid);
       }
-      if (promptRunIdRef.current === loadRunId && d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
-        applyFallbackThinkingLevel(d.context.thinkingLevel, d.context.model ?? persistedFallbackNotice?.to ?? null);
-      }
-
       messagesLoaded = true;
       const windowSize = resolveModelContextWindow(
         d.context.model,
@@ -762,7 +810,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
         const liveState = agentState.state;
         if (liveState) {
-          if (promptRunIdRef.current === loadRunId) applyAgentStateMetadata(liveState);
+          if (promptRunIdRef.current === loadRunId) applyAgentStateMetadata(liveState, false, usageRequestId);
           applyContextUsage(liveState, sid, runId, usageRequestId);
           if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
           if (liveState.customSystemPrompt !== undefined) setCustomSystemPrompt(liveState.customSystemPrompt ?? null);
@@ -783,7 +831,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading && !messagesLoaded) setLoading(false);
     }
-  }, [applyAgentStateMetadata, applyContextUsage, applyFallbackModelSelection, applyFallbackNotice, applyFallbackThinkingLevel, setToolPresetState]);
+  }, [applyAgentStateMetadata, applyContextUsage, applyFallbackModelSelection, applyFallbackNotice, applyPrimaryModelSelection, applyRuntimeModel, setToolPresetState]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null, before?: string | null, tail?: number) => {
     try {
@@ -796,7 +844,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const url = `/api/sessions/${encodeURIComponent(sid)}/context?${params}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const d = await res.json() as { context: SessionContext; history?: SessionHistory; turnIndex?: TurnPreview[] };
+      const d = await res.json() as { context: SessionContext; primaryModel?: FallbackModelRef | null; history?: SessionHistory; turnIndex?: TurnPreview[] };
       if (sessionIdRef.current !== sid) return null;
       const page = d.history ?? d.context;
       if (d.turnIndex) setTurnIndex(d.turnIndex);
@@ -805,7 +853,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setFirstEntryParentId(page.firstEntryParentId ?? null);
       setData((prev) => {
         if (!prev || prev.sessionId !== sid) return prev;
-        if (!before) return { ...prev, context: d.context, history: page };
+        if (!before) return { ...prev, context: d.context, primaryModel: d.primaryModel, history: page };
         const previousHistory = prev.history ?? prev.context;
         return {
           ...prev,
@@ -824,6 +872,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setMessages((prev) => [...page.messages, ...prev]);
         setEntryIds((prev) => [...page.entryIds, ...prev]);
       } else {
+        applyRuntimeModel(d.context.model);
+        applyPrimaryModelSelection(d.primaryModel === undefined
+          ? (d.context.model ? { ...d.context.model, thinkingLevel: d.context.thinkingLevel } : null)
+          : d.primaryModel);
         setMessages(page.messages);
         setEntryIds(page.entryIds ?? []);
       }
@@ -832,7 +884,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       console.error("Failed to load context:", e);
       return null;
     }
-  }, []);
+  }, [applyPrimaryModelSelection, applyRuntimeModel]);
 
   /**
    * Page history upward until the requested turn is loaded. Jumping uses
@@ -1148,6 +1200,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const wasRunning = agentRunningRef.current;
     agentRunningRef.current = false;
     setAgentRunning(false);
+    contextModelRef.current = displayModelRef.current;
+    setRuntimeModel(null);
     setAgentPhase(null);
     setRetryInfo(null);
     setActiveToolResults(new Map());
@@ -1318,7 +1372,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // flight) — everything in it is stale, drop it.
       if (sessionIdRef.current !== sid || promptRunIdRef.current !== runId) return;
       const state = data.state;
-      applyAgentStateMetadata(state);
+      applyAgentStateMetadata(state, true, usageRequestId);
       applyContextUsage(state, sid, runId, usageRequestId);
       // Mirror compaction state unconditionally: a missed compaction_end
       // would otherwise leave the "Stop compaction" UI stuck. No state
@@ -1385,10 +1439,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case "model_fallback": {
-        if (!sessionHookMountedRef.current || !sessionIdRef.current) break;
+        if (!sessionHookMountedRef.current || !sessionIdRef.current || !agentRunningRef.current) break;
+        if (isStaleLocalPromptToken(event.promptToken, promptTokenOwnerRef.current, activePromptTokenRef.current)) break;
+        const previousNotice = fallbackNoticeFingerprintRef.current;
         const notice = applyFallbackNotice(event.notice, true);
-        if (notice && event.thinkingLevel !== undefined) {
-          applyFallbackThinkingLevel(event.thinkingLevel, notice.to);
+        if (notice && agentRunningRef.current && previousNotice !== fallbackNoticeFingerprintRef.current) {
+          applyRuntimeModel(notice.to);
+          if (event.primaryModel !== undefined) applyPrimaryModelSelection(event.primaryModel);
         }
         break;
       }
@@ -1430,7 +1487,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .then((r) => r.ok ? r.json() : null)
             .then((d: { state?: AgentStateResponse } | null) => {
               if (!d || !sessionHookMountedRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== eventRunId) return;
-              applyAgentStateMetadata(d.state);
+              applyAgentStateMetadata(d.state, true, usageRequestId);
               applyContextUsage(d.state, sid, eventRunId, usageRequestId);
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
               if (d.state?.customSystemPrompt !== undefined) setCustomSystemPrompt(d.state.customSystemPrompt ?? null);
@@ -1653,7 +1710,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (res?.estimatedTokensAfter) {
             setContextUsage((prev) => {
               const windowSize = resolveModelContextWindow(
-                displayModelRef.current,
+                contextModelRef.current,
                 modelListRef.current,
                 prev?.contextWindow,
               );
@@ -1676,7 +1733,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyFallbackThinkingLevel, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
+  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyPrimaryModelSelection, applyRuntimeModel, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -2108,7 +2165,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (compactRes?.estimatedTokensAfter) {
         setContextUsage((prev) => {
           const windowSize = resolveModelContextWindow(
-            displayModelRef.current,
+            contextModelRef.current,
             modelListRef.current,
             prev?.contextWindow,
           );
@@ -2687,7 +2744,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     turnIndex, ensureEntryLoaded,
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
-    isCompacting, compactError, compactResult, currentModel, displayModel, modelSwitching, sessionStats,
+    isCompacting, compactError, compactResult, currentModel, displayModel, contextModel, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null && currentModelOverride === null,

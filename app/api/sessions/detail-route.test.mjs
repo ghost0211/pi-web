@@ -64,4 +64,6 @@ test("detail response exposes nullable persisted fallback metadata", () => {
   assert.match(routeSrc, /sm\.getBranch\(leafId \?\? undefined\)/);
   assert.match(routeSrc, /readSessionModelFallbackNotice\(branchEntries\)/);
   assert.match(routeSrc, /fallbackModel,\s*fallbackNotice,/);
+  assert.match(routeSrc, /primaryModel = liveRpc\?\.getPrimaryModel\?\.\(\) \?\? readSessionPrimaryModel\(branchEntries\)/);
+  assert.match(routeSrc, /primaryModel,\s*fallbackModel,/);
 });

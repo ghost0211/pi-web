@@ -5,7 +5,7 @@ import { Script, createContext } from "node:vm";
 import ts from "typescript";
 import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url);
-const { parseFallbackModel } = await jiti.import("../lib/model-fallback.ts");
+const { parseFallbackModel, parseModelFallbackNotice } = await jiti.import("../lib/model-fallback.ts");
 const { normalizeThinkingLevelOption } = await jiti.import("../lib/thinking-level-options.ts");
 const source = ts.createSourceFile("hook.ts", await readFile(new URL("./useAgentSession.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
 const nodes = [];
@@ -16,12 +16,17 @@ function callback(name) {
   return new Script(ts.transpileModule(`(${node.initializer.arguments[0].getText(source)})`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText);
 }
 function setup() {
-  const writes = { commands: [], primaryLevels: [], backup: [], preferences: [], notices: [], models: [] };
+  const writes = { commands: [], primaryLevels: [], backup: [], preferences: [], notices: [], models: [], primaryModels: [], runtimeModels: [] };
   const primary = { provider: "p", modelId: "primary" };
   const backup = { provider: "b", modelId: "backup", thinkingLevel: "low" };
-  const levels = { "p:primary": ["off", "low", "high", "max"], "b:backup": ["low", "high"], "b:other": ["off", "medium"] };
+  const levels = { "p:primary": ["off", "low", "high", "xhigh", "max"], "b:backup": ["low", "high"], "b:other": ["off", "medium"] };
   const context = createContext({
-    parseFallbackModel, normalizeThinkingLevelOption,
+    parseFallbackModel, parseModelFallbackNotice, normalizeThinkingLevelOption,
+    parseRuntimeModel: (value) => value?.provider && value?.id ? { provider: value.provider, modelId: value.id } : null,
+    fallbackNoticeFingerprintRef: { current: null }, fallbackNoticeTimestampRef: { current: -1 }, modelListRef: { current: [] },
+    fallbackNoticeAnnouncementRef: { current: { initialized: false, fingerprint: null } },
+    dispatchNotice: (value) => writes.notices.push(value), createNoticeId: () => "notice", t: (key) => key,
+    contextModelRef: { current: null }, setRuntimeModel: (value) => writes.runtimeModels.push(value),
     fallbackChangePendingRef: { current: false }, modelSwitchPendingRef: { current: false },
     agentRunningRef: { current: false }, bashRunningRef: { current: false }, isCompacting: false,
     fallbackModelRef: { current: backup }, fallbackPreferenceTouchedRef: { current: false },
@@ -35,11 +40,11 @@ function setup() {
     setFallbackModelPreference: (value) => writes.preferences.push(value),
     setFallbackModelSwitching() {}, setModelSwitching() {},
     setThinkingLevel: (value) => writes.primaryLevels.push(value),
-    setNewSessionModel: (value) => writes.models.push(value), setPendingModel() {}, setCurrentModelOverride() {},
+    setNewSessionModel: (value) => writes.models.push(value), setPendingModel() {}, setCurrentModelOverride: (value) => writes.primaryModels.push(value),
     addNotice: (notice) => writes.notices.push(notice), loadSession: async () => {},
     sendAgentCommand: async (sid, command) => { writes.commands.push({ sid, command }); return command.model; },
   });
-  for (const name of ["applyFallbackModelSelection", "applyFallbackThinkingLevel", "handleFallbackModelChange", "handleFallbackThinkingLevelChange", "handleThinkingLevelChange", "handleModelChange"]) {
+  for (const name of ["applyFallbackModelSelection", "applyPrimaryThinkingLevel", "applyPrimaryModelSelection", "applyRuntimeModel", "applyFallbackNotice", "applyAgentStateMetadata", "handleFallbackModelChange", "handleFallbackThinkingLevelChange", "handleThinkingLevelChange", "handleModelChange"]) {
     context[name] = callback(name).runInContext(context);
   }
   return { context, writes, backup };
@@ -114,13 +119,13 @@ test("a draft primary model switch clears incompatible explicit thinking from st
   assert.deepEqual(writes.commands, []);
 });
 
-test("reported backup thinking wins over its implicit scope pin", () => {
-  const { context, writes, backup } = setup();
-  context.modelThinkingLevelPinsRef.current["b/backup"] = "high";
-  context.applyFallbackThinkingLevel("low", backup);
-  assert.deepEqual(writes.primaryLevels, ["low"]);
-  context.applyFallbackThinkingLevel(undefined, backup);
-  assert.deepEqual(writes.primaryLevels, ["low", "high"], "only absent runtime levels fall back to pins");
+test("reported primary thinking wins over its implicit scope pin", () => {
+  const { context, writes } = setup();
+  context.modelThinkingLevelPinsRef.current["p/primary"] = "high";
+  context.applyPrimaryThinkingLevel("xhigh", context.displayModelRef.current);
+  assert.deepEqual(writes.primaryLevels, ["xhigh"]);
+  context.applyPrimaryThinkingLevel(undefined, context.displayModelRef.current);
+  assert.deepEqual(writes.primaryLevels, ["xhigh", "high"], "only absent levels fall back to pins");
 });
 
 test("failed primary thinking restores its level without touching backup state", async () => {

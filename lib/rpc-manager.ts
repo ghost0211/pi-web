@@ -34,6 +34,7 @@ import {
   validateFallbackModel,
 } from "./session-model-fallback";
 import { createModelFallbackExtension, observeModelFallbackErrors, type ModelFallbackRuntimeState } from "./model-fallback-runtime";
+import { PRIMARY_MODEL_SNAPSHOT_TYPE, readSessionTemporaryFallback } from "./session-primary-model";
 import { notifySessionComplete } from "./web-push";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
@@ -382,10 +383,11 @@ export class AgentSessionWrapper {
     this.mcpRuntime = options.mcpRuntime;
     this.modelFallbackState = options.modelFallbackState;
     if (this.modelFallbackState) {
-      this.modelFallbackState.onSwitch = (notice, thinkingLevel) => {
+      this.modelFallbackState.onSwitch = (notice, thinkingLevel, primaryModel) => {
         if (!this._alive) return;
         invalidateSessionListCache();
-        this.emit({ type: "model_fallback", notice, thinkingLevel });
+        const promptToken = [...this.pendingPromptCompletions].find((prompt) => prompt.token)?.token;
+        this.emit({ type: "model_fallback", notice, thinkingLevel, primaryModel, ...(promptToken ? { promptToken } : {}) });
       };
     }
   }
@@ -420,7 +422,7 @@ export class AgentSessionWrapper {
   }
 
   isRunning(): boolean {
-    return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning);
+    return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning || Boolean(this.modelFallbackState?.restorePromise));
   }
 
   /**
@@ -458,6 +460,18 @@ export class AgentSessionWrapper {
   /** In-memory (ephemeral) sessions never write a JSONL file. */
   isEphemeral(): boolean {
     return this.ephemeral;
+  }
+
+  getPrimaryModel(): FallbackModelRef | null {
+    const branch = this.inner.sessionManager.getBranch?.() as unknown as SessionEntry[] | undefined;
+    const pending = (branch ? readSessionTemporaryFallback(branch) : null) ?? this.modelFallbackState?.pending;
+    if (pending) return pending.primary;
+    const model = this.inner.model;
+    const thinkingLevel = this.inner.agent.state?.thinkingLevel;
+    return model ? {
+      provider: model.provider, modelId: model.id,
+      ...(isThinkingLevelOption(thinkingLevel) ? { thinkingLevel } : {}),
+    } : null;
   }
 
   getFallbackModel(): FallbackModelRef | null {
@@ -838,6 +852,8 @@ export class AgentSessionWrapper {
           if (this.inner.isBashRunning) {
             throw new Error("Cannot send a prompt while a shell command is running");
           }
+          if (!this.inner.isStreaming || this.modelFallbackState?.restorePromise) await this.modelFallbackState?.restorePrimary?.();
+          if (!this.isAlive()) throw new Error("Session is shutting down");
           const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
           const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
           let preflightAccepted = false;
@@ -970,11 +986,12 @@ export class AgentSessionWrapper {
           sessionId: this.inner.sessionId,
           sessionFile: this.inner.sessionFile ?? "",
           isStreaming: this.inner.isStreaming,
-          isPromptRunning: this.pendingPromptCount > 0,
+          isPromptRunning: this.pendingPromptCount > 0 || Boolean(this.modelFallbackState?.restorePromise),
           isBashRunning: this.inner.isBashRunning,
           isCompacting: this.inner.isCompacting,
           autoCompactionEnabled: this.inner.autoCompactionEnabled,
           autoRetryEnabled: this.inner.autoRetryEnabled,
+          primaryModel: this.getPrimaryModel(),
           fallbackModel: this.getFallbackModel(),
           fallbackNotice: branchEntries
             ? readSessionModelFallbackNotice(branchEntries)
@@ -1012,8 +1029,8 @@ export class AgentSessionWrapper {
         if (selection?.thinkingLevel !== undefined && resolved) {
           selection = { ...selection, thinkingLevel: normalizeThinkingLevelOption(selection.thinkingLevel, getSupportedThinkingLevels(resolved)) };
         }
-        const currentModel = this.inner.model;
-        if (selection && currentModel && sameFallbackModel(selection, { provider: currentModel.provider, modelId: currentModel.id })
+        const currentModel = this.getPrimaryModel();
+        if (selection && currentModel && sameFallbackModel(selection, currentModel)
           && !sameFallbackModel(selection, state.selection)) {
           throw new Error("Fallback model must be different from the primary model");
         }
@@ -1029,6 +1046,7 @@ export class AgentSessionWrapper {
       }
 
       case "set_model": {
+        if (this.isRunning() || this.activeMutatingCommands > 1) throw new Error("Wait for the current session operation to finish before changing the primary model");
         const { provider, modelId } = command as { provider: string; modelId: string };
         let model = this.inner.modelRuntime.getModel(provider, modelId);
         if (!model) {
@@ -1040,7 +1058,13 @@ export class AgentSessionWrapper {
         if (configuredFallback && sameFallbackModel(configuredFallback, { provider: model.provider, modelId: model.id })) {
           throw new Error("Primary model must be different from the configured fallback model");
         }
+        if (this.isRunning() || this.activeMutatingCommands > 1) throw new Error("Wait for the current session operation to finish before changing the primary model");
         await this.inner.setModel(model);
+        if (this.modelFallbackState?.pending) {
+          this.inner.sessionManager.appendCustomEntry(PRIMARY_MODEL_SNAPSHOT_TYPE, { version: 1, primary: null });
+          this.modelFallbackState.pending = null;
+          this.modelFallbackState.restoreError = undefined;
+        }
         invalidateModelsCache();
         invalidateSessionListCache();
         return { id: model.id, provider: model.provider };
@@ -1126,12 +1150,19 @@ export class AgentSessionWrapper {
           throw new Error("Cannot navigate while a shell command is running");
         }
         const result = await this.inner.navigateTree(command.targetId as string, {});
+        if (!result.cancelled && this.modelFallbackState) {
+          this.modelFallbackState.pending = readSessionTemporaryFallback(this.inner.sessionManager.getBranch() as unknown as SessionEntry[]);
+          await this.modelFallbackState.restorePrimary?.();
+        }
         return { cancelled: result.cancelled };
       }
 
       case "set_thinking_level": {
         const requested = command.level;
         if (!isThinkingLevelOption(requested)) throw new Error("Invalid thinking level");
+        if (this.isRunning() || this.activeMutatingCommands > 1) throw new Error("Wait for the current session operation to finish before changing primary thinking");
+        await this.modelFallbackState?.restorePrimary?.();
+        if (!this.isAlive()) throw new Error("Session is shutting down");
         const model = this.inner.model as Model<Api> | undefined;
         const level = requested === "auto"
           ? model ? resolveModelThinkingLevel(model, "auto",
@@ -1220,12 +1251,14 @@ export class AgentSessionWrapper {
       }
 
       case "steer": {
+        if (!this.isRunning() || this.modelFallbackState?.restorePromise) await this.modelFallbackState?.restorePrimary?.();
         const steerImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         await this.inner.steer(command.message as string, steerImages?.length ? steerImages : undefined);
         return null;
       }
 
       case "follow_up": {
+        if (!this.isRunning() || this.modelFallbackState?.restorePromise) await this.modelFallbackState?.restorePrimary?.();
         const followImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         await this.inner.followUp(command.message as string, followImages?.length ? followImages : undefined);
         return null;
@@ -2268,8 +2301,9 @@ async function setRpcSessionToolsGuarded(
     ? existing.sessionFile
     : undefined;
   const sessionCwd = existing.cwd;
-  const model = existing.inner.model;
-  const currentThinkingLevel = existing.inner.agent.state?.thinkingLevel;
+  const primary = existing.getPrimaryModel?.();
+  const model = primary ? { provider: primary.provider, id: primary.modelId } : existing.inner.model;
+  const currentThinkingLevel = primary?.thinkingLevel ?? existing.inner.agent.state?.thinkingLevel;
   const fallbackModel = existing.getFallbackModelConfiguration();
   await existing.shutdown();
 
@@ -2554,6 +2588,7 @@ async function startRpcSessionGuarded(
       configured: persistedFallbackModel !== undefined || requestedFallbackModel !== undefined,
       notice: readSessionModelFallbackNotice(sessionManager.getBranch().map((entry) => entry as unknown as SessionEntry)),
       cancelled: false,
+      pending: readSessionTemporaryFallback(sessionManager.getBranch() as unknown as SessionEntry[]),
       resolveModel: async () => undefined,
     };
     const modelFallbackExtension = modelFallbackState ? createModelFallbackExtension(modelFallbackState) : undefined;
@@ -2608,6 +2643,7 @@ async function startRpcSessionGuarded(
       services.settingsManager.getEnabledModels(),
     );
     if (modelFallbackState) {
+      modelFallbackState.resolvePrimaryModel = async (ref) => services.modelRuntime.getModel(ref.provider, ref.modelId);
       modelFallbackState.resolveModel = async (ref) => {
         const currentScope = await resolveVisibleModels(services.modelRuntime, services.settingsManager.getEnabledModels());
         return currentScope.visible.find((model) => model.provider === ref.provider && model.id === ref.modelId);
@@ -2664,6 +2700,25 @@ async function startRpcSessionGuarded(
     });
 
     if (modelFallbackState) {
+      const pending = modelFallbackState.pending;
+      if (pending) {
+        // Restore crash/reopen and pre-checkpoint legacy sessions before a
+        // wrapper can accept work. These SDK setters do not persist defaults.
+        try {
+          const primary = await modelFallbackState.resolvePrimaryModel?.(pending.primary);
+          if (!primary) throw new Error(`Configured primary model unavailable: ${pending.primary.provider}/${pending.primary.modelId}`);
+          sessionManager.appendCustomEntry(PRIMARY_MODEL_SNAPSHOT_TYPE, { version: 1, ...pending });
+          await inner.setModel(primary);
+          const modelDefault = pending.primary.thinkingLevel === undefined
+            ? await modelFallbackState.resolveDefaultThinkingLevel?.(pending.primary) : undefined;
+          inner.setThinkingLevel(resolveModelThinkingLevel(primary, pending.primary.thinkingLevel, modelDefault));
+          sessionManager.appendCustomEntry(PRIMARY_MODEL_SNAPSHOT_TYPE, { version: 1, primary: null });
+          modelFallbackState.pending = null;
+        } catch (error) {
+          inner.dispose();
+          throw error;
+        }
+      }
       inner.agent.streamFunction = observeModelFallbackErrors(inner.agent.streamFunction, modelFallbackState);
     }
 

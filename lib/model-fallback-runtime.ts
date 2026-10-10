@@ -15,6 +15,7 @@ import {
 } from "./model-fallback";
 import { MODEL_FALLBACK_EVENT_TYPE } from "./session-model-fallback";
 import { resolveModelThinkingLevel } from "./model-thinking-level";
+import { PRIMARY_MODEL_SNAPSHOT_TYPE, type TemporaryModelFallback } from "./session-primary-model";
 
 export interface ModelFallbackRuntimeState {
   selection: FallbackModelRef | null;
@@ -25,7 +26,13 @@ export interface ModelFallbackRuntimeState {
   resolveModel: (ref: FallbackModelRef) => Promise<Model<Api> | undefined>;
   /** Model-specific settings/scope pin only; never the primary session's level. */
   resolveDefaultThinkingLevel?: (ref: FallbackModelRef) => Promise<string | undefined>;
-  onSwitch?: (notice: ModelFallbackNotice, thinkingLevel?: string) => void;
+  /** Durable temporary-execution checkpoint; not the primary preference itself. */
+  pending?: TemporaryModelFallback | null;
+  resolvePrimaryModel?: (ref: FallbackModelRef) => Promise<Model<Api> | undefined>;
+  restorePrimary?: () => Promise<void>;
+  restorePromise?: Promise<void>;
+  restoreError?: string;
+  onSwitch?: (notice: ModelFallbackNotice, thinkingLevel?: string, primaryModel?: FallbackModelRef) => void;
 }
 
 type ProviderEvidence = {
@@ -152,6 +159,7 @@ function observeFetch(fetchImpl: typeof globalThis.fetch, state: ModelFallbackRu
  */
 export function observeModelFallbackErrors(streamFn: StreamFn, state: ModelFallbackRuntimeState): StreamFn {
   return async (model, context, options) => {
+    if (state.pending && state.restoreError) throw new Error(state.restoreError);
     const internal = internalFor(state);
     const request: ObservedRequest = {
       id: ++internal.requestSequence,
@@ -260,7 +268,47 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
     name: "pi-web-model-fallback",
     hidden: true,
     factory: (pi) => {
-      pi.on("before_agent_start", () => {
+      let originalModel: Model<Api> | undefined;
+      state.restorePrimary = () => {
+        if (state.restorePromise) return state.restorePromise;
+        const pending = state.pending;
+        if (!pending) return Promise.resolve();
+        const restoration = (async () => {
+          const model = originalModel && sameFallbackModel(pending.primary, refFromModel(originalModel))
+            ? originalModel
+            : await (state.resolvePrimaryModel ?? state.resolveModel)(pending.primary);
+          if (!model || !await pi.setModel(model)) {
+            throw new Error(`Unable to restore configured primary model: ${pending.primary.provider}/${pending.primary.modelId}`);
+          }
+          const modelDefault = pending.primary.thinkingLevel === undefined
+            ? await state.resolveDefaultThinkingLevel?.(pending.primary) : undefined;
+          pi.setThinkingLevel(resolveModelThinkingLevel(model, pending.primary.thinkingLevel, modelDefault));
+          // Clear only after both SDK mutations succeed. Failures retain the
+          // original checkpoint for reopen or the next explicit retry.
+          pi.appendEntry(PRIMARY_MODEL_SNAPSHOT_TYPE, { version: 1, primary: null });
+          state.pending = null;
+          state.restoreError = undefined;
+          originalModel = undefined;
+        })().catch((error: unknown) => {
+          state.restoreError = `Primary model restoration required: ${pending.primary.provider}/${pending.primary.modelId}`;
+          throw error;
+        });
+        state.restorePromise = restoration;
+        void restoration.finally(() => {
+          if (state.restorePromise === restoration) state.restorePromise = undefined;
+        }).catch(() => {});
+        return restoration;
+      };
+
+      pi.on("agent_settled", async () => {
+        // Never restore at agent_end: compaction, queued work and extension
+        // continuations can still belong to this same logical run. Stop also
+        // reaches this boundary; cancellation must not suppress restoration.
+        await state.restorePrimary?.();
+      });
+
+      pi.on("before_agent_start", async () => {
+        if (state.pending) await state.restorePrimary?.();
         const internal = internalFor(state);
         internal.failed = undefined;
         internal.observed = undefined;
@@ -304,6 +352,14 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
           const modelDefault = await state.resolveDefaultThinkingLevel?.(selection);
           const thinkingLevel = resolveModelThinkingLevel(target, selection.thinkingLevel, modelDefault);
           if (state.cancelled) return undefined;
+          const primaryModel: FallbackModelRef = { ...refFromModel(current), thinkingLevel: pi.getThinkingLevel() };
+          const checkpoint: TemporaryModelFallback = { primary: primaryModel, backup: refFromModel(target) };
+          // setModel persists a model_change and replaces thinking. Record the
+          // user's exact configuration BEFORE either mutation can happen.
+          pi.appendEntry(PRIMARY_MODEL_SNAPSHOT_TYPE, { version: 1, ...checkpoint });
+          state.pending = checkpoint;
+          originalModel = current;
+          internal.attempted = true;
           switched = await pi.setModel(target);
           if (!switched || state.cancelled) return undefined;
           // setModel has one active thinking state. Override its inherited/clamped
@@ -322,7 +378,7 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
         };
         internal.attempted = true;
         state.notice = notice;
-        state.onSwitch?.(notice, pi.getThinkingLevel());
+        state.onSwitch?.(notice, pi.getThinkingLevel(), state.pending?.primary);
         return {
           continue: true,
           entries: [

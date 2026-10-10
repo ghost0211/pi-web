@@ -67,6 +67,8 @@ interface Props {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   sessionStats?: SessionStatsInfo | null;
   model?: { provider: string; modelId: string } | null;
+  /** Execution model for context limits; may temporarily be the quota backup. */
+  contextModel?: { provider: string; modelId: string } | null;
   isAutoModelSelection?: boolean;
   modelNames?: Record<string, string>;
   modelList?: { id: string; name: string; provider: string; contextWindow?: number; maxTokens?: number; input?: string[] }[];
@@ -733,7 +735,7 @@ export function ContextUsageRing({
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching, fallbackModel, onFallbackModelChange, fallbackModelSwitching,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, contextModel, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching, fallbackModel, onFallbackModelChange, fallbackModelSwitching,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange, customToolNames, onCustomToolsChange, ephemeral, onEphemeralChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   fallbackThinkingLevel, onFallbackThinkingLevelChange, fallbackAvailableThinkingLevels, fallbackThinkingLevelMap,
@@ -2896,7 +2898,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 backdropFilter: "blur(10px)",
               } : null),
             }}>
-            <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={model} modelList={modelList} compactResult={compactResult} />
+            <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={contextModel ?? model} modelList={modelList} compactResult={compactResult} />
             {!isStreaming && onEphemeralChange && (
               <button
                 type="button"

@@ -21,7 +21,7 @@ A successful switch writes a bounded `pi-web:model-fallback-event` audit entry c
 
 ## Independent thinking levels
 
-The composer has separate primary/current-model and backup thinking controls. Each uses its own model's supported SDK levels and native `thinkingLevelMap` labels. The backup control is visible but disabled when no backup is selected; unknown capabilities, off-only models and busy/compacting sessions also disable editing. Changing a model closes its old menu, and an incompatible level returns to `auto` rather than carrying another model's level.
+The composer has one thinking button with primary/current-model and backup tabs in its popup. The toolbar summarizes the primary model's level; switching tabs only changes which preference is edited. Each tab uses its own model's supported SDK levels and native `thinkingLevelMap` labels. The backup tab is visible but disabled when no backup is selected; unknown capabilities and off-only models also disable their own tab. The shared button stays usable when either model can be edited, and busy/compacting sessions disable the whole control. Changing either model closes the old popup, and an incompatible level returns to `auto` rather than carrying another model's level.
 
 The optional backup `thinkingLevel` is stored together with its public model reference in the existing session configuration and fresh-composer preference:
 

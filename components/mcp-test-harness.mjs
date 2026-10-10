@@ -1,6 +1,8 @@
 // Minimal deterministic hook driver: no DOM dependency, effects and deferred fetches are explicit.
 import React from "react";
+let nextHarnessId = 0;
 export function componentHarness(Component, initialProps) {
+  const idPrefix = `harness-${nextHarnessId++}`;
   const slots = []; let cursor = 0; let pending = []; let props = initialProps;
   const context = { t: (key) => key };
   const hooks = {
@@ -11,6 +13,8 @@ export function componentHarness(Component, initialProps) {
       return [slots[index], (value) => { slots[index] = typeof value === "function" ? value(slots[index]) : value; }];
     },
     useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
+    useId() { const index = cursor++; return slots[index] ??= `${idPrefix}-${index}`; },
+    useLayoutEffect(callback, deps) { hooks.useEffect(callback, deps); },
     useMemo(callback, deps) {
       const index = cursor++; const old = slots[index];
       if (old && deps?.every((value, i) => Object.is(value, old.deps?.[i]))) return old.value;

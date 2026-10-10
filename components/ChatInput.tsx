@@ -2934,18 +2934,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 fallbackBusy={fallbackModelSwitching}
               />
             )}
-            {onThinkingLevelChange && (
+            {(onThinkingLevelChange || onFallbackThinkingLevelChange) && (
               <ThinkingLevelSelector
-                variant="primary" model={model} level={thinkingLevel}
+                model={model} level={thinkingLevel}
                 onChange={onThinkingLevelChange} availableLevels={availableThinkingLevels} levelMap={thinkingLevelMap}
-                disabled={isStreaming || isCompacting || modelSwitching || fallbackModelSwitching}
-                isMobile={isMobile} showLabel={!isMobile || controlsMenuOpen}
-              />
-            )}
-            {onFallbackThinkingLevelChange && (
-              <ThinkingLevelSelector
-                variant="fallback" model={fallbackModel} level={fallbackThinkingLevel}
-                onChange={onFallbackThinkingLevelChange} availableLevels={fallbackAvailableThinkingLevels} levelMap={fallbackThinkingLevelMap}
+                fallbackModel={fallbackModel} fallbackLevel={fallbackThinkingLevel}
+                onFallbackChange={onFallbackThinkingLevelChange} fallbackAvailableLevels={fallbackAvailableThinkingLevels} fallbackLevelMap={fallbackThinkingLevelMap}
                 disabled={isStreaming || isCompacting || modelSwitching || fallbackModelSwitching}
                 isMobile={isMobile} showLabel={!isMobile || controlsMenuOpen}
               />

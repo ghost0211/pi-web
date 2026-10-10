@@ -130,28 +130,35 @@ test("shows and locks the optimistic model while a switch is pending", () => {
   assert.match(html, /animation:spin 0\.8s linear infinite/);
 });
 
-test("renders independent main/backup thinking controls and grays out an unset backup", () => {
+test("renders one compact thinking entry wired to independent primary/backup tabs", () => {
   const render = (extra = {}) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(ChatInput, {
     onSend() {}, onAbort() {}, isStreaming: false,
     model: { provider: "main", modelId: "reasoner" }, thinkingLevel: "max", availableThinkingLevels: ["off", "max"],
     onThinkingLevelChange() {}, onFallbackThinkingLevelChange() {}, fallbackModel: null,
     ...extra,
   })));
-  const button = (html, label) => [...html.matchAll(/<button\b[^>]*>/g)].map((match) => match[0]).find((tag) => tag.includes(`aria-label="${label}"`));
+  const trigger = (html) => [...html.matchAll(/<button\b[^>]*>/g)].map((match) => match[0]).find((tag) => tag.includes('aria-label="Change reasoning level"'));
   const html = render();
-  const main = button(html, "Primary model thinking level");
-  const backup = button(html, "Fallback model thinking level");
-  assert.ok(main); assert.ok(backup);
-  assert.doesNotMatch(main, /disabled=""/);
-  assert.match(backup, /disabled=""/);
-  assert.match(backup, /opacity:0\.5/);
-  assert.match(backup, /Please select a fallback model first/);
+  assert.equal((html.match(/data-thinking-selector="combined"/g) ?? []).length, 1);
+  assert.ok(trigger(html));
+  assert.doesNotMatch(trigger(html), /disabled=""/);
+  assert.match(html, />Thinking: max<\/span>/);
+  assert.doesNotMatch(html, /aria-label="(?:Primary|Fallback) model thinking level"/);
+  assert.match(trigger(html), /Please select a fallback model first/);
 
   const configured = render({ fallbackModel: { provider: "backup", modelId: "other" }, fallbackThinkingLevel: "low", fallbackAvailableThinkingLevels: ["low", "high"], fallbackThinkingLevelMap: { low: "lite", high: "strong" } });
-  assert.doesNotMatch(button(configured, "Fallback model thinking level"), /disabled=""/);
-  assert.match(configured, /Backup: lite/);
-  const busy = render({ modelSwitching: true });
-  assert.match(button(busy, "Primary model thinking level"), /disabled=""/);
+  assert.equal((configured.match(/data-thinking-selector="combined"/g) ?? []).length, 1);
+  assert.doesNotMatch(trigger(configured), /disabled=""/);
+  assert.match(trigger(configured), /Fallback model thinking level: lite/);
+  assert.doesNotMatch(configured, />Backup: lite<\/span>/);
+  for (const busy of ["isStreaming", "isCompacting", "modelSwitching", "fallbackModelSwitching"]) {
+    assert.match(trigger(render({ [busy]: true })), /disabled=""/);
+  }
+  assert.equal(trigger(render({ onThinkingLevelChange: undefined, onFallbackThinkingLevelChange: undefined })), undefined);
+  assert.equal((source.match(/<ThinkingLevelSelector\b/g) ?? []).length, 1);
+  assert.match(source, /onFallbackChange=\{onFallbackThinkingLevelChange\}/);
+  assert.match(source, /fallbackAvailableLevels=\{fallbackAvailableThinkingLevels\}/);
+  assert.match(source, /fallbackLevelMap=\{fallbackThinkingLevelMap\}/);
 });
 
 test("filters model options by name, id, and provider", () => {

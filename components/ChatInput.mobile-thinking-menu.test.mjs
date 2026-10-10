@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-// The reasoning menus moved into the shared ThinkingLevelSelector so primary and
-// backup controls cannot drift apart. Mobile anchoring and label folding moved
-// with them; ChatInput still decides when the mobile label is visible.
+// One ThinkingLevelSelector popup hosts primary/backup tabs. Keep its mobile
+// anchoring and label folding; ChatInput decides when the mobile label is visible.
 const selectorSource = await readFile(new URL("./ThinkingLevelSelector.tsx", import.meta.url), "utf8");
 const chatInputSource = await readFile(new URL("./ChatInput.tsx", import.meta.url), "utf8");
 

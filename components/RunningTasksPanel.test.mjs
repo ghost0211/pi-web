@@ -6,7 +6,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { RunningTasksPanel, resolveRunningTaskPhase } = await jiti.import("./RunningTasksPanel.tsx");
+const { RunningTasksPanel, resolveRunningTaskPhase, resolveRunningStartedAt } = await jiti.import("./RunningTasksPanel.tsx");
 
 const source = await readFile(new URL("./RunningTasksPanel.tsx", import.meta.url), "utf8");
 const NOW = new Date("2026-01-01T00:10:00.000Z").getTime();
@@ -126,6 +126,47 @@ test("resolveRunningTaskPhase handles Map, record, and missing sources", () => {
   assert.equal(resolveRunningTaskPhase({ b: "streaming" }, "b"), "streaming");
   assert.equal(resolveRunningTaskPhase(undefined, "a"), null);
   assert.equal(resolveRunningTaskPhase(new Map(), "a"), null);
+});
+
+test("shows the current run rather than the session age and updates from the supplied clock", () => {
+  const props = {
+    sessions: [makeSession({ id: "s1" })], runningSessionIds: new Set(["s1"]),
+    runningSessionStartedAt: { s1: NOW - 65_000 },
+  };
+  assert.match(render(props), /This run 1m 05s/);
+  assert.match(render({ ...props, now: NOW + 1000 }), /This run 1m 06s/);
+  assert.match(render(props), /data-running-duration="s1"/);
+  assert.match(render(props), /aria-live="off"/);
+  assert.doesNotMatch(render({ ...props, runningSessionStartedAt: undefined }), /This run/);
+  assert.match(render({ ...props, runningSessionStartedAt: { s1: NOW + 1000 } }), /This run 0s/);
+});
+
+test("separate sessions/rounds use separate server starts, including reopening the same task", () => {
+  const sessions = [makeSession({ id: "s1" }), makeSession({ id: "s2" })];
+  const props = { sessions, runningSessionIds: new Set(["s1", "s2"]), runningSessionStartedAt: { s1: NOW - 2000, s2: NOW - 120_000 } };
+  assert.match(render(props), /This run 2s/);
+  assert.match(render(props), /This run 2m 00s/);
+  const reopened = render({ ...props, now: NOW + 10_000 });
+  assert.match(reopened, /This run 12s/);
+  const newRound = render({ ...props, runningSessionStartedAt: { s1: NOW - 1000 } });
+  assert.match(newRound, /This run 1s/);
+  assert.doesNotMatch(newRound, /This run 2m/);
+});
+
+test("missing or malformed timing never uses catalog timestamps as a fabricated start", () => {
+  for (const value of [undefined, null, "123", NaN, Infinity, -1, 0]) {
+    assert.equal(resolveRunningStartedAt({ s1: value }, "s1"), undefined);
+    assert.doesNotMatch(render({ sessions: [makeSession({ id: "s1" })], runningSessionIds: new Set(["s1"]), runningSessionStartedAt: { s1: value } }), /This run/);
+  }
+  assert.equal(resolveRunningStartedAt(undefined, "s1"), undefined);
+});
+
+test("shell/sidebar forwards the server timestamp instead of resetting on each poll", async () => {
+  const sidebar = await readFile(new URL("./SessionSidebar.tsx", import.meta.url), "utf8");
+  const shell = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
+  assert.match(sidebar, /setRunningSessionStartedAt\(data\.runningSessionStartedAt \?\? \{\}\)/);
+  assert.match(sidebar, /onRunningSessionIdsChange\?\.\(runningSessionIds, runningSessionPhases, runningSessionStartedAt\)/);
+  assert.match(shell, /runningSessionStartedAt=\{runningSessionStartedAt\}/);
 });
 
 test("wires clicks to the shell selection callback", () => {

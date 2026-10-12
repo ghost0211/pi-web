@@ -10,6 +10,9 @@ import type { WrittenFile } from "@/lib/turn-written-files";
 import { buildTurnOutcome } from "@/lib/turn-outcome";
 import { TurnOutcomeCard } from "./TurnOutcomeCard";
 import { getFileName } from "@/lib/file-paths";
+import { resolveEditAnchorEntryId } from "@/lib/edit-anchor";
+import { formatRunDuration, getGroupRunDuration } from "@/lib/run-duration";
+import { ProcessDetailsGroup } from "./ProcessDetailsGroup";
 import { normalizeThinkingLevelOption } from "@/lib/thinking-level-options";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
@@ -149,49 +152,6 @@ function withAssistantBlocks(
   return next;
 }
 
-function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = false, children, t }: { messageCount: number; toolCallCount: number; defaultExpanded?: boolean; children: ReactNode; t: (key: string, params?: Record<string, string | number>) => string }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const parts = [t("chat.processDetails"), `${messageCount} ${t(messageCount === 1 ? "chat.message" : "chat.messages")}`];
-  if (toolCallCount > 0) parts.push(`${toolCallCount} ${t(toolCallCount === 1 ? "chat.toolCall" : "chat.toolCalls")}`);
-
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          width: "auto",
-          minHeight: 24,
-          padding: "2px 0",
-          border: "none",
-          background: "transparent",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 12,
-          textAlign: "left",
-        }}
-        title={expanded ? t("chat.collapseProcess") : t("chat.expandProcess")}
-      >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>
-          <polyline points="4 2.5 7.5 6 4 9.5" />
-        </svg>
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {parts.join(" · ")}
-        </span>
-      </button>
-      {expanded && (
-        <div style={{ marginTop: 8 }}>
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function ChatWindow({ session, searchJump, sessionRunning, readOnly = false, archived = false, managementPending = false, archivedRestoring = false, onRestoreArchived, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onNewSession, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onCustomSystemPromptChange, onSystemPromptSaverChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onOpenGitDiff, onOpenSession, subagentSessions, runningSessionIds, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, recentProjects, onSelectCwd }: Props) {
   const { t, locale } = useI18n();
   const desktopShell = useIsDesktopApp();
@@ -252,6 +212,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, setNoticePaused,
     isAutoModelSelection,
+    autoAdvanceState, autoAdvanceBusy, handleStartAutoAdvance, handleStopAutoAdvance,
     agentPhase,
     isNew,
     showScrollToBottom,
@@ -652,6 +613,10 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       fallbackModel={fallbackModel}
       onFallbackModelChange={!isReadOnlyConversation && (session || isNew) ? handleFallbackModelChange : undefined}
       fallbackModelSwitching={fallbackModelSwitching}
+      autoAdvanceState={autoAdvanceState}
+      autoAdvanceBusy={autoAdvanceBusy}
+      onStartAutoAdvance={!isReadOnlyConversation && session ? handleStartAutoAdvance : undefined}
+      onStopAutoAdvance={session ? handleStopAutoAdvance : undefined}
       onCompact={!isReadOnlyConversation && (session || isNew) ? handleCompact : undefined}
       onAbortCompaction={isReadOnlyConversation ? undefined : handleAbortCompaction}
       isCompacting={isCompacting}
@@ -925,14 +890,10 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
 
               const renderMessage = (idx: number, options: { attachRef?: boolean; keyPrefix?: string; messageOverride?: AgentMessage; showTimestamp?: boolean; writtenFiles?: WrittenFile[]; parentFollowUp?: boolean; recoverTruncation?: boolean } = {}): ReactNode => {
                 const msg = options.messageOverride ?? messages[idx];
-                const prevAssistantEntryId =
-                  msg.role === "user" && idx > 0 && messages[idx - 1].role === "assistant"
-                    ? entryIds[idx - 1]
-                    : msg.role === "user" && idx === 0 && !hasEarlierMessages
-                      // "Edit from here" on the first message truncates the
-                      // branch to before it, i.e. navigates to its parent (#628).
-                      ? (firstEntryParentId ?? undefined)
-                      : undefined;
+                const editAnchorEntryId = resolveEditAnchorEntryId(messages, entryIds, idx, {
+                  hasEarlierMessages,
+                  firstEntryParentId,
+                });
                 const isVisible = msg.role === "user" || msg.role === "assistant";
                 const currentRefIdx = visibleRefIndexByMessage.get(idx);
                 const keyPrefix = options.keyPrefix ?? "message";
@@ -964,7 +925,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     onFork={isReadOnlyConversation || sessionBusy || isNew ? undefined : handleConversationFork}
                     forking={forkingEntryId === entryIds[idx]}
                     onNavigate={isReadOnlyConversation || sessionBusy ? undefined : handleConversationNavigate}
-                    prevAssistantEntryId={isReadOnlyConversation || sessionBusy ? undefined : prevAssistantEntryId}
+                    editAnchorEntryId={isReadOnlyConversation || sessionBusy ? undefined : editAnchorEntryId}
                     onEditContent={isReadOnlyConversation ? undefined : handleEditContent}
                     showTimestamp={showTimestamp}
                     prevTimestamp={idx > 0 ? (messages[idx - 1] as AgentMessage & { timestamp?: number }).timestamp : undefined}
@@ -993,7 +954,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
               for (const group of messageGroups) {
                 const { startIndex: userIdx, endIndex: endIdx, contentStartIndex } = group;
                 const finalAssistantIdx = findFinalAssistantIndex(messages, contentStartIndex - 1, endIdx);
-                const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length;
+                const runDuration = getGroupRunDuration(messages, contentStartIndex, endIdx);
+                const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length
+                  && (!runDuration || runDuration.estimated);
                 if (finalAssistantIdx === -1 || isLiveTail) {
                   let labeled = false;
                   for (let renderIdx = userIdx; renderIdx < endIdx; renderIdx++) {
@@ -1024,7 +987,10 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                   : null;
 
                 const processCount = visibleProcessIndices.length + (finalProcessMessage ? 1 : 0);
-                if (processCount > 0) {
+                const durationText = runDuration ? t(runDuration.estimated ? "chat.runDurationEstimated" : "chat.runDuration", {
+                  duration: formatRunDuration(runDuration.durationMs, locale),
+                }) : undefined;
+                if (processCount > 0 || durationText) {
                   const processRefIdx = visibleProcessIndices
                     .map((processIdx) => visibleRefIndexByMessage.get(processIdx))
                     .find((value): value is number => typeof value === "number")
@@ -1033,6 +999,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     <ProcessDetailsGroup
                       key={finalAnswerMessage ? "answered" : "unanswered"}
                       messageCount={processCount}
+                      durationText={durationText}
                       defaultExpanded={!finalAnswerMessage}
                       t={t}
                       toolCallCount={countToolCalls(messages, visibleProcessIndices) + countToolCallBlocks(finalSplit.processBlocks)}

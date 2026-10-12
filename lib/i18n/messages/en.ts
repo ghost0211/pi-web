@@ -1,4 +1,5 @@
 import type { LocalePlugin } from "../types";
+import { autoAdvanceMessagesEn } from "../../auto-advance-messages";
 import { sessionsManagerMessagesEn } from "../../session-management-messages";
 import { sessionSidebarMessagesEn } from "../../session-sidebar-messages";
 import { desktopTrayMessagesEn } from "../../desktop-tray-messages";
@@ -8,6 +9,7 @@ export const enLocale: LocalePlugin = {
   id: "en",
   label: "English",
   messages: {
+    ...autoAdvanceMessagesEn,
     ...sessionsManagerMessagesEn,
     ...sessionSidebarMessagesEn,
     ...desktopTrayMessagesEn,
@@ -524,6 +526,7 @@ export const enLocale: LocalePlugin = {
     "runningTasks.subagent": "Sub-agent",
     "runningTasks.started": "Session created {time}",
     "runningTasks.recent": "Last active {time}",
+    "runningTasks.elapsed": "This run {duration}",
     "runningTasks.phase.thinking": "Waiting for model…",
     "runningTasks.phase.streaming": "Responding…",
     "runningTasks.phase.command": "Running command…",
@@ -605,6 +608,8 @@ export const enLocale: LocalePlugin = {
     "chat.runningCommand": "Running command...",
     "chat.thinking": "Thinking...",
     "chat.processDetails": "Process details",
+    "chat.runDuration": "Run time {duration}",
+    "chat.runDurationEstimated": "Run time ~{duration}",
     "chat.message": "message",
     "chat.messages": "messages",
     "chat.toolCall": "tool call",

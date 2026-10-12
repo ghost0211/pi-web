@@ -1,4 +1,5 @@
 import type { LocalePlugin } from "../types";
+import { autoAdvanceMessagesZhCN } from "../../auto-advance-messages";
 import { sessionsManagerMessagesZhCN } from "../../session-management-messages";
 import { sessionSidebarMessagesZhCN } from "../../session-sidebar-messages";
 import { desktopTrayMessagesZhCN } from "../../desktop-tray-messages";
@@ -8,6 +9,7 @@ export const zhCNLocale: LocalePlugin = {
   id: "zh-CN",
   label: "简体中文",
   messages: {
+    ...autoAdvanceMessagesZhCN,
     ...sessionsManagerMessagesZhCN,
     ...sessionSidebarMessagesZhCN,
     ...desktopTrayMessagesZhCN,
@@ -534,6 +536,7 @@ export const zhCNLocale: LocalePlugin = {
     "runningTasks.subagent": "子代理",
     "runningTasks.started": "会话创建于{time}",
     "runningTasks.recent": "最近活动于{time}",
+    "runningTasks.elapsed": "本轮耗时 {duration}",
     "runningTasks.phase.thinking": "等待模型…",
     "runningTasks.phase.streaming": "正在回复…",
     "runningTasks.phase.command": "执行命令中…",
@@ -605,6 +608,8 @@ export const zhCNLocale: LocalePlugin = {
     "chat.runningCommand": "正在运行命令...",
     "chat.thinking": "正在思考...",
     "chat.processDetails": "处理详情",
+    "chat.runDuration": "本轮耗时 {duration}",
+    "chat.runDurationEstimated": "本轮耗时约 {duration}",
     "chat.message": "条消息",
     "chat.messages": "条消息",
     "chat.toolCall": "次工具调用",

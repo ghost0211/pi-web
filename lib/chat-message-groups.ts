@@ -8,11 +8,11 @@ export function isSubagentReport(message: Partial<AgentMessage>): boolean {
 
 export function isChatGroupAnchor(message: AgentMessage): boolean {
   return message.role === "user" || (message.role === "custom"
-    && (message.customType === "compaction" || isSubagentReport(message)));
+    && (message.customType === "compaction" || message.customType === "pi-web:auto-advance" || isSubagentReport(message)));
 }
 
 export interface ChatMessageGroup {
-  kind: "standalone" | "prompt" | "compaction" | "subagent-report";
+  kind: "standalone" | "prompt" | "compaction" | "subagent-report" | "auto-advance";
   startIndex: number;
   /** Exclusive end of this contiguous history segment. */
   endIndex: number;
@@ -34,9 +34,10 @@ export function buildChatMessageGroups(messages: readonly AgentMessage[]): ChatM
   for (let startIndex = 0; startIndex < messages.length;) {
     const anchor = messages[startIndex];
     const kind = anchor.role === "user" ? "prompt"
+      : anchor.role === "custom" && anchor.customType === "pi-web:auto-advance" ? "auto-advance"
       : isSubagentReport(anchor) ? "subagent-report"
       : isChatGroupAnchor(anchor) ? "compaction" : "standalone";
-    if (kind === "prompt") parentFollowUp = false;
+    if (kind === "prompt" || kind === "auto-advance") parentFollowUp = false;
     else if (kind === "subagent-report") parentFollowUp = true;
 
     let contentStartIndex = startIndex + (kind === "standalone" ? 0 : 1);
@@ -46,7 +47,17 @@ export function buildChatMessageGroups(messages: readonly AgentMessage[]): ChatM
       }
     }
     let endIndex = contentStartIndex;
-    while (endIndex < messages.length && !isChatGroupAnchor(messages[endIndex])) endIndex++;
+    let completedRun = false;
+    while (endIndex < messages.length && !isChatGroupAnchor(messages[endIndex])) {
+      const message = messages[endIndex];
+      // An autonomous SDK run can follow a completed answer without a new user
+      // prompt/report. Preserve that answer instead of folding it into the next
+      // run's process. Trailing tool results still belong to the completed run.
+      if (completedRun && message.role === "assistant") break;
+      if (message.role === "assistant" && message.runDurationMs !== undefined && Number.isFinite(message.runDurationMs)
+        && message.runDurationMs >= 0 && message.runDurationEstimated === false) completedRun = true;
+      endIndex++;
+    }
     groups.push({ kind, startIndex, endIndex, contentStartIndex, parentFollowUp });
     startIndex = endIndex;
   }

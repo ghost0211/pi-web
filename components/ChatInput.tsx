@@ -48,6 +48,8 @@ import { calculateContextUsageDisplay, resolveModelContextWindow } from "@/lib/c
 import { ModelSelector, type ModelSelectorOption } from "./ModelSelector";
 import { pickDesktopAttachmentPaths } from "@/lib/desktop";
 import { ThinkingLevelSelector } from "./ThinkingLevelSelector";
+import { AutoAdvanceControl } from "./AutoAdvanceControl";
+import type { AutoAdvanceConfig, AutoAdvanceState } from "@/lib/auto-advance-types";
 
 export { filterModelOptions } from "./ModelSelector";
 
@@ -80,6 +82,10 @@ interface Props {
   fallbackModel?: FallbackModelRef | null;
   onFallbackModelChange?: (model: FallbackModelRef | null) => void;
   fallbackModelSwitching?: boolean;
+  autoAdvanceState?: AutoAdvanceState | null;
+  autoAdvanceBusy?: boolean;
+  onStartAutoAdvance?: (config: AutoAdvanceConfig) => Promise<void>;
+  onStopAutoAdvance?: () => Promise<void>;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
@@ -736,6 +742,7 @@ export function ContextUsageRing({
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, contextModel, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching, fallbackModel, onFallbackModelChange, fallbackModelSwitching,
+  autoAdvanceState, autoAdvanceBusy, onStartAutoAdvance, onStopAutoAdvance,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange, customToolNames, onCustomToolsChange, ephemeral, onEphemeralChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   fallbackThinkingLevel, onFallbackThinkingLevelChange, fallbackAvailableThinkingLevels, fallbackThinkingLevelMap,
@@ -2947,6 +2954,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               />
             )}
 
+            {onStartAutoAdvance && onStopAutoAdvance && (
+              <AutoAdvanceControl
+                state={autoAdvanceState} models={modelOptions}
+                onStart={onStartAutoAdvance} onStop={onStopAutoAdvance}
+                busy={autoAdvanceBusy}
+                disabled={isCompacting || modelSwitching || fallbackModelSwitching}
+              />
+            )}
             {!isStreaming && onCompact && (
               <div>
                 <button

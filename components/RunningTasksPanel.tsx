@@ -1,6 +1,8 @@
 "use client";
 
 import { formatRelativeTime } from "@/lib/i18n/format";
+import { formatRunDuration } from "@/lib/run-duration";
+import { useLiveClock } from "@/hooks/useLiveClock";
 import type { Locale } from "@/lib/i18n/types";
 import type { SessionInfo } from "@/lib/types";
 
@@ -61,6 +63,8 @@ export interface RunningTasksPanelProps {
   runningSessionPhases?:
     | ReadonlyMap<string, RunningTaskPhase>
     | Readonly<Record<string, RunningTaskPhase>>;
+  /** Authoritative start of the current run, not session creation/last activity. */
+  runningSessionStartedAt?: Readonly<Record<string, number>>;
   /** Id of the session currently open in the shell, highlighted in the list. */
   selectedSessionId?: string | null;
   /** Jump to a running session. Wire to AppShell's `handleSelectSession`. */
@@ -94,9 +98,9 @@ function interpolate(template: string, params?: Record<string, string | number>)
   });
 }
 
-/** Default clock for relative timestamps; kept out of render for purity lint. */
-function resolveNow(now?: number): number {
-  return now ?? Date.now();
+export function resolveRunningStartedAt(source: Readonly<Record<string, number>> | undefined, id: string): number | undefined {
+  const startedAt = source?.[id];
+  return typeof startedAt === "number" && Number.isFinite(startedAt) && startedAt > 0 ? startedAt : undefined;
 }
 
 function sessionTitle(session: SessionInfo): string {
@@ -132,6 +136,7 @@ export function RunningTasksPanel({
   sessions,
   runningSessionIds,
   runningSessionPhases,
+  runningSessionStartedAt,
   selectedSessionId,
   onSelectSession,
   loading = false,
@@ -140,7 +145,8 @@ export function RunningTasksPanel({
   translate,
 }: RunningTasksPanelProps) {
   const activeLocale = locale ?? DEFAULT_LOCALE;
-  const nowMs = resolveNow(now);
+  const hasRunTiming = [...runningSessionIds].some(id => resolveRunningStartedAt(runningSessionStartedAt, id) !== undefined);
+  const nowMs = useLiveClock(hasRunTiming, now);
 
   const label = (
     key: string,
@@ -233,6 +239,8 @@ export function RunningTasksPanel({
             const phaseMeta = phase ? PHASE_META[phase] : null;
             const started = relativeText(session.created);
             const recent = relativeText(session.modified);
+            const runStartedAt = resolveRunningStartedAt(runningSessionStartedAt, session.id);
+            const elapsed = runStartedAt === undefined ? undefined : formatRunDuration(Math.max(0, nowMs - runStartedAt), activeLocale);
             const fullProjectPath = session.projectRoot ?? session.cwd ?? "";
 
             return (
@@ -333,6 +341,11 @@ export function RunningTasksPanel({
                       whiteSpace: "nowrap",
                     }}
                   >
+                    {elapsed !== undefined && (
+                      <span data-running-duration={session.id} aria-live="off" style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}>
+                        {label("runningTasks.elapsed", "This run {duration}", { duration: elapsed })}
+                      </span>
+                    )}
                     {started && (
                       <span>{label("runningTasks.started", "Started {time}", { time: started })}</span>
                     )}

@@ -96,7 +96,7 @@ test("hook keeps settlement cleanup separate from successful completion notifica
   assert.match(source, /aborted\?: boolean/);
   assert.match(settledSource, /if \(aborted\) promptCompletionRef\.current\.markAborted\(runId\)/);
   assert.match(settledSource, /settleUiStage\(\)/);
-  assert.match(settledSource, /wasRunning && !aborted && !promptCompletionRef\.current\.isAborted\(runId\)/);
+  assert.match(settledSource, /wasRunning && !aborted && event\.suppressCompletionNotification !== true && !isAutoAdvanceActive\(autoAdvanceRef\.current\) && !promptCompletionRef\.current\.isAborted\(runId\)/);
   assert.match(promptDoneSource, /event\.aborted === true/);
   assert.match(promptDoneSource, /promptCompletionRef\.current\.markAborted\(runId\)/);
   assert.match(promptDoneSource, /notifyPromptStage\(runId\)/);

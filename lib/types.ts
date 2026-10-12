@@ -81,6 +81,10 @@ export interface AssistantMessage {
   errorMessage?: string;
   timestamp?: number;
   usage?: AgentUsage;
+  /** UI-only logical-run duration; never sent back to the SDK/model context. */
+  runDurationMs?: number;
+  /** Legacy entry timestamps give an estimate rather than a monotonic measurement. */
+  runDurationEstimated?: boolean;
 }
 
 export interface ToolResultMessage {

@@ -123,7 +123,7 @@ interface Props {
   /** Fired when a session that is not currently selected finishes running.
    *  Lets the app play a cross-workspace completion tone. */
   onBackgroundTaskDone?: (sessionIds: string[]) => void;
-  onRunningSessionIdsChange?: (ids: Set<string>, phases: Record<string, RunningTaskPhase>) => void;
+  onRunningSessionIdsChange?: (ids: Set<string>, phases: Record<string, RunningTaskPhase>, startedAt: Record<string, number>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
   onToggleSidebar?: () => void;
 }
@@ -406,6 +406,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, [listMenuOpen]);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [runningSessionPhases, setRunningSessionPhases] = useState<Record<string, RunningTaskPhase>>({});
+  const [runningSessionStartedAt, setRunningSessionStartedAt] = useState<Record<string, number>>({});
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -554,6 +555,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         const data = await res.json() as {
           runningSessionIds?: string[];
           runningSessionPhases?: Record<string, RunningTaskPhase>;
+          runningSessionStartedAt?: Record<string, number>;
           completionNotificationSuppressedSessionIds?: string[];
         };
         if (stopped || controller !== current) return;
@@ -563,6 +565,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         );
         setRunningSessionIds(new Set(data.runningSessionIds ?? []));
         setRunningSessionPhases(data.runningSessionPhases ?? {});
+        setRunningSessionStartedAt(data.runningSessionStartedAt ?? {});
       } catch {
         // Keep the last known state; the next permitted poll retries.
       } finally {
@@ -592,8 +595,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   }, []);
 
   useEffect(() => {
-    onRunningSessionIdsChange?.(runningSessionIds, runningSessionPhases);
-  }, [onRunningSessionIdsChange, runningSessionIds, runningSessionPhases]);
+    onRunningSessionIdsChange?.(runningSessionIds, runningSessionPhases, runningSessionStartedAt);
+  }, [onRunningSessionIdsChange, runningSessionIds, runningSessionPhases, runningSessionStartedAt]);
 
   useEffect(() => {
     onSessionsChange?.(allSessions);

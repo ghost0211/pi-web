@@ -191,7 +191,8 @@ interface Props {
   onFork?: (entryId: string) => void;
   forking?: boolean;
   onNavigate?: (entryId: string) => void;
-  prevAssistantEntryId?: string;
+  /** Entry that "Edit from here" truncates to: the parent of this prompt. */
+  editAnchorEntryId?: string;
   onEditContent?: (message: UserMessage) => void;
   showTimestamp?: boolean;
   prevTimestamp?: number;
@@ -254,9 +255,9 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSession, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, writtenFiles, onCompact, isCompacting, compactError }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSession, entryId, onFork, forking, onNavigate, editAnchorEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, writtenFiles, onCompact, isCompacting, compactError }: Props) {
   if (message.role === "user") {
-    return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} sessionId={sessionId} />;
+    return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} editAnchorEntryId={editAnchorEntryId} onEditContent={onEditContent} sessionId={sessionId} />;
   }
   if (message.role === "assistant") {
     return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} writtenFiles={writtenFiles} onCompact={onCompact} isCompacting={isCompacting} compactError={compactError} />;
@@ -291,7 +292,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.onFork === next.onFork
     && prev.forking === next.forking
     && prev.onNavigate === next.onNavigate
-    && prev.prevAssistantEntryId === next.prevAssistantEntryId
+    && prev.editAnchorEntryId === next.editAnchorEntryId
     && prev.onEditContent === next.onEditContent
     && prev.showTimestamp === next.showTimestamp
     && prev.prevTimestamp === next.prevTimestamp
@@ -301,7 +302,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.compactError === next.compactError;
 });
 
-function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, sessionId }: {
+function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, editAnchorEntryId, onEditContent, sessionId }: {
   message: UserMessage;
   cwd?: string;
   onOpenFile?: (filePath: string) => void;
@@ -309,7 +310,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
   onFork?: (entryId: string) => void;
   forking?: boolean;
   onNavigate?: (entryId: string) => void;
-  prevAssistantEntryId?: string;
+  editAnchorEntryId?: string;
   onEditContent?: (message: UserMessage) => void;
   sessionId?: string;
 }) {
@@ -376,7 +377,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
       })}
     </div>
   );
-  const canNavigate = !!prevAssistantEntryId && !!onNavigate;
+  const canNavigate = !!editAnchorEntryId && !!onNavigate;
   const hasTextBubble = Boolean(content) || imageBlocks.length === 0;
 
   const copyContent = () => {
@@ -528,7 +529,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             }}>
               {canNavigate && (
                 <button
-                  onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(editTarget); }}
+                  onClick={() => { onNavigate!(editAnchorEntryId!); onEditContent?.(editTarget); }}
                    title={t("i18n.editFromHereTitle")}
                   style={{
                     display: "flex", alignItems: "center", gap: 4,
@@ -1663,7 +1664,7 @@ function CustomMessageView({ message, cwd, onOpenFile, sessionId }: { message: C
   const images = getMessageImages(message.content);
   const hasDetails = message.details !== undefined;
   const detailsText = hasDetails ? safeJson(message.details) : "";
-  const title = formatCustomType(message.customType);
+  const title = message.customType === "pi-web:auto-advance" ? t("autoAdvance.surrogateMessage") : formatCustomType(message.customType);
   const time = formatTime(message.timestamp);
 
   const copyContent = () => {

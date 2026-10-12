@@ -76,6 +76,11 @@ import { calculateActiveContextTokens } from "./context-tokens";
 import { createPiBuiltinExtensions } from "./pi-builtin-extensions";
 import { BUILTIN_TOOL_NAMES } from "./tool-presets";
 import { McpWebRuntime, McpRuntimeError, type McpAction, type McpWebEvent, type McpRuntimeStatus } from "./mcp-web-runtime";
+import { RunTimingRuntime } from "./run-timing-runtime";
+import { AutoAdvanceController, validateAutoAdvanceConfig } from "./auto-advance-controller";
+import { AUTO_ADVANCE_MESSAGE_TYPE, autoAdvanceInstruction, autoAdvanceUsageTokens, evaluateAutoAdvance, resolveAutoAdvanceModel } from "./auto-advance-model";
+import type { AutoAdvanceConfig } from "./auto-advance-types";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 // ============================================================================
 // Types
@@ -94,7 +99,7 @@ type PendingUiResponse = {
   cancel: () => void;
 };
 
-type PendingPromptCompletion = { aborted: boolean; token?: string };
+type PendingPromptCompletion = { aborted: boolean; token?: string; suppressCompletionNotification?: boolean };
 
 type CustomUiComponent = {
   render: (width: number) => string[];
@@ -342,6 +347,7 @@ export class AgentSessionWrapper {
   private mcpActionPending = false;
   private sessionReplacement: "fork" | "clone" | null = null;
   private agentRunNeedsCompletion = false;
+  private agentRunSuppressCompletion = false;
   private lastAgentRunAborted: boolean | undefined;
   private pendingPromptCompletions = new Set<PendingPromptCompletion>();
   private promptAdmissionTail: Promise<void> = Promise.resolve();
@@ -355,6 +361,10 @@ export class AgentSessionWrapper {
   private readonly suppressCompletionNotifications: boolean;
   private readonly mcpRuntime?: McpWebRuntime;
   private readonly modelFallbackState?: ModelFallbackRuntimeState;
+  private readonly runTimingRuntime: RunTimingRuntime;
+  private readonly autoAdvance: AutoAdvanceController;
+  private autoAdvanceRunPending = false;
+  private autoAdvanceStartGeneration = 0;
   private unsubscribe: (() => void) | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private onDestroyCallback: (() => void) | null = null;
@@ -382,6 +392,46 @@ export class AgentSessionWrapper {
     this.suppressCompletionNotifications = options.suppressCompletionNotifications ?? false;
     this.mcpRuntime = options.mcpRuntime;
     this.modelFallbackState = options.modelFallbackState;
+    this.runTimingRuntime = new RunTimingRuntime({
+      getSessionManager: () => this.inner.sessionManager,
+      isDestroyed: () => !this._alive || this.sdkDisposed,
+    });
+    this.autoAdvance = new AutoAdvanceController({
+      isIdle: () => this.isAlive() && !this.isAgentWorkRunning() && this.activeMutatingCommands === 0,
+      evaluate: async (config, signal, remainingTokens) => {
+        this.assertAutoAdvanceAllowed();
+        const branchId = this.inner.sessionManager.getLeafId();
+        const result = await evaluateAutoAdvance(this.inner.modelRuntime as ModelRuntime,
+          this.inner.settingsManager.getEnabledModels(), config, this.inner.messages ?? [], signal, remainingTokens);
+        if (this.inner.sessionManager.getLeafId() !== branchId || this.isAgentWorkRunning()) {
+          throw new Error("Conversation changed during surrogate evaluation");
+        }
+        this.assertAutoAdvanceAllowed();
+        return result;
+      },
+      advance: (config, instruction, signal) => this.runAutoAdvance(config, instruction, signal),
+      abortOwnedRun: async () => {
+        if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
+        await this.inner.abort();
+      },
+      onState: state => {
+        if (this._alive) this.emit({ type: "auto_advance_status", state });
+        this.resetIdleTimer();
+      },
+      onTerminal: state => {
+        // Every terminal transition is observable; only outcomes that need the
+        // user's attention ring a completion notification. Takeover/config
+        // changes stay silent so they cannot look like a finished task.
+        const notify = ["goal_complete", "needs_user", "no_progress", "round_limit", "time_limit", "token_limit", "run_error", "extension_ui"].includes(state.reason ?? "");
+        this.emit({ type: "auto_advance_finished", state, notify });
+        if (notify && !this.suppressCompletionNotifications) {
+          try { this.onAgentRunComplete?.(this.sessionId); }
+          catch (error) { console.error("[pi-web] auto advance completion listener failed:", error instanceof Error ? error.message : error); }
+        }
+        // Per-round settlements must not replay the final notification.
+        this.agentRunNeedsCompletion = false;
+      },
+    });
     if (this.modelFallbackState) {
       this.modelFallbackState.onSwitch = (notice, thinkingLevel, primaryModel) => {
         if (!this._alive) return;
@@ -421,8 +471,60 @@ export class AgentSessionWrapper {
     return !this.isAlive() && !this.sdkDisposed;
   }
 
+  private isAgentWorkRunning(): boolean {
+    return this.pendingPromptCount > 0 || this.autoAdvanceRunPending || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning || Boolean(this.modelFallbackState?.restorePromise);
+  }
+
   isRunning(): boolean {
-    return this._alive && (this.pendingPromptCount > 0 || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning || Boolean(this.modelFallbackState?.restorePromise));
+    return this._alive && (this.isAgentWorkRunning() || this.autoAdvance.isActive());
+  }
+
+  /** Manual/archival changes cancel future advancement without aborting the current main run. */
+  pauseAutoAdvance(reason: string): void {
+    this.autoAdvanceStartGeneration++;
+    this.autoAdvance.pause(reason);
+  }
+
+  private assertAutoAdvanceAllowed(): void {
+    if (!this.isAlive()) throw new Error("Session is shutting down");
+    if (this.suppressCompletionNotifications || readSubagentRun(this.inner.sessionManager.getEntries() as unknown as SessionEntry[], this.sessionId, this.sessionFile)) {
+      throw new Error("Auto advance is unavailable in observational/subagent sessions");
+    }
+    if (this.pendingUiRequests.size > 0) throw new Error("Resolve the extension dialog before auto advance");
+  }
+
+  private async runAutoAdvance(config: AutoAdvanceConfig, instruction: string, signal: AbortSignal): Promise<void> {
+    await withSessionMutationGuard(this.sessionId, async () => {
+      signal.throwIfAborted();
+      this.assertAutoAdvanceAllowed();
+      if (this.isAgentWorkRunning() || this.activeMutatingCommands > 0 || this.sessionReplacement || this.mcpActionPending) throw new Error("Session operation is still running");
+      this.activeMutatingCommands++;
+      this.autoAdvanceRunPending = true;
+      const timing = this.runTimingRuntime.beginPromptRun();
+      try {
+        await this.modelFallbackState?.restorePrimary?.();
+        signal.throwIfAborted();
+        this.assertAutoAdvanceAllowed();
+        const state = this.autoAdvance.getState();
+        await this.inner.sendCustomMessage({
+          customType: AUTO_ADVANCE_MESSAGE_TYPE,
+          content: autoAdvanceInstruction(config, instruction, state?.round ?? 1),
+          display: true,
+          details: { version: 1, controllerId: state?.id, round: state?.round, model: config.model },
+        }, { triggerTurn: true });
+      } finally {
+        this.runTimingRuntime.fallbackPromptFinish(timing, { isStreaming: this.inner.isStreaming, aborted: signal.aborted });
+        this.autoAdvanceRunPending = false;
+        this.activeMutatingCommands = Math.max(0, this.activeMutatingCommands - 1);
+        invalidateSessionListCache();
+        this.resetIdleTimer();
+      }
+    });
+  }
+
+  getRunningStartedAt(): number | null {
+    if (!this.isRunning()) return null;
+    return this.runTimingRuntime.getRunningStartedAt();
   }
 
   /**
@@ -499,6 +601,7 @@ export class AgentSessionWrapper {
   }
 
   async runMcpAction(action: McpAction, name: string, signal: AbortSignal, emit: (event: McpWebEvent) => void): Promise<boolean> {
+    this.pauseAutoAdvance("configuration_changed");
     this.assertMcpActionAvailable();
     this.mcpActionPending = true;
     this.activeMutatingCommands += 1;
@@ -518,10 +621,23 @@ export class AgentSessionWrapper {
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       if (event.type === "agent_start") {
+        this.agentRunSuppressCompletion = this.autoAdvance.isActive() || this.autoAdvanceRunPending;
+        this.runTimingRuntime.onAgentStart();
         this.agentRunNeedsCompletion = true;
         this.lastAgentRunAborted = undefined;
       }
+      const suppressCompletionNotification = this.agentRunSuppressCompletion || this.autoAdvance.isActive() || this.autoAdvanceRunPending;
+      if (event.type === "message_end" && this.autoAdvance.isActive()) {
+        const message = event.message as { role?: string; usage?: Parameters<typeof autoAdvanceUsageTokens>[0] } | undefined;
+        if (message?.role === "assistant" || (message?.role === "toolResult" && message.usage)) {
+          try { this.autoAdvance.addTokens(autoAdvanceUsageTokens(message.usage)); }
+          catch (error) { this.autoAdvance.pause("run_error", error instanceof Error ? error.message : String(error)); }
+        }
+      }
       if (event.type === "agent_settled") {
+        this.autoAdvance.onSettled({ aborted: event.aborted === true,
+          error: (this.inner.messages?.at(-1) as { stopReason?: string } | undefined)?.stopReason === "error" });
+        this.runTimingRuntime.onAgentSettled(event as { aborted?: boolean });
         this.lastAgentRunAborted = event.aborted === true;
         if (this.lastAgentRunAborted) {
           // Settlement and UI cleanup still happen, but a cancelled logical run
@@ -531,6 +647,7 @@ export class AgentSessionWrapper {
         }
       }
       if (event.type === "agent_end") {
+        this.runTimingRuntime.onAgentEnd();
         invalidateSessionListCache();
       }
       const toolCallId = event.toolCallId;
@@ -545,16 +662,17 @@ export class AgentSessionWrapper {
       const promptToken = (event.type === "agent_start" || event.type === "agent_settled")
         ? [...this.pendingPromptCompletions].find((prompt) => prompt.token)?.token
         : undefined;
-      this.emit(promptToken ? { ...event, promptToken } : event);
+      this.emit({ ...event, ...(promptToken ? { promptToken } : {}),
+        ...(["agent_start", "agent_settled"].includes(event.type) ? { suppressCompletionNotification } : {}) });
       if (event.type === "agent_settled") this.notifyAgentRunCompleteIfIdle();
     });
     this.resetIdleTimer();
   }
 
   private notifyAgentRunCompleteIfIdle(): void {
-    if (!this.agentRunNeedsCompletion || this.isRunning()) return;
+    if (!this.agentRunNeedsCompletion || this.isRunning() || this.autoAdvanceRunPending) return;
     this.agentRunNeedsCompletion = false;
-    if (this.suppressCompletionNotifications) return;
+    if (this.suppressCompletionNotifications || this.agentRunSuppressCompletion) return;
     try {
       this.onAgentRunComplete?.(this.sessionId);
     } catch (error) {
@@ -683,6 +801,9 @@ export class AgentSessionWrapper {
   }
 
   private emit(event: AgentEvent): void {
+    if (event.type === "extension_ui_request" && ["select", "confirm", "input", "editor", "custom"].includes(event.method as string) && !event.closed) {
+      this.autoAdvance.pause("extension_ui");
+    }
     for (const listener of this.listeners) {
       try {
         listener(event);
@@ -753,6 +874,8 @@ export class AgentSessionWrapper {
     this.listeners.add(listener);
     for (const event of this.pendingUiRequests.values()) listener(event);
     for (const event of this.activeToolEvents.values()) listener(event);
+    const autoAdvanceState = this.autoAdvance.getState();
+    if (autoAdvanceState) listener({ type: "auto_advance_status", state: autoAdvanceState });
     return () => {
       this.listeners.delete(listener);
     };
@@ -806,11 +929,19 @@ export class AgentSessionWrapper {
   async send(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
     if (SESSION_READ_ONLY_COMMAND_TYPES.has(type)) return this.sendWithoutDeletionGuard(command);
+    if (!["start_auto_advance", "stop_auto_advance", "extension_ui_response", "extension_ui_input"].includes(type)) {
+      this.pauseAutoAdvance(type === "abort" ? "user_stop" : ["prompt", "steer", "follow_up"].includes(type) ? "manual_takeover" : "configuration_changed");
+    }
+    if (type === "stop_auto_advance") {
+      this.autoAdvanceStartGeneration++;
+      this.autoAdvance.stop("user_stop");
+    }
     return withSessionMutationGuard(this.sessionId, () => this.sendWithoutDeletionGuard(command));
   }
 
   private async sendWithoutDeletionGuard(command: Record<string, unknown>): Promise<unknown> {
     const type = command.type as string;
+    const autoAdvanceStartGeneration = type === "start_auto_advance" ? ++this.autoAdvanceStartGeneration : null;
     const allowedDuringReplacement = COMMANDS_ALLOWED_DURING_SESSION_REPLACEMENT.has(type);
     if (this.mcpActionPending && !allowedDuringReplacement && type !== "abort") {
       throw new McpRuntimeError("An MCP management action is running; finish or cancel it first");
@@ -842,6 +973,21 @@ export class AgentSessionWrapper {
       }
 
       switch (type) {
+      case "start_auto_advance": {
+        this.assertAutoAdvanceAllowed();
+        const config = validateAutoAdvanceConfig(command.config);
+        if (this.autoAdvance.isActive()) throw new Error("Auto advance is already active");
+        if (this.inner.isBashRunning || this.inner.isCompacting || this.activeMutatingCommands > 1) throw new Error("Wait for the session operation to finish");
+        await resolveAutoAdvanceModel(this.inner.modelRuntime as ModelRuntime, this.inner.settingsManager.getEnabledModels(), config);
+        this.assertAutoAdvanceAllowed();
+        if (this.activeMutatingCommands > 1 || autoAdvanceStartGeneration !== this.autoAdvanceStartGeneration) throw new Error("Session operation changed while starting auto advance");
+        for (const prompt of this.pendingPromptCompletions) prompt.suppressCompletionNotification = true;
+        if (this.inner.isStreaming || this.pendingPromptCount > 0) this.agentRunSuppressCompletion = true;
+        return this.autoAdvance.start(config);
+      }
+      case "stop_auto_advance":
+        this.autoAdvance.stop("user_stop");
+        return this.autoAdvance.getState();
       case "prompt": {
         // Serialize only admission. Once the preceding prompt has either
         // passed or failed preflight, the SDK can atomically decide whether
@@ -856,6 +1002,9 @@ export class AgentSessionWrapper {
           if (!this.isAlive()) throw new Error("Session is shutting down");
           const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
           const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
+          // Queued submissions join the active run; only an idle SDK prompt
+          // owns a new start (including its preflight/compaction work).
+          const promptRun = !this.inner.isStreaming ? this.runTimingRuntime.beginPromptRun() : null;
           let preflightAccepted = false;
           let preflightSettled = false;
           let promptSettled = false;
@@ -886,6 +1035,7 @@ export class AgentSessionWrapper {
             rejectPreflight = (error) => {
               if (preflightSettled) return;
               preflightSettled = true;
+              if (promptRun) this.runTimingRuntime.discardPromptRun(promptRun);
               reject(error);
             };
           });
@@ -894,8 +1044,15 @@ export class AgentSessionWrapper {
             promptSettled = true;
             this.pendingPromptCompletions.delete(promptCompletion);
             this.pendingPromptCount = Math.max(0, this.pendingPromptCount - 1);
+            if (promptRun) {
+              this.runTimingRuntime.fallbackPromptFinish(promptRun, {
+                isStreaming: this.inner.isStreaming,
+                aborted: promptCompletion.aborted,
+              });
+            }
             this.resetIdleTimer();
             this.notifyAgentRunCompleteIfIdle();
+            this.autoAdvance.onIdle();
           };
 
           this.pendingPromptCount += 1;
@@ -913,6 +1070,7 @@ export class AgentSessionWrapper {
               },
             });
           } catch (error) {
+            if (promptRun) this.runTimingRuntime.discardPromptRun(promptRun);
             finishPrompt();
             throw error;
           }
@@ -924,6 +1082,7 @@ export class AgentSessionWrapper {
             finishPrompt();
             if (!streamingBehavior) this.emit({
               type: "prompt_done",
+              ...(promptCompletion.suppressCompletionNotification || this.autoAdvance.isActive() ? { suppressCompletionNotification: true } : {}),
               aborted: promptCompletion.aborted,
               ...(promptCompletion.token ? { promptToken: promptCompletion.token } : {}),
             });
@@ -940,6 +1099,7 @@ export class AgentSessionWrapper {
               });
               if (!streamingBehavior) this.emit({
                 type: "prompt_done",
+                ...(promptCompletion.suppressCompletionNotification || this.autoAdvance.isActive() ? { suppressCompletionNotification: true } : {}),
                 aborted: promptCompletion.aborted,
                 ...(promptCompletion.token ? { promptToken: promptCompletion.token } : {}),
               });
@@ -1005,6 +1165,9 @@ export class AgentSessionWrapper {
           },
           // Last logical agent settlement; optional for older frontend builds.
           aborted: this.lastAgentRunAborted,
+          runStartedAt: this.getRunningStartedAt(),
+          autoAdvance: this.autoAdvance.getState(),
+          suppressCompletionNotification: this.agentRunSuppressCompletion,
           contextUsage: contextUsage
             ? { percent: contextUsage.percent, contextWindow: contextUsage.contextWindow, tokens: contextUsage.tokens }
             : null,
@@ -1386,10 +1549,14 @@ export class AgentSessionWrapper {
       }
     } finally {
       if (tracksMutation) this.activeMutatingCommands = Math.max(0, this.activeMutatingCommands - 1);
+      this.autoAdvance.onIdle();
     }
   }
 
   destroy(): void {
+    this.autoAdvanceStartGeneration++;
+    this.autoAdvance.destroy();
+    this.runTimingRuntime.destroy();
     if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
     this.mcpRuntime?.cancel();
     if (!this._alive) return;
@@ -1446,6 +1613,7 @@ export class AgentSessionWrapper {
   }
 
   async shutdown(): Promise<void> {
+    this.autoAdvance.destroy();
     if (this.modelFallbackState) this.modelFallbackState.cancelled = true;
     this.mcpRuntime?.cancel();
     if (this.shutdownPromise) return this.shutdownPromise;
@@ -2280,6 +2448,7 @@ async function setRpcSessionToolsGuarded(
     return { session: started.session, sessionId: started.realSessionId, recreated: false };
   }
 
+  existing.pauseAutoAdvance?.("configuration_changed");
   if (existing.isRunning() || existing.hasMcpActionInProgress?.()) throw new Error("Cannot change tools while the session is running or an MCP action is pending");
   if (readSubagentSessionResources(existing.inner.sessionManager.getEntries() as unknown as SessionEntry[])) {
     throw new Error("Subagent tool selection is fixed by its profile");
@@ -2457,6 +2626,18 @@ export function getRunningRpcSessionPhases(): Record<string, RunningRpcSessionPh
     if (phase) phases[session.sessionId || sessionId] = phase;
   }
   return phases;
+}
+
+export function getRunningRpcSessionStartedAt(): Record<string, number> {
+  const startedAt: Record<string, number> = {};
+  for (const [sessionId, session] of getRegistry()) {
+    // A hot-reloaded registry may still contain wrappers from an older module.
+    const time = session.getRunningStartedAt?.();
+    if (typeof time === "number" && Number.isFinite(time)) {
+      startedAt[session.sessionId || sessionId] = time;
+    }
+  }
+  return startedAt;
 }
 
 /**

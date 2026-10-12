@@ -465,3 +465,18 @@ test("leaves remote image URLs unproxied in MessageView assistant text", () => {
   assert.doesNotMatch(remoteHtml, /\/api\/files/);
   assert.doesNotMatch(remoteHtml, /sessionId=/);
 });
+
+test("shows Edit from here only when an anchor entry is available", () => {
+  const message = { role: "user", content: "retry this prompt", timestamp: Date.now() };
+  const anchored = renderMessage(message, {
+    entryId: "e-user",
+    editAnchorEntryId: "e-parent",
+    onNavigate: () => {},
+    onEditContent: () => {},
+    onFork: () => {},
+  });
+  assert.match(anchored, /Edit from here/);
+  // The button must target the resolved parent entry, not the prompt itself.
+  const unanchored = renderMessage(message, { entryId: "e-user", onNavigate: () => {}, onEditContent: () => {} });
+  assert.doesNotMatch(unanchored, /Edit from here/);
+});

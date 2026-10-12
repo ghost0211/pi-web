@@ -23,6 +23,7 @@ import { clearDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-stor
 import { getPreferredToolSelection, setPreferredToolSelection } from "@/lib/tool-preset-preference";
 import { getFallbackModelPreference, setFallbackModelPreference } from "@/lib/fallback-model-preference";
 import { parseFallbackModel, parseModelFallbackNotice, type FallbackModelRef, type ModelFallbackNotice } from "@/lib/model-fallback";
+import { isAutoAdvanceActive, type AutoAdvanceConfig, type AutoAdvanceState } from "@/lib/auto-advance-types";
 import { normalizeThinkingLevelOption, type ThinkingLevelOption } from "@/lib/thinking-level-options";
 import { getToolNamesForPreset, matchToolPresetOrCustom, PRESET_DEFAULT, type ToolEntry, type ToolPreset, type ToolPresetSelection } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
@@ -96,6 +97,10 @@ type AgentStateResponse = {
   thinkingLevel?: string;
   isStreaming?: boolean;
   isPromptRunning?: boolean;
+  /** Server-owned current logical-run start; the running board uses its snapshot. */
+  runStartedAt?: number | null;
+  autoAdvance?: AutoAdvanceState | null;
+  suppressCompletionNotification?: boolean;
   isBashRunning?: boolean;
   isCompacting?: boolean;
   /** Most recent agent settlement, used when SSE terminal events were missed. */
@@ -345,6 +350,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
   const [fallbackModel, setFallbackModelState] = useState<FallbackModelRef | null>(null);
   const [fallbackModelSwitching, setFallbackModelSwitching] = useState(false);
+  const [autoAdvanceState, setAutoAdvanceState] = useState<AutoAdvanceState | null>(null);
+  const autoAdvanceRef = useRef<AutoAdvanceState | null>(null);
+  const autoAdvanceSuppressCompletionRef = useRef(false);
+  const [autoAdvanceBusy, setAutoAdvanceBusy] = useState(false);
+  const autoAdvanceCommandPendingRef = useRef(false);
+  const autoAdvanceNotifiedRef = useRef(new Set<string>());
+  const applyAutoAdvanceState = useCallback((state: AutoAdvanceState | null) => {
+    const previous = autoAdvanceRef.current;
+    if (state && previous && (state.startedAt < previous.startedAt
+      || (state.id === previous.id && state.revision < previous.revision))) return;
+    autoAdvanceRef.current = state;
+    setAutoAdvanceState(state);
+  }, []);
   const [toolPreset, setToolPreset] = useState<ToolPresetSelection>("default");
   // Builtin tool names backing the "custom" selection; defaults to the
   // standard set so opening the picker for the first time shows those checked.
@@ -467,6 +485,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         && sessionIdRef.current === sid
         && (
           agentRunningRef.current
+          || isAutoAdvanceActive(autoAdvanceRef.current)
           || eventStreamGraceActiveRef.current
           || (sessionPropIdRef.current === sid && sessionRunningRef.current)
         )
@@ -699,6 +718,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const applyAgentStateMetadata = useCallback((state: AgentStateResponse | undefined, announce = false, requestId?: number) => {
     if (!state || (requestId !== undefined && requestId <= contextUsageAppliedIdRef.current)) return;
+    if (state.autoAdvance !== undefined) applyAutoAdvanceState(state.autoAdvance);
+    if (state.suppressCompletionNotification !== undefined) autoAdvanceSuppressCompletionRef.current = state.suppressCompletionNotification;
     const actual = parseRuntimeModel(state.model);
     if (!modelSwitchPendingRef.current) {
       if (actual) applyRuntimeModel(actual);
@@ -724,7 +745,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         && (!primary || (primary.provider === notice.from.provider && primary.modelId === notice.from.modelId)));
       applyFallbackNotice(state.fallbackNotice, announce && activeFallback && fallbackNoticeAnnouncementRef.current.initialized, !activeFallback);
     }
-  }, [applyRuntimeModel, applyPrimaryModelSelection, applyPrimaryThinkingLevel, applyFallbackModelSelection, applyFallbackNotice]);
+  }, [applyRuntimeModel, applyPrimaryModelSelection, applyPrimaryThinkingLevel, applyFallbackModelSelection, applyFallbackNotice, applyAutoAdvanceState]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, options?: { force?: boolean }) => {
     let messagesLoaded = false;
@@ -1211,7 +1232,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const notifyPromptStage = useCallback((runId: number) => {
     if (!promptCompletionRef.current.notify(runId)) return false;
-    onAgentEnd?.();
+    if (!isAutoAdvanceActive(autoAdvanceRef.current) && !autoAdvanceSuppressCompletionRef.current) onAgentEnd?.();
     return true;
   }, [onAgentEnd]);
 
@@ -1251,6 +1272,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           return;
         }
 
+        if (isAutoAdvanceActive(state?.autoAdvance)) {
+          eventStreamGraceTimerRef.current = setTimeout(() => void checkServerIdle(), PROMPT_SETTLE_POLL_MS);
+          return;
+        }
         if (data.running && state?.isCompacting) {
           setIsCompacting(true);
           eventStreamGraceTimerRef.current = setTimeout(() => void checkServerIdle(), PROMPT_SETTLE_POLL_MS);
@@ -1296,7 +1321,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const wasRunning = settleUiStage();
       if (promptWasPending) {
         notifyPromptStage(runId);
-      } else if (agentWasActive && wasRunning && !promptCompletionRef.current.isAborted(runId)) {
+      } else if (agentWasActive && wasRunning && !autoAdvanceSuppressCompletionRef.current && !isAutoAdvanceActive(autoAdvanceRef.current) && !promptCompletionRef.current.isAborted(runId)) {
         onAgentEnd?.();
       }
       if (sid) scheduleEventStreamClose(sid);
@@ -1438,6 +1463,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case "auto_advance_status": {
+        applyAutoAdvanceState((event.state as AutoAdvanceState | null) ?? null);
+        if (isAutoAdvanceActive(autoAdvanceRef.current)) cancelEventStreamGrace();
+        break;
+      }
+      case "auto_advance_finished": {
+        const state = event.state as AutoAdvanceState | undefined;
+        if (!state || state.id !== autoAdvanceRef.current?.id) break;
+        applyAutoAdvanceState(state);
+        if (event.notify === true && !autoAdvanceNotifiedRef.current.has(state.id)) {
+          autoAdvanceNotifiedRef.current.add(state.id);
+          if (autoAdvanceNotifiedRef.current.size > 20) autoAdvanceNotifiedRef.current.delete(autoAdvanceNotifiedRef.current.values().next().value!);
+          onAgentEnd?.();
+        }
+        if (sessionIdRef.current) scheduleEventStreamClose(sessionIdRef.current);
+        break;
+      }
       case "model_fallback": {
         if (!sessionHookMountedRef.current || !sessionIdRef.current || !agentRunningRef.current) break;
         if (isStaleLocalPromptToken(event.promptToken, promptTokenOwnerRef.current, activePromptTokenRef.current)) break;
@@ -1462,6 +1504,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       case "agent_start":
         if (isStaleLocalPromptToken(event.promptToken, promptTokenOwnerRef.current, activePromptTokenRef.current)) break;
+        autoAdvanceSuppressCompletionRef.current = event.suppressCompletionNotification === true;
         if (!rpcPromptPendingRef.current) promptCompletionRef.current.beginAgentRun(promptRunIdRef.current);
         cancelEventStreamGrace();
         sdkAgentActiveRef.current = true;
@@ -1516,7 +1559,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           void loadSession(sid);
           scheduleEventStreamClose(sid);
         }
-        if (wasRunning && !aborted && !promptCompletionRef.current.isAborted(runId)) onAgentEnd?.();
+        if (wasRunning && !aborted && event.suppressCompletionNotification !== true && !isAutoAdvanceActive(autoAdvanceRef.current) && !promptCompletionRef.current.isAborted(runId)) onAgentEnd?.();
         break;
       }
       case "prompt_done":
@@ -1531,7 +1574,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           optimisticUserMessageKeyRef.current = null;
           // prompt_done may acknowledge an extension command while its injected
           // agent run is still active; that run's settled event owns completion.
-          const firstNotification = !sdkAgentActiveRef.current && notifyPromptStage(runId);
+          const firstNotification = !sdkAgentActiveRef.current && (event.suppressCompletionNotification === true
+            ? promptCompletionRef.current.notify(runId) : notifyPromptStage(runId));
           if (!promptWasPending && !firstNotification) break;
 
           const sid = sessionIdRef.current;
@@ -1733,12 +1777,64 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyPrimaryModelSelection, applyRuntimeModel, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
+  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyPrimaryModelSelection, applyRuntimeModel, applyAutoAdvanceState, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
+
+  // Tab unmount only disconnects observation; it cannot restart server-owned advancement.
+  const autoAdvanceActive = isAutoAdvanceActive(autoAdvanceState);
+  useEffect(() => {
+    if (!autoAdvanceActive) return;
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    let disposed = false;
+    let pending = false;
+    const refresh = async () => {
+      if (disposed || pending) return;
+      pending = true;
+      try {
+        const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+        if (!res.ok) return;
+        const data = await res.json() as { state?: AgentStateResponse };
+        if (disposed || sessionIdRef.current !== sid) return;
+        if (data.state?.autoAdvance !== undefined) applyAutoAdvanceState(data.state.autoAdvance);
+        else if (!data.state) applyAutoAdvanceState(null);
+        if (isAutoAdvanceActive(autoAdvanceRef.current)) maintainEventsConnected(sid);
+      } catch { /* Reconcile later; never arm the controller from polling. */ }
+      finally { pending = false; }
+    };
+    const timer = setInterval(() => void refresh(), AGENT_STATE_RECONCILE_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onVisible);
+    maintainEventsConnected(sid);
+    return () => { disposed = true; clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("online", onVisible); };
+  }, [autoAdvanceActive, applyAutoAdvanceState, maintainEventsConnected]);
+
+  const handleStartAutoAdvance = useCallback(async (config: AutoAdvanceConfig) => {
+    const sid = sessionIdRef.current;
+    if (!sid || autoAdvanceCommandPendingRef.current) throw new Error("Open an existing conversation before auto advance");
+    autoAdvanceCommandPendingRef.current = true;
+    setAutoAdvanceBusy(true);
+    maintainEventsConnected(sid);
+    try {
+      await sendAgentCommand(sid, { type: "start_auto_advance", config });
+      const state = await sendAgentCommand<AgentStateResponse>(sid, { type: "get_state", requireLiveSession: true });
+      if (sessionIdRef.current === sid) applyAgentStateMetadata(state);
+    } finally { autoAdvanceCommandPendingRef.current = false; if (sessionHookMountedRef.current) setAutoAdvanceBusy(false); }
+  }, [applyAgentStateMetadata, maintainEventsConnected]);
+
+  const handleStopAutoAdvance = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    // Stop can invalidate a pending server start, too.
+    const state = await sendAgentCommand<AutoAdvanceState | null>(sid, { type: "stop_auto_advance", requireLiveSession: true });
+    if (sessionIdRef.current === sid) applyAutoAdvanceState(state);
+  }, [applyAutoAdvanceState]);
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
     const trimmedMessage = message.trim();
     if (!trimmedMessage && !images?.length) return;
+    autoAdvanceSuppressCompletionRef.current = false;
     if (agentRunningRef.current || bashRunningRef.current) {
       restoreSubmission(message, images, composerDraftKey);
       return;
@@ -2568,6 +2664,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     contextUsageAppliedIdRef.current = contextUsageRequestIdRef.current;
     if (session) {
       sessionIdRef.current = session.id;
+      applyAutoAdvanceState(null);
       const runId = promptRunIdRef.current;
       const usageRequestId = ++contextUsageRequestIdRef.current;
       loadSession(session.id, true, true, { force: true }).then((agentState) => {
@@ -2585,6 +2682,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               void waitForPromptSettlement(session.id);
             }
           }
+          if (isAutoAdvanceActive(agentState.state?.autoAdvance)) void maintainEventsConnected(session.id);
           if (agentState.state?.isBashRunning) {
             bashRunningRef.current = true;
             setBashRunning(true);
@@ -2745,6 +2843,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, contextModel, modelSwitching, sessionStats,
+    autoAdvanceState, autoAdvanceBusy, handleStartAutoAdvance, handleStopAutoAdvance,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null && currentModelOverride === null,

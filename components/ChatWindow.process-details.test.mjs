@@ -4,6 +4,7 @@ import test from "node:test";
 
 const source = await readFile(new URL("./ChatWindow.tsx", import.meta.url), "utf8");
 const appShellSource = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
+const processSource = await readFile(new URL("./ProcessDetailsGroup.tsx", import.meta.url), "utf8");
 
 test("sub-agent panes stay observational, including tabs without relation metadata", () => {
   assert.match(appShellSource, /key=\{activeFileTab\.subagentSessionId\}\s+readOnly\s+archived=\{[^\n]+\}\s+managementPending=\{!management\.ready\}\s+session=/);
@@ -30,7 +31,7 @@ test("labels parent supplements in both live and historical views without alteri
 });
 
 test("expands process details when a completed turn has no final answer", () => {
-  assert.match(source, /const \[expanded, setExpanded\] = useState\(defaultExpanded\)/);
+  assert.match(processSource, /const \[expanded, setExpanded\] = useState\(defaultExpanded\)/);
   assert.match(
     source,
     /<ProcessDetailsGroup[\s\S]*?defaultExpanded=\{!finalAnswerMessage\}/,
@@ -61,7 +62,7 @@ test("groups the leading segment when the history page starts mid-turn", () => {
 });
 
 test("process-only snapshots do not duplicate the final output-limit or error notice", () => {
-  const helper = source.slice(source.indexOf("function withAssistantBlocks("), source.indexOf("function ProcessDetailsGroup("));
+  const helper = source.slice(source.indexOf("function withAssistantBlocks("), source.indexOf("export function ChatWindow("));
   assert.match(helper, /if \(options\.omitUsage\) \{[\s\S]*?next\.stopReason = undefined;[\s\S]*?next\.errorMessage = undefined;/);
 });
 

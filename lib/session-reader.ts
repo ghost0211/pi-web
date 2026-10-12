@@ -17,6 +17,7 @@ import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
 import { PLAN_TOOL_NAMES, planItemsFromInput, type PlanItem } from "./plan-items";
 import { buildTurnPreviews, type TurnPreview } from "./turn-index";
 import { listSessionsIncremental } from "./session-list-scanner";
+import { buildRunDurationIndex, withRunDuration } from "./run-duration";
 
 export { getAgentDir };
 
@@ -502,6 +503,7 @@ export function buildSessionHistory(
   const { tail, excludeLeaf } = options;
   const pageSize = tail && tail > 0 ? tail : Number.MAX_SAFE_INTEGER;
   const sliced = sliceActiveBranch(entries, leafId ?? null, pageSize, excludeLeaf);
+  const runDurations = buildRunDurationIndex(entries);
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
   let firstEntryParentId: string | null = null;
@@ -509,7 +511,7 @@ export function buildSessionHistory(
     const message = entryToUiMessage(entry, options);
     if (!message) continue;
     if (messages.length === 0) firstEntryParentId = entry.parentId ?? null;
-    messages.push(message);
+    messages.push(withRunDuration(message, entry.id, runDurations));
     entryIds.push(entry.id);
   }
 
@@ -544,6 +546,7 @@ export function buildSessionContext(
   const hasCompaction = sliced.some((e) => e.type === "compaction") ||
     contextEntries.some((e) => (e as unknown as SessionEntry).type === "compaction");
   const hasMore = Boolean(!hasCompaction && tail && tail > 0 && sliced[0]?.parentId);
+  const runDurations = buildRunDurationIndex(entries);
 
   // Convert the SDK-selected context entries and their IDs together. This keeps
   // fork/navigation targets aligned while preserving pi's compaction ordering.
@@ -555,7 +558,7 @@ export function buildSessionContext(
     const m = entryToUiMessage(localEntry, options);
     if (m) {
       if (messages.length === 0) firstEntryParentId = localEntry.parentId ?? null;
-      messages.push(m);
+      messages.push(withRunDuration(m, localEntry.id, runDurations));
       entryIds.push(localEntry.id);
     }
   }

@@ -138,8 +138,8 @@ test("polls running sessions while visible, and keeps polling in the desktop tra
 });
 
 test("exposes the polled running-session set to the shell", () => {
-  assert.match(source, /onRunningSessionIdsChange\?: \(ids: Set<string>, phases: Record<string, RunningTaskPhase>\) => void/);
-  assert.match(source, /onRunningSessionIdsChange\?\.\(runningSessionIds, runningSessionPhases\)/);
+  assert.match(source, /onRunningSessionIdsChange\?: \(ids: Set<string>, phases: Record<string, RunningTaskPhase>, startedAt: Record<string, number>\) => void/);
+  assert.match(source, /onRunningSessionIdsChange\?\.\(runningSessionIds, runningSessionPhases, runningSessionStartedAt\)/);
 });
 
 test("exposes the loaded session catalog to the shell", () => {

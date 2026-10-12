@@ -79,6 +79,10 @@ app/api/
 
 lib/
   agent-client.ts      typed fetch helper for /api/agent commands
+  auto-advance-controller.ts  bounded auto-advance state machine (rounds/time/tokens, generation-guarded)
+  auto-advance-model.ts  tool-less surrogate evaluation, usage accounting, continuation instruction
+  auto-advance-types.ts  shared auto-advance config/state/decision contracts
+  auto-advance-messages.ts  zh-CN/zh-TW/en strings for the auto-advance UI
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
@@ -99,6 +103,7 @@ components/
   SessionSidebar.tsx  session tree + FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
+  AutoAdvanceControl.tsx  auto-advance toolbar entry + bounded surrogate configuration dialog
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
   BranchNavigator.tsx in-session branch switcher
   ChatMinimap.tsx     turn rail at the left of the chat area + hover preview card
@@ -224,6 +229,14 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - OAuth/device-code/manual-code flows are streamed by `GET /api/auth/login/[provider]`; manual code responses POST back with a short-lived token stored in `globalThis.__piLoginCallbacks`.
 - API-key routes store and remove keys through `AuthStorage`. Status endpoints must never return the raw key.
 - The model test route is `app/api/models-config/test/route.ts`; `app/api/models/test/` is not a real route.
+
+### Auto advance（自动推进）
+- Server-owned and memory-only: `AgentSessionWrapper` owns one `AutoAdvanceController`; it is never persisted and never resumes after a restart, tab close, or wrapper rebuild. The composer only observes it through `get_state.autoAdvance`, `auto_advance_status`, and SSE reconnect polling, so an open window is never required for continuation.
+- A round is a **custom** `pi-web:auto-advance` message sent with `sendCustomMessage(..., { triggerTurn: true })`, never a user prompt: the human role stays reserved for real user input, and the model-visible text states that AI-generated continuation is not new user approval. The surrogate itself is tool-less (`completeSimple` with `toolChoice: "none"`) and must not change the main model, thinking level, or quota backup.
+- User authorization is not transferable: the surrogate cannot authorize commits, releases, destructive deletion, or scope expansion, and the explicitly stated scope is model guidance, not a sandbox. Budgets count main and surrogate usage from enable time, and in-flight requests can exceed the token threshold.
+- Bounded by `maxRounds` (1–5), `maxMinutes` (1–15), `tokenBudget` (1000–20000); decisions are strict `continue|complete|needs_user` JSON that must carry `requiresConfirmation`. Missing usage, invalid JSON, errors, aborts, repeated instructions, blocking extension UI, archiving, manual prompting/steering, or configuration changes fail closed (pause/stop, never blind retry).
+- Continued rounds go through the existing mutation guard, so the deletion barrier, idle reaping, and `isRunning()` protections still apply. Per-round settlements suppress completion notifications; only the terminal outcome notifies once.
+- Archived sessions are refused by `/api/agent/[id]` (session-management metadata stays a route-level concern), and `pauseAutoAdvance()` runs when a session is archived. See `docs/auto-advance.md`.
 
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` as `pi-sound-enabled` and reuses one `AudioContext`.

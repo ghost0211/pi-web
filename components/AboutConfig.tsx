@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { checkDesktopUpdate, installDesktopUpdate, type DesktopUpdate } from "@/lib/desktop-update";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
@@ -39,6 +39,9 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [desktopInstallPhase, setDesktopInstallPhase] = useState<"downloading" | "installing">("downloading");
   const [desktopUpdateError, setDesktopUpdateError] = useState<string | null>(null);
   const [desktopChecked, setDesktopChecked] = useState(false);
+  const checkUpdatesPendingRef = useRef(false);
+  const updatesChecking = checking || desktopChecking;
+  const updatesBusy = loading || updatesChecking || updating || desktopInstalling;
   const installationDir = info?.isDesktop ? info.system.installationDir : null;
   const appName = info?.appName ?? appDisplayName(desktopApp);
   const desktopInstallLabel = desktopInstallPhase === "installing"
@@ -69,7 +72,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   }, [checkDesktopRelease]);
 
   const handleDesktopInstall = async () => {
-    if (!desktopUpdate || desktopInstalling || !window.confirm(t("about.desktopUpdateConfirm", { version: desktopUpdate.version }))) return;
+    if (!desktopUpdate || updatesBusy || checkUpdatesPendingRef.current || !window.confirm(t("about.desktopUpdateConfirm", { version: desktopUpdate.version }))) return;
     setDesktopInstalling(true);
     setDesktopUpdateError(null);
     setDesktopProgress(null);
@@ -117,8 +120,19 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
     void fetchInfo();
   }, [fetchInfo]);
 
+  const handleCheckUpdates = async () => {
+    if (updatesBusy || checkUpdatesPendingRef.current) return;
+    checkUpdatesPendingRef.current = true;
+    try {
+      // Each check owns its result/error, so one failing source cannot hide the other.
+      await Promise.all([fetchInfo(true), checkDesktopRelease()]);
+    } finally {
+      checkUpdatesPendingRef.current = false;
+    }
+  };
+
   const handleUpdate = async (target: "global" | "local") => {
-    if (updating) return;
+    if (updatesBusy || checkUpdatesPendingRef.current) return;
     setUpdating(true);
     setUpdateResult(null);
     setShowLog(true);
@@ -192,23 +206,6 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
             {/* Header Hero */}
             <div className="about-hero-card">
               <div className="about-hero-header">
-                {desktopApp && (
-                  <div className="about-hero-update-actions">
-                    <ConfigButton variant="secondary" size="small" disabled={desktopChecking || desktopInstalling} onClick={() => void checkDesktopRelease()}>
-                      {desktopChecking ? t("about.statusChecking") : t("about.checkUpdates")}
-                    </ConfigButton>
-                    {desktopUpdate && (
-                      <ConfigButton
-                        variant="primary"
-                        size="small"
-                        disabled={desktopChecking || desktopInstalling}
-                        onClick={() => void handleDesktopInstall()}
-                      >
-                        {desktopInstalling ? desktopInstallLabel : t("about.desktopInstallUpdate")}
-                      </ConfigButton>
-                    )}
-                  </div>
-                )}
                 <div className="about-hero-identity">
                   <div className="about-logo-wrapper">
                     <svg
@@ -241,6 +238,27 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                     <p className="about-app-desc">{t("about.description")}</p>
                   </div>
                 </div>
+                <div className="about-hero-update-actions">
+                  <ConfigButton
+                    variant="secondary"
+                    size="small"
+                    disabled={updatesBusy}
+                    onClick={() => void handleCheckUpdates()}
+                  >
+                    <span className={`about-refresh-icon ${updatesChecking ? "is-spinning" : ""}`}>↻</span>
+                    <span>{updatesChecking ? t("about.statusChecking") : t("about.checkUpdates")}</span>
+                  </ConfigButton>
+                  {desktopApp && desktopUpdate && (
+                    <ConfigButton
+                      variant="primary"
+                      size="small"
+                      disabled={updatesBusy}
+                      onClick={() => void handleDesktopInstall()}
+                    >
+                      {desktopInstalling ? desktopInstallLabel : t("about.desktopInstallUpdate")}
+                    </ConfigButton>
+                  )}
+                </div>
               </div>
               {desktopApp && (desktopUpdate || desktopUpdateError) && (
                 <div className="about-hero-update-feedback">
@@ -267,18 +285,6 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                     <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" />
                   </svg>
                   <h3 className="about-section-title">{t("about.piAgentKernel")}</h3>
-                </div>
-
-                <div className="about-section-actions">
-                  <ConfigButton
-                    variant="secondary"
-                    size="small"
-                    disabled={checking || updating}
-                    onClick={() => void fetchInfo(true)}
-                  >
-                    <span className={`about-refresh-icon ${checking ? "is-spinning" : ""}`}>↻</span>
-                    <span>{checking ? t("about.statusChecking") : t("about.checkUpdates")}</span>
-                  </ConfigButton>
                 </div>
               </div>
 
@@ -340,7 +346,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                 <ConfigButton
                   variant={info?.piAgent.updateAvailable ? "primary" : "secondary"}
                   size="default"
-                  disabled={updating}
+                  disabled={updatesBusy}
                   onClick={() => void handleUpdate("global")}
                   className="about-update-button"
                   title={t("about.updateScopeGlobal")}
@@ -364,7 +370,7 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                 <ConfigButton
                   variant="secondary"
                   size="default"
-                  disabled={updating}
+                  disabled={updatesBusy}
                   onClick={() => void handleUpdate("local")}
                   className="about-update-button"
                   title={desktopApp ? t("about.updateSdkDesktopHint") : t("about.updateScopeLocal")}

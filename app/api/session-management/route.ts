@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getRpcSession } from "@/lib/rpc-manager";
 import {
   applySessionManagementAction,
   getSessionManagementState,
@@ -42,7 +43,12 @@ export async function GET(): Promise<Response> {
 
 export async function PATCH(request: Request): Promise<Response> {
   try {
-    const state = await applySessionManagementAction(await readJson(request));
+    const action = await readJson(request);
+    const state = await applySessionManagementAction(action);
+    const ids = (action as { ids?: unknown }).ids;
+    if (Array.isArray(ids)) for (const id of ids) {
+      if (typeof id === "string" && state.sessions[id]?.status === "archived") getRpcSession(id)?.pauseAutoAdvance?.("archived");
+    }
     return NextResponse.json({ state }, { headers: NO_STORE });
   } catch (error) {
     return errorResponse(error);

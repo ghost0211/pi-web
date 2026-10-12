@@ -157,8 +157,10 @@ export function AppShell() {
   const hasSubagentSessions = Boolean(activeSessionFamily?.subagents.length);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const [runningSessionPhases, setRunningSessionPhases] = useState<Record<string, RunningTaskPhase>>({});
-  const handleRunningSessionIdsChange = useCallback((ids: Set<string>, phases: Record<string, RunningTaskPhase>) => {
+  const [runningSessionStartedAt, setRunningSessionStartedAt] = useState<Record<string, number>>({});
+  const handleRunningSessionIdsChange = useCallback((ids: Set<string>, phases: Record<string, RunningTaskPhase>, startedAt: Record<string, number>) => {
     setRunningSessionPhases(phases);
+    setRunningSessionStartedAt(startedAt);
     setRunningSessionIds((previous) => {
       if (previous.size === ids.size && [...ids].every((id) => previous.has(id))) return previous;
       return ids;
@@ -2567,6 +2569,7 @@ export function AppShell() {
                   sessions={sessionCatalog}
                   runningSessionIds={runningSessionIds}
                   runningSessionPhases={runningSessionPhases}
+                  runningSessionStartedAt={runningSessionStartedAt}
                   selectedSessionId={selectedSession?.id}
                   onSelectSession={(session) => { handleAgentSessionSelect(session); setActiveTopPanel(null); }}
                   locale={locale}

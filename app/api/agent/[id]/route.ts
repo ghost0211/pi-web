@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
+import { getSessionManagementState } from "@/lib/session-management-store";
 import { startRpcSession, getRpcSession, setRpcSessionTools } from "@/lib/rpc-manager";
 import { isSessionDeletionGuardError, withSessionMutationGuard } from "@/lib/session-deletion-guard";
 
@@ -29,6 +30,13 @@ export async function POST(
       const existing = getRpcSession(id);
       if (body.requireLiveSession === true && !existing?.isAlive()) {
         return NextResponse.json({ error: "No live session; this command will not start one" }, { status: 409 });
+      }
+      if (body.type === "start_auto_advance"
+        && getSessionManagementState().sessions[id]?.status === "archived") {
+        // Archived sessions are read-only until explicitly restored; session
+        // management metadata is a route-level concern, not wrapper state.
+        existing?.pauseAutoAdvance?.("archived");
+        return NextResponse.json({ error: "Restore the archived session before enabling auto advance" }, { status: 409 });
       }
       if (body.type === "set_tools") {
         const filePath = existing?.sessionFile || await resolveSessionPath(id) || undefined;

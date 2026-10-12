@@ -37,7 +37,7 @@ test("archived conversations disable sends, drops, fork, edit, and branch naviga
   assert.match(source, /if \(!isReadOnlyConversationRef\.current\) chatInputRef\?\.current\?\.addFiles\(files\)/);
   assert.match(source, /onFork=\{isReadOnlyConversation \|\| sessionBusy \|\| isNew \? undefined : handleConversationFork\}/);
   assert.match(source, /onNavigate=\{isReadOnlyConversation \|\| sessionBusy \? undefined : handleConversationNavigate\}/);
-  assert.match(source, /prevAssistantEntryId=\{isReadOnlyConversation \|\| sessionBusy \? undefined : prevAssistantEntryId\}/);
+  assert.match(source, /editAnchorEntryId=\{isReadOnlyConversation \|\| sessionBusy \? undefined : editAnchorEntryId\}/);
   assert.match(source, /onEditContent=\{isReadOnlyConversation \? undefined : handleEditContent\}/);
 });
 

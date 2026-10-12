@@ -41,6 +41,14 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
   const [desktopChecked, setDesktopChecked] = useState(false);
   const installationDir = info?.isDesktop ? info.system.installationDir : null;
   const appName = info?.appName ?? appDisplayName(desktopApp);
+  const desktopInstallLabel = desktopInstallPhase === "installing"
+    ? t("about.desktopInstalling")
+    : t("about.desktopDownloading", { progress: desktopProgress === null ? "…" : `${desktopProgress}%` });
+  const desktopStatus = desktopInstalling ? desktopInstallLabel
+    : desktopChecking ? t("about.statusChecking")
+      : desktopUpdateError ? t("about.statusCheckFailed")
+        : desktopUpdate ? t("about.desktopUpdateAvailable", { version: desktopUpdate.version })
+          : desktopChecked ? t("about.statusUpToDate") : t("about.desktopUpdateNotChecked");
 
   const checkDesktopRelease = useCallback(async () => {
     if (!desktopApp) return;
@@ -183,76 +191,70 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
           <ConfigDetailStack className="about-stack">
             {/* Header Hero */}
             <div className="about-hero-card">
-              <div className="about-logo-wrapper">
-                <svg
-                  className="about-logo-icon"
-                  viewBox="0 0 48 48"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <rect width="48" height="48" rx="12" fill="var(--bg-panel)" stroke="var(--border)" strokeWidth="2" />
-                  <path
-                    d="M14 16h20M19 16v18M29 16v18c0 2 2 3 4 2"
-                    stroke="var(--accent)"
-                    strokeWidth="3.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </div>
-              <div className="about-hero-details">
-                <div className="about-hero-title-row">
-                  <h2 className="about-app-title">{appName}</h2>
-                  <span className="about-version-badge">v{info?.appVersion ?? "0.9.10"}</span>
-                  <span className="about-edition-tag">
-                    {info?.isDesktop ? t("about.appEditionDesktop") : t("about.appEditionWeb")}
-                  </span>
+              <div className="about-hero-header">
+                {desktopApp && (
+                  <div className="about-hero-update-actions">
+                    <ConfigButton variant="secondary" size="small" disabled={desktopChecking || desktopInstalling} onClick={() => void checkDesktopRelease()}>
+                      {desktopChecking ? t("about.statusChecking") : t("about.checkUpdates")}
+                    </ConfigButton>
+                    {desktopUpdate && (
+                      <ConfigButton
+                        variant="primary"
+                        size="small"
+                        disabled={desktopChecking || desktopInstalling}
+                        onClick={() => void handleDesktopInstall()}
+                      >
+                        {desktopInstalling ? desktopInstallLabel : t("about.desktopInstallUpdate")}
+                      </ConfigButton>
+                    )}
+                  </div>
+                )}
+                <div className="about-hero-identity">
+                  <div className="about-logo-wrapper">
+                    <svg
+                      className="about-logo-icon"
+                      viewBox="0 0 48 48"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <rect width="48" height="48" rx="12" fill="var(--bg-panel)" stroke="var(--border)" strokeWidth="2" />
+                      <path
+                        d="M14 16h20M19 16v18M29 16v18c0 2 2 3 4 2"
+                        stroke="var(--accent)"
+                        strokeWidth="3.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </div>
+                  <div className="about-hero-details">
+                    <div className="about-hero-title-row">
+                      <h2 className="about-app-title">{appName}</h2>
+                      <span className="about-hero-version">
+                        {desktopApp && <span className="about-desktop-update-status" role="status">({desktopStatus})</span>}
+                        <span className="about-version-badge">v{info?.appVersion ?? "0.9.10"}</span>
+                      </span>
+                      <span className="about-edition-tag">
+                        {info?.isDesktop ? t("about.appEditionDesktop") : t("about.appEditionWeb")}
+                      </span>
+                    </div>
+                    <p className="about-app-desc">{t("about.description")}</p>
+                  </div>
                 </div>
-                <p className="about-app-desc">{t("about.description")}</p>
               </div>
+              {desktopApp && (desktopUpdate || desktopUpdateError) && (
+                <div className="about-hero-update-feedback">
+                  {desktopUpdate && <p className="about-desktop-update-text">{t("about.desktopUpdateRestartNote")}</p>}
+                  {desktopUpdate?.body && <p className="about-desktop-update-text">{desktopUpdate.body}</p>}
+                  {desktopUpdateError && <p className="about-error-banner" role="alert">{t("about.desktopUpdateError", { error: desktopUpdateError })}</p>}
+                </div>
+              )}
             </div>
 
             {errorMsg && (
               <div className="about-error-banner" role="alert">
                 <span>{errorMsg}</span>
               </div>
-            )}
-
-            {desktopApp && (
-              <section className="about-section-card">
-                <div className="about-section-header">
-                  <div className="about-section-header-left">
-                    <h3 className="about-section-title">{t("about.desktopUpdateTitle")}</h3>
-                  </div>
-                  <ConfigButton variant="secondary" size="small" disabled={desktopChecking || desktopInstalling} onClick={() => void checkDesktopRelease()}>
-                    {desktopChecking ? t("about.statusChecking") : t("about.checkUpdates")}
-                  </ConfigButton>
-                </div>
-                <p className="about-desktop-update-text">
-                  {desktopUpdate
-                    ? t("about.desktopUpdateAvailable", { version: desktopUpdate.version })
-                    : desktopChecking ? t("about.statusChecking")
-                      : desktopChecked ? t("about.statusUpToDate") : t("about.desktopUpdateNotChecked")}
-                </p>
-                {desktopUpdate?.body && <p className="about-desktop-update-text">{desktopUpdate.body}</p>}
-                {desktopUpdate && (
-                  <div className="about-update-action-box">
-                    <ConfigButton
-                      variant="primary"
-                      size="default"
-                      disabled={desktopInstalling}
-                      onClick={() => void handleDesktopInstall()}
-                    >
-                      {desktopInstalling
-                        ? desktopInstallPhase === "installing" ? t("about.desktopInstalling")
-                          : t("about.desktopDownloading", { progress: desktopProgress === null ? "…" : `${desktopProgress}%` })
-                        : t("about.desktopInstallUpdate")}
-                    </ConfigButton>
-                    <span className="about-desktop-update-text">{t("about.desktopUpdateRestartNote")}</span>
-                  </div>
-                )}
-                {desktopUpdateError && <p className="about-error-banner" role="alert">{t("about.desktopUpdateError", { error: desktopUpdateError })}</p>}
-              </section>
             )}
 
             {/* Pi Agent Core & Version Updates */}

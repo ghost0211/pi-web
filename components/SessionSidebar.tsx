@@ -20,6 +20,7 @@ import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
 import { useI18n } from "@/hooks/useI18n";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { isDesktopApp } from "@/lib/desktop";
 import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
@@ -1146,6 +1147,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <AppBrandTitle />
           <div style={{ display: "flex", gap: 6 }}>
             <button
+              className={onToggleSidebar ? "sidebar-close-button" : undefined}
+              aria-label={onToggleSidebar ? t("sidebar.hide") : t("sidebar.refresh")}
               onClick={() => onToggleSidebar ? onToggleSidebar() : loadSessions(false, true)}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -1977,6 +1980,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                     actionsDisabled={managementBusy}
                     onTogglePin={() => handleTogglePinSession(family.root.id)}
                     onArchive={() => handleArchiveSession(family.root.id)}
+                    isMenuOpen={sessionMenu?.id === family.root.id}
+                    onCloseMenu={() => setSessionMenu(null)}
                     onContextMenuOpen={(x, y) => {
                       setProjectMenu(null);
                       setSessionMenu({ id: family.root.id, x, y });
@@ -2298,6 +2303,8 @@ function SessionItem({
   actionsDisabled = false,
   onTogglePin,
   onArchive,
+  isMenuOpen = false,
+  onCloseMenu,
   onContextMenuOpen,
   registerActions,
 }: {
@@ -2315,14 +2322,28 @@ function SessionItem({
   actionsDisabled?: boolean;
   onTogglePin?: () => void;
   onArchive?: () => void;
+  isMenuOpen?: boolean;
+  onCloseMenu?: () => void;
   onContextMenuOpen?: (x: number, y: number) => void;
   registerActions?: (actions: SessionRowActions | null) => void;
 }) {
   const { locale, t } = useI18n();
+  const isMobile = useIsMobile();
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const wasMenuOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (wasMenuOpenRef.current && !isMenuOpen) {
+      if (!renaming) {
+        moreButtonRef.current?.focus();
+      }
+    }
+    wasMenuOpenRef.current = isMenuOpen;
+  }, [isMenuOpen, renaming]);
 
   // Select the whole name once the rename input is mounted (startRename's
   // immediate setTimeout can fire before the input exists).
@@ -2371,6 +2392,32 @@ function SessionItem({
       // ignore
     }
   }, [renameValue, session.id, session.name, onRenamed, title]);
+
+  const handleMoreClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (session.transient || actionsDisabled) return;
+    if (isMenuOpen) {
+      onCloseMenu?.();
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX && e.clientX > 0 ? e.clientX : Math.round(rect.right - 176);
+    const y = e.clientY && e.clientY > 0 ? e.clientY : Math.round(rect.bottom + 4);
+    const handled = dispatchSessionRowContextMenu({
+      id: session.id,
+      path: session.path,
+      cwd: session.cwd,
+      name: session.name,
+      clientX: x,
+      clientY: y,
+      refresh: () => { onRenamed?.(); },
+    });
+    if (handled || !onContextMenuOpen) {
+      return;
+    }
+    onContextMenuOpen(x, y);
+  }, [actionsDisabled, isMenuOpen, onCloseMenu, onContextMenuOpen, onRenamed, session.cwd, session.id, session.name, session.path, session.transient]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const handled = dispatchSessionRowContextMenu({
@@ -2508,62 +2555,115 @@ function SessionItem({
             </button>
           )}
 
-          {/* Hover on desktop, always available to touch users. */}
+          {/* Hover on desktop, more menu on touch / mobile */}
           {!session.transient && (
             <div className="session-row-actions" style={{ gap: 3, flexShrink: 0 }}>
-              <button
-                disabled={actionsDisabled}
-                onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
-                title={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
-                aria-label={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
+              <div
+                className="session-row-inline-actions"
                 style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 24, height: 24, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 5, color: pinned ? "var(--accent)" : "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
+                  display: isMobile ? "none" : "flex",
+                  alignItems: "center",
+                  gap: 3,
+                  flexShrink: 0,
+                }}
+              >
+                <button
+                  disabled={actionsDisabled}
+                  onClick={(e) => { e.stopPropagation(); onTogglePin?.(); }}
+                  title={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
+                  aria-label={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 24, height: 24, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 5, color: pinned ? "var(--accent)" : "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                    transition: "all 0.12s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-selected)";
+                    e.currentTarget.style.color = "var(--accent)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.color = pinned ? "var(--accent)" : "var(--text-muted)";
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 17v5" />
+                    <path d="M9 10.76a2 2 0 0 1-1.11 1.66L5 14.1V15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.9l-2.89-1.68A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+                  </svg>
+                </button>
+                <button
+                  disabled={actionsDisabled}
+                  onClick={(e) => { e.stopPropagation(); onArchive?.(); }}
+                  title={t("sidebar.archive")}
+                  aria-label={t("sidebar.archive")}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 24, height: 24, padding: 0,
+                    background: "var(--bg-hover)", border: "1px solid var(--border)",
+                    borderRadius: 5, color: "var(--text-muted)",
+                    cursor: "pointer", flexShrink: 0,
+                    transition: "all 0.12s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--bg-selected)";
+                    e.currentTarget.style.color = "var(--accent)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--bg-hover)";
+                    e.currentTarget.style.color = "var(--text-muted)";
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="3" width="20" height="5" rx="1" />
+                    <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+                    <line x1="10" y1="12" x2="14" y2="12" />
+                  </svg>
+                </button>
+              </div>
+
+              <button
+                ref={moreButtonRef}
+                type="button"
+                className="session-row-mobile-more"
+                disabled={actionsDisabled}
+                onClick={handleMoreClick}
+                aria-haspopup="menu"
+                aria-expanded={isMenuOpen}
+                title={t("sidebar.sessionOptions")}
+                aria-label={t("sidebar.sessionOptions")}
+                style={{
+                  display: isMobile ? "flex" : "none",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 24,
+                  height: 24,
+                  padding: 0,
+                  background: isMenuOpen ? "var(--bg-selected)" : "var(--bg-hover)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 5,
+                  color: isMenuOpen ? "var(--text)" : "var(--text-muted)",
+                  cursor: actionsDisabled ? "not-allowed" : "pointer",
+                  flexShrink: 0,
                   transition: "all 0.12s ease",
                 }}
                 onMouseEnter={(e) => {
+                  if (actionsDisabled) return;
                   e.currentTarget.style.background = "var(--bg-selected)";
-                  e.currentTarget.style.color = "var(--accent)";
+                  e.currentTarget.style.color = "var(--text)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = pinned ? "var(--accent)" : "var(--text-muted)";
+                  if (actionsDisabled) return;
+                  e.currentTarget.style.background = isMenuOpen ? "var(--bg-selected)" : "var(--bg-hover)";
+                  e.currentTarget.style.color = isMenuOpen ? "var(--text)" : "var(--text-muted)";
                 }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 17v5" />
-                  <path d="M9 10.76a2 2 0 0 1-1.11 1.66L5 14.1V15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.9l-2.89-1.68A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
-                </svg>
-              </button>
-              <button
-                disabled={actionsDisabled}
-                onClick={(e) => { e.stopPropagation(); onArchive?.(); }}
-                title={t("sidebar.archive")}
-                aria-label={t("sidebar.archive")}
-                style={{
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  width: 24, height: 24, padding: 0,
-                  background: "var(--bg-hover)", border: "1px solid var(--border)",
-                  borderRadius: 5, color: "var(--text-muted)",
-                  cursor: "pointer", flexShrink: 0,
-                  transition: "all 0.12s ease",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--bg-selected)";
-                  e.currentTarget.style.color = "var(--accent)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="3" width="20" height="5" rx="1" />
-                  <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
-                  <line x1="10" y1="12" x2="14" y2="12" />
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <circle cx="3" cy="8" r="1.5" />
+                  <circle cx="8" cy="8" r="1.5" />
+                  <circle cx="13" cy="8" r="1.5" />
                 </svg>
               </button>
             </div>

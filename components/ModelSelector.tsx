@@ -294,6 +294,7 @@ export function ModelSelector({
           return (
             <div
               ref={panelRef}
+              data-composer-controls-portal="model"
               role={hasFallbackUi ? "dialog" : "listbox"}
               aria-label={ariaLabel}
               style={{

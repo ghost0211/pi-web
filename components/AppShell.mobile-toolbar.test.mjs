@@ -3,21 +3,23 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
-const mobileHookSource = await readFile(new URL("../hooks/useIsMobile.ts", import.meta.url), "utf8");
+const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
-test("keeps action icons inline in medium mobile sidebars", () => {
-  assert.match(mobileHookSource, /NARROW_MOBILE_QUERY = "\(max-width: 480px\)"/);
-  assert.match(source, /const isNarrowMobile = useIsNarrowMobile\(\);/);
-  assert.match(source, /\{!isNarrowMobile && renderChatToolbarActions\(true\)\}/);
-  assert.match(source, /\{isNarrowMobile && \([\s\S]*?data-mobile-toolbar-more="true"/);
+test("reserves mobile header space for the session name at every phone width", () => {
+  assert.match(source, /data-mobile-session-title="true"/);
+  assert.match(source, /selectedSession\?\.name \|\| selectedSession\?\.firstMessage \|\| translate\("sidebar\.newSession"\)/);
+  assert.doesNotMatch(source, /isNarrowMobile/);
+  assert.match(css, /\.mobile-chat-title \{[\s\S]*?flex: 1;[\s\S]*?min-width: 0;[\s\S]*?text-overflow: ellipsis/);
 });
 
-test("uses a compact narrow-mobile toolbar with a floating action layer", () => {
+test("uses a labelled multi-row grid rather than squeezing action icons across the header", () => {
   assert.match(source, /data-mobile-toolbar="true"[\s\S]*?flex: 1,[\s\S]*?minWidth: 0/);
-  assert.match(
-    source,
-    /data-mobile-toolbar-actions="true"[\s\S]*?position: "absolute"[\s\S]*?right: 0,[\s\S]*?left: TOP_BAR_ICON_BUTTON_SIZE/,
-  );
+  assert.match(source, /data-mobile-toolbar-actions="true"\s*className="mobile-toolbar-actions-panel"/);
+  assert.match(css, /\.mobile-toolbar-actions-panel \{[\s\S]*?top: calc\(100% \+ 6px\)/);
+  assert.match(css, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /@media \(max-width: 360px\)[\s\S]*?repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.equal((source.match(/mobile-toolbar-action-label/g) ?? []).length, 9);
+  assert.match(css, /width: 44px !important;[\s\S]*?height: 44px !important/);
 
   for (const action of ["history", "name", "agents", "branches", "system", "tools", "theme", "language"]) {
     assert.match(source, new RegExp(`data-mobile-toolbar-action=(?:\\{mobile \\? )?"${action}"`));
@@ -55,30 +57,31 @@ test("renders branch toolbar controls whenever a session tree exists", () => {
   assert.match(source, /panel === "branches" \? null : panel/);
 });
 
-test("keeps covered statistics and file controls out of interaction and focus", () => {
-  assert.match(source, /const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;/);
-  assert.match(source, /disabled=\{!showChat \|\| covered\}[\s\S]*?tabIndex=\{covered \? -1 : undefined\}/);
-  assert.match(source, /data-mobile-toolbar-file=\{mobile \? "true" : undefined\}[\s\S]*?visibility: covered \? "hidden" : "visible"/);
-  assert.match(source, /aria-hidden=\{covered \? true : undefined\}/);
+test("never covers the statistics or file controls with the mobile grid", () => {
+  assert.doesNotMatch(source, /const covered/);
+  assert.match(source, /data-mobile-toolbar-stats="true"[\s\S]*?setMobileToolbarMoreOpen\(false\); toggleTopPanel\("session"\)/);
+  assert.match(source, /data-mobile-toolbar-file=\{mobile \? "true" : undefined\}/);
 });
 
 test("closes the mobile action layer on outside click, Escape, layout changes, and session changes", () => {
   assert.match(source, /event\.composedPath\(\)\.includes\(toolbar\)/);
   assert.match(source, /document\.addEventListener\("pointerdown", handlePointerDown, true\)/);
   assert.match(source, /event\.key !== "Escape"[\s\S]*?setMobileToolbarMoreOpen\(false\)/);
-  assert.match(source, /\}, \[isMobile, isNarrowMobile, selectedSession\?\.id, newSessionDraftId\]\);/);
+  assert.match(source, /mobileToolbarMoreRef\.current\?\.focus\(\)/);
+  assert.match(source, /\[data-mobile-toolbar-actions\] button:not\(:disabled\)/);
+  assert.match(source, /\}, \[isMobile, selectedSession\?\.id, newSessionDraftId\]\);/);
 });
 
-test("keeps the mobile action layer open after using an expanded action", () => {
-  const toggleTopPanel = source.match(/const toggleTopPanel = useCallback\([\s\S]*?\n  \}, \[isMobile, isNarrowMobile\]\);/)?.[0];
+test("replaces the mobile action grid when an action opens a secondary panel", () => {
+  const toggleTopPanel = source.match(/const toggleTopPanel = useCallback\([\s\S]*?\n  \}, \[isMobile\]\);/)?.[0];
   const themeHandler = source.match(/const renderThemeButton =[\s\S]*?onClick=\{\(event\) => \{[\s\S]*?toggleTheme\([\s\S]*?\n      \}\}/)?.[0];
   const historyHandler = source.match(/onClick=\{\(\) => \{[\s\S]*?handleViewFullHistory\(\);[\s\S]*?\n          \}\}/)?.[0];
   const autoNameHandler = source.match(/onClick=\{\(\) => \{[\s\S]*?void handleAutoName\(\);[\s\S]*?\n              \}\}/)?.[0];
 
   for (const handler of [toggleTopPanel, themeHandler, historyHandler, autoNameHandler]) {
     assert.ok(handler);
-    assert.doesNotMatch(handler, /setMobileToolbarMoreOpen\(false\)/);
-    assert.match(handler, /setMobileToolbarMoreOpen\(true\)/);
+    assert.match(handler, /setMobileToolbarMoreOpen\(false\)/);
+    assert.doesNotMatch(handler, /setMobileToolbarMoreOpen\(true\)/);
   }
 
   assert.match(source, /toggleTopPanel\("branches", true\)/);
@@ -88,11 +91,11 @@ test("keeps the mobile action layer open after using an expanded action", () => 
   assert.match(source, /onClick=\{\(\) => toggleTopPanel\("session"\)\}/);
 });
 
-test("prioritizes context and cost when the mobile statistics area narrows", () => {
-  assert.match(source, /\.mobile-session-stats \{[\s\S]*?container-type: inline-size/);
-  assert.match(source, /@container \(max-width: 158px\)[\s\S]*?\.mobile-session-stat-io/);
-  assert.match(source, /@container \(max-width: 88px\)[\s\S]*?\.mobile-session-stat-cost/);
-  assert.match(source, /mobileContextText = percent !== null \? `\$\{percent\.toFixed\(0\)\}%` : null/);
+test("folds lifetime usage into an icon and keeps the context warning accessible", () => {
+  assert.doesNotMatch(source, /mobile-session-stat-io|mobile-session-stat-cost/);
+  assert.match(source, /contextUsage\?\.percent != null && contextUsage\.percent > 70 && <span className="mobile-context-alert"/);
+  assert.match(source, /if \(percent !== null && percent > 90\) contextColor = "#ef4444"/);
+  assert.match(source, /aria-label=\{`\$\{translate\("session.title"\)\}[\s\S]*?contextUsage\.percent\.toFixed\(0\)/);
 });
 
 test("places trust warnings below the mobile toolbar and the file toggle in toolbar flow", () => {

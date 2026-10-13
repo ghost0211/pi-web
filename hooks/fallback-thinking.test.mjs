@@ -28,6 +28,7 @@ function setup() {
     dispatchNotice: (value) => writes.notices.push(value), createNoticeId: () => "notice", t: (key) => key,
     contextModelRef: { current: null }, setRuntimeModel: (value) => writes.runtimeModels.push(value),
     fallbackChangePendingRef: { current: false }, modelSwitchPendingRef: { current: false },
+    contextUsageRequestIdRef: { current: 0 }, contextUsageAppliedIdRef: { current: 0 }, modelMetadataAppliedIdRef: { current: 0 },
     agentRunningRef: { current: false }, bashRunningRef: { current: false }, isCompacting: false,
     fallbackModelRef: { current: backup }, fallbackPreferenceTouchedRef: { current: false },
     fallbackPreferenceInitializedRef: { current: false }, fallbackSelectionKnownRef: { current: true },
@@ -44,7 +45,7 @@ function setup() {
     addNotice: (notice) => writes.notices.push(notice), loadSession: async () => {},
     sendAgentCommand: async (sid, command) => { writes.commands.push({ sid, command }); return command.model; },
   });
-  for (const name of ["applyFallbackModelSelection", "applyPrimaryThinkingLevel", "applyPrimaryModelSelection", "applyRuntimeModel", "applyFallbackNotice", "applyAgentStateMetadata", "handleFallbackModelChange", "handleFallbackThinkingLevelChange", "handleThinkingLevelChange", "handleModelChange"]) {
+  for (const name of ["invalidateModelReads", "applyFallbackModelSelection", "applyPrimaryThinkingLevel", "applyPrimaryModelSelection", "applyRuntimeModel", "applyFallbackNotice", "applyAgentStateMetadata", "handleFallbackModelChange", "handleFallbackThinkingLevelChange", "handleThinkingLevelChange", "handleModelChange"]) {
     context[name] = callback(name).runInContext(context);
   }
   return { context, writes, backup };
@@ -58,6 +59,7 @@ test("backup thinking writes only backup configuration, not the primary thinking
   assert.equal(writes.commands[0].command.model.thinkingLevel, "high");
   assert.deepEqual(writes.primaryLevels, []);
   assert.equal(context.fallbackModelRef.current.thinkingLevel, "high");
+  assert.equal(context.modelMetadataAppliedIdRef.current, 2, "backup preference invalidates reads before and after acknowledgement");
 });
 
 test("primary thinking updates only the active model and leaves the backup preference alone", async () => {
@@ -66,6 +68,7 @@ test("primary thinking updates only the active model and leaves the backup prefe
   assert.equal(writes.commands[0].command.type, "set_thinking_level");
   assert.equal(writes.commands[0].command.level, "high");
   assert.deepEqual(context.fallbackModelRef.current, backup);
+  assert.equal(context.modelMetadataAppliedIdRef.current, 2, "primary thinking invalidates reads before and after acknowledgement");
   assert.deepEqual(writes.preferences, []);
 });
 

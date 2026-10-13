@@ -802,6 +802,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const toolDropdownRef = useRef<HTMLDivElement>(null);
   const controlsMenuRef = useRef<HTMLDivElement>(null);
+  const controlsTriggerRef = useRef<HTMLButtonElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
@@ -1933,7 +1934,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (toolDropdownRef.current && !toolDropdownRef.current.contains(e.target as Node)) {
         setToolDropdownOpen(false);
       }
-      if (controlsMenuRef.current && !controlsMenuRef.current.contains(e.target as Node)) {
+      const inControlsPortal = (e.target as Element | null)?.closest?.('[data-composer-controls-portal]');
+      if (controlsMenuRef.current && !controlsMenuRef.current.contains(e.target as Node) && !inControlsPortal) {
         setControlsMenuOpen(false);
       }
       if (historyMenuRef.current && !historyMenuRef.current.contains(e.target as Node) && !textareaRef.current?.contains(e.target as Node)) {
@@ -1947,6 +1949,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   useEffect(() => {
     if (!isMobile) setControlsMenuOpen(false);
   }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile || !controlsMenuOpen) return;
+    controlsMenuRef.current?.querySelector<HTMLButtonElement>('.mobile-composer-controls button:not(:disabled)')?.focus({ preventScroll: true });
+  }, [isMobile, controlsMenuOpen]);
 
   const handleAttachFileClick = useCallback(async () => {
     onAudioUnlock?.();
@@ -1972,7 +1979,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         margin: 0,
         border: 0,
         background: "transparent",
-        padding: "0 16px 16px",
+        padding: isMobile ? "0 8px max(8px, env(safe-area-inset-bottom))" : "0 16px 16px",
         opacity: builtinCommandPending ? 0.5 : 1,
         transition: "opacity 0.15s",
       }}
@@ -2843,31 +2850,27 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           }}>
             {isMobile && (
               <button
+                ref={controlsTriggerRef}
+                data-composer-more="true"
                 type="button"
-                 title={controlsMenuOpen ? undefined : t("chat.moreControls")}
-                 aria-label={t("chat.moreControls")}
+                title={t(controlsMenuOpen ? "chat.collapseControls" : "chat.moreControls")}
+                aria-label={t(controlsMenuOpen ? "chat.collapseControls" : "chat.moreControls")}
                 aria-expanded={controlsMenuOpen}
-                aria-hidden={controlsMenuOpen || undefined}
-                tabIndex={controlsMenuOpen ? -1 : undefined}
-                onClick={() => {
-                  setControlsMenuOpen(true);
-                }}
+                onClick={() => setControlsMenuOpen((open) => !open)}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  width: "100%",
-                  height: 32,
-                  padding: "8px 10px",
+                  width: 44,
+                  height: 44,
+                  padding: 0,
                   background: "none",
                   border: "none",
                   borderRadius: 9,
                   color: "var(--text-muted)",
-                  cursor: controlsMenuOpen ? "default" : "pointer",
+                  cursor: "pointer",
                   fontSize: 12,
                   fontWeight: 500,
-                  visibility: controlsMenuOpen ? "hidden" : "visible",
-                  pointerEvents: controlsMenuOpen ? "none" : "auto",
                   transition: "background 0.12s, color 0.12s",
                 }}
                 onMouseEnter={(e) => {
@@ -2881,10 +2884,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   e.currentTarget.style.color = "var(--text-muted)";
                 }}
               >
-                {t("chat.moreControls")}
+                {controlsMenuOpen ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+                  </svg>
+                )}
               </button>
             )}
-            <div style={{
+            <div
+              className={isMobile ? "mobile-composer-controls" : undefined}
+              role={isMobile ? "group" : undefined}
+              aria-label={isMobile ? t("chat.moreControls") : undefined}
+              onKeyDown={(event) => {
+                if (!isMobile || !controlsMenuOpen || event.key !== "Escape" || event.defaultPrevented) return;
+                event.preventDefault(); event.stopPropagation();
+                setControlsMenuOpen(false);
+                requestAnimationFrame(() => controlsTriggerRef.current?.focus({ preventScroll: true }));
+              }}
+              style={{
               display: isMobile ? (controlsMenuOpen ? "flex" : "none") : "flex",
               alignItems: "center",
               gap: isMobile ? 1 : 2,
@@ -3049,18 +3068,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </button>
             )}
 
-            {isMobile && controlsMenuOpen && (
-              <button
-                type="button"
-                title={t("chat.collapseControls")}
-                aria-label={t("chat.collapseControls")}
-                onClick={() => {
-                  setToolDropdownOpen(false);
-                  setControlsMenuOpen(false);
-                }}
-                style={{ marginLeft: "auto", width: 32, height: 32, border: "none", borderRadius: 8, background: "var(--bg-hover)", color: "var(--text)", cursor: "pointer" }}
-              >×</button>
-            )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: isMobile ? 0 : 4 }}>
               {isStreaming ? (

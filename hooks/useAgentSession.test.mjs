@@ -775,7 +775,9 @@ test("quota fallback follows per-session state and only changes the backup model
   assert.doesNotMatch(fallbackEventSource, /setCurrentModelOverride\(notice\.to\)|ThinkingLevel\(event\.thinkingLevel/);
   assert.doesNotMatch(fallbackEventSource, /onAgentEnd|type: "success"/);
   assert.match(toolSelectionSource, /if \(recreated && fallbackSelectionKnownRef\.current && fallbackModelRef\.current\)[\s\S]*?type: "set_fallback_model"/);
-  assert.match(toolSelectionSource, /applyAgentStateMetadata\(state\)/);
+  assert.match(toolSelectionSource, /const requestId = \+\+contextUsageRequestIdRef\.current/);
+  assert.match(toolSelectionSource, /promptRunIdRef\.current === runId/);
+  assert.match(toolSelectionSource, /applyAgentStateMetadata\(state, false, requestId\)/);
   assert.match(source, /displayModel = isNew \? \(currentModelOverride \?\? newSessionModel \?\? newSessionDefaultModel\)/);
   assert.match(fallbackChangeSource, /if \(!currentSid && !pendingSession\) \{\s*setFallbackModelPreference\(parsed\);/);
   assert.match(fallbackChangeSource, /sendAgentCommand<unknown>[\s\S]*?applyFallbackModelSelection\(confirmed\);\s*setFallbackModelPreference\(confirmed === undefined \? parsed : confirmed\);/);

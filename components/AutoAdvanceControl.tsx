@@ -302,6 +302,7 @@ export function AutoAdvanceControl({
       {isOpen && typeof document !== "undefined" && createPortal(
         <div
           className="auto-advance-backdrop"
+          data-composer-controls-portal="auto-advance"
           onClick={(e) => {
             if (e.target === e.currentTarget && !isStopping) {
               handleClose();

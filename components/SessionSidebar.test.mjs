@@ -219,3 +219,32 @@ test("keeps the file explorer hidden from the sidebar", () => {
   assert.doesNotMatch(source, /<FileExplorer/);
   assert.doesNotMatch(source, /t\("files\.explorer"\)/);
 });
+
+test("session rows expose a dedicated mobile more-menu button replacing inline actions on touch/mobile", () => {
+  assert.match(source, /import \{ useIsMobile \} from "@\/hooks\/useIsMobile"/);
+  assert.match(sessionItemSource, /const isMobile = useIsMobile\(\)/);
+  assert.match(sessionItemSource, /className="session-row-inline-actions"/);
+  assert.match(sessionItemSource, /className="session-row-mobile-more"/);
+  assert.match(sessionItemSource, /aria-haspopup="menu"/);
+  assert.match(sessionItemSource, /aria-expanded=\{isMenuOpen\}/);
+  assert.match(sessionItemSource, /aria-label=\{t\("sidebar\.sessionOptions"\)\}/);
+  assert.match(sessionItemSource, /title=\{t\("sidebar\.sessionOptions"\)\}/);
+  assert.match(sessionItemSource, /disabled=\{actionsDisabled\}/);
+  // Single-line title preserves row height for virtual list
+  assert.match(sessionItemSource, /whiteSpace: "nowrap"/);
+});
+
+test("mobile more button reuses context menu dispatch and prevents session switching", () => {
+  assert.match(sessionItemSource, /const handleMoreClick = useCallback\(\(e: React\.MouseEvent<HTMLButtonElement>\) => \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?e\.stopPropagation\(\);/);
+  assert.match(sessionItemSource, /if \(session\.transient \|\| actionsDisabled\) return;/);
+  assert.match(sessionItemSource, /if \(isMenuOpen\) \{\s*onCloseMenu\?\.\(\);\s*return;\s*\}/);
+  assert.match(sessionItemSource, /dispatchSessionRowContextMenu\(\{[\s\S]*?id: session\.id,[\s\S]*?path: session\.path,[\s\S]*?cwd: session\.cwd,/);
+  assert.match(sessionItemSource, /if \(handled \|\| !onContextMenuOpen\) \{\s*return;\s*\}/);
+  assert.match(sessionItemSource, /onContextMenuOpen\(x, y\)/);
+});
+
+test("restores focus to more button on menu close without interrupting rename", () => {
+  assert.match(sessionItemSource, /moreButtonRef = useRef<HTMLButtonElement>\(null\)/);
+  assert.match(sessionItemSource, /wasMenuOpenRef = useRef\(false\)/);
+  assert.match(sessionItemSource, /if \(wasMenuOpenRef\.current && !isMenuOpen\) \{\s*if \(!renaming\) \{\s*moreButtonRef\.current\?\.focus\(\);/);
+});

@@ -21,7 +21,7 @@ import { useDesktopTray } from "@/hooks/useDesktopTray";
 import { useSessionManagement } from "@/hooks/useSessionManagement";
 import { SESSION_CATALOG_CHANGED_EVENT } from "@/lib/session-management-client";
 import { OPEN_SESSION_MANAGEMENT_EVENT, type OpenSessionManagementDetail } from "@/lib/session-management-types";
-import { useIsMobile, useIsNarrowMobile } from "@/hooks/useIsMobile";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useIsDesktopApp } from "@/hooks/useIsDesktopApp";
 import { appDisplayName } from "@/lib/app-brand";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
@@ -93,7 +93,6 @@ export function AppShell() {
     preference === "light" ? "theme.light" : preference === "dark" ? "theme.dark" : "theme.auto";
   const { locale, hydrated: localeReady, setLocale, t: translate, supportedLocales } = useI18n();
   const isMobile = useIsMobile();
-  const isNarrowMobile = useIsNarrowMobile();
   const desktopShell = useIsDesktopApp();
   const appName = appDisplayName(desktopShell);
   useViewportHeight();
@@ -276,6 +275,7 @@ export function AppShell() {
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
+  const mobileToolbarMoreRef = useRef<HTMLButtonElement>(null);
   const languageBtnRef = useRef<HTMLButtonElement>(null);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
@@ -392,8 +392,9 @@ export function AppShell() {
   ) => {
     if (isMobile) setSidebarOpen(false);
     setActiveTopPanel((cur) => cur === panel ? null : panel);
-    if (isMobile && isNarrowMobile && keepMobileToolbarOpen) setMobileToolbarMoreOpen(true);
-  }, [isMobile, isNarrowMobile]);
+    // Opening a secondary panel replaces the action grid instead of covering it.
+    if (isMobile && keepMobileToolbarOpen) setMobileToolbarMoreOpen(false);
+  }, [isMobile]);
 
   const handleSystemInfoToggle = useCallback((
     panel: "system" | "tools",
@@ -458,8 +459,11 @@ export function AppShell() {
       event.preventDefault();
       event.stopPropagation();
       setMobileToolbarMoreOpen(false);
+      mobileToolbarMoreRef.current?.focus();
     };
 
+    // Non-modal toolbar: Tab remains free to leave it.
+    mobileToolbarRef.current?.querySelector<HTMLButtonElement>("[data-mobile-toolbar-actions] button:not(:disabled)")?.focus();
     document.addEventListener("pointerdown", handlePointerDown, true);
     document.addEventListener("keydown", handleKeyDown, true);
     return () => {
@@ -470,7 +474,7 @@ export function AppShell() {
 
   useEffect(() => {
     setMobileToolbarMoreOpen(false);
-  }, [isMobile, isNarrowMobile, selectedSession?.id, newSessionDraftId]);
+  }, [isMobile, selectedSession?.id, newSessionDraftId]);
 
   useEffect(() => {
     if (!activeTopPanel || !topBarRef.current) return;
@@ -1342,7 +1346,7 @@ export function AppShell() {
       onClick={(event) => {
         const rect = event.currentTarget.getBoundingClientRect();
         toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-        if (mobile && isNarrowMobile) setMobileToolbarMoreOpen(true);
+        if (mobile) setMobileToolbarMoreOpen(false);
       }}
       title={translate(themeLabelKey)}
       aria-label={translate(themeLabelKey)}
@@ -1375,6 +1379,7 @@ export function AppShell() {
           <line x1="12" y1="17" x2="12" y2="21" />
         </svg>
       )}
+      {mobile && <span className="mobile-toolbar-action-label">{translate("i18n.themeShort")}</span>}
     </button>
   );
 
@@ -1420,6 +1425,7 @@ export function AppShell() {
         <path d="m22 22-5-10-5 10" />
         <path d="M14 18h6" />
       </svg>
+      {mobile && <span className="mobile-toolbar-action-label">{translate("common.language")}</span>}
     </button>
   );
 
@@ -1480,8 +1486,9 @@ export function AppShell() {
   const renderChatToolbarActions = (mobile: boolean) => {
     if (!mobile && !showChat) return null;
     return (
-      <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
+      <div className={mobile ? "mobile-toolbar-action-grid" : undefined} style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
         <div
+          className={mobile ? "mobile-toolbar-history-wrapper" : undefined}
           ref={exportMenuRef}
           style={{ position: "relative", display: "flex", alignItems: "stretch", height: "100%" }}
         >
@@ -1490,7 +1497,7 @@ export function AppShell() {
           onClick={() => {
             if (mobile) {
               handleViewFullHistory();
-              if (isNarrowMobile) setMobileToolbarMoreOpen(true);
+              setMobileToolbarMoreOpen(false);
             } else {
               setExportMenuOpen((open) => !open);
             }
@@ -1549,7 +1556,7 @@ export function AppShell() {
             <path d="M3 3v5h5" />
             <path d="M12 7v5l3 2" />
           </svg>
-          {!mobile && <span>{translate("history.label")}</span>}
+          <span className={mobile ? "mobile-toolbar-action-label" : undefined}>{translate("history.label")}</span>
           {!mobile && (
             <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: exportMenuOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
               <polyline points="2 3.5 5 6.5 8 3.5" />
@@ -1639,7 +1646,7 @@ export function AppShell() {
               type="button"
               onClick={() => {
                 void handleAutoName();
-                if (mobile && isNarrowMobile) setMobileToolbarMoreOpen(true);
+                if (mobile) setMobileToolbarMoreOpen(false);
               }}
               disabled={disabled}
               title={title}
@@ -1684,7 +1691,7 @@ export function AppShell() {
                   <path d="M6 4V2M5 3H3M19 19v3M17.5 20.5h3" />
                 </svg>
               )}
-              {!mobile && <span>{label}</span>}
+              <span className={mobile ? "mobile-toolbar-action-label" : undefined}>{label}</span>
             </button>
           );
         })()}
@@ -1698,7 +1705,7 @@ export function AppShell() {
           style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: mobile ? TOP_BAR_ICON_BUTTON_SIZE : undefined, height: "100%", padding: mobile ? 0 : "0 12px", border: "none", borderRight: "1px solid var(--border)", borderTop: activeTopPanel === "tasks" ? "2px solid var(--accent)" : "2px solid transparent", background: activeTopPanel === "tasks" ? "var(--bg-selected)" : "none", color: activeTopPanel === "tasks" ? "var(--text)" : "var(--text-muted)", cursor: "pointer", flexShrink: 0, fontSize: 11 }}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9h10M7 14h7" /></svg>
-          {!mobile && <span>{translate("runningTasks.title")}</span>}
+          <span className={mobile ? "mobile-toolbar-action-label" : undefined}>{translate("runningTasks.title")}</span>
           {runningSessionIds.size > 0 && <span style={{ color: "var(--accent)", fontVariantNumeric: "tabular-nums" }}>{runningSessionIds.size}</span>}
         </button>
         {hasSubagentSessions && (
@@ -1726,7 +1733,7 @@ export function AppShell() {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
             </svg>
-            {!mobile && <span>{translate("agentSwitcher.title")}</span>}
+            <span className={mobile ? "mobile-toolbar-action-label" : undefined}>{translate("agentSwitcher.title")}</span>
             <span
               aria-hidden="true"
               style={{
@@ -1765,6 +1772,7 @@ export function AppShell() {
               <circle cx="6" cy="18" r="3" />
               <path d="M18 9a9 9 0 0 1-9 9" />
             </svg>
+            <span className="mobile-toolbar-action-label">{translate("i18n.branches")}</span>
           </button>
         ) : (
           <BranchNavigator
@@ -1815,7 +1823,7 @@ export function AppShell() {
             <line x1="8" y1="13" x2="16" y2="13" />
             <line x1="8" y1="17" x2="13" y2="17" />
           </svg>
-          {!mobile && <span>{translate("system.label")}</span>}
+          <span className={mobile ? "mobile-toolbar-action-label" : undefined}>{translate("system.label")}</span>
         </button>
         <button
           type="button"
@@ -1849,7 +1857,7 @@ export function AppShell() {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: systemTools?.some((tool) => tool.active) ? "var(--accent)" : "var(--text-dim)", flexShrink: 0 }} aria-hidden="true">
             <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z" />
           </svg>
-          {!mobile && <span>{translate("tools.label")}</span>}
+          <span className={mobile ? "mobile-toolbar-action-label" : undefined}>{translate("tools.label")}</span>
         </button>
         {mobile && renderThemeButton(true)}
         {mobile && renderLanguageButton(true)}
@@ -1871,7 +1879,6 @@ export function AppShell() {
 
     let contextColor = "var(--text-muted)";
     let desktopContextText: string | null = null;
-    let mobileContextText: string | null = null;
     if (contextUsage?.contextWindow) {
       const percent = contextUsage.percent;
       if (percent !== null && percent > 90) contextColor = "#ef4444";
@@ -1879,7 +1886,6 @@ export function AppShell() {
       desktopContextText = percent !== null
         ? `${percent.toFixed(0)}% / ${formatCompact(contextUsage.contextWindow)}`
         : `? / ${formatCompact(contextUsage.contextWindow)}`;
-      mobileContextText = percent !== null ? `${percent.toFixed(0)}%` : null;
     }
 
     const tooltipParts: string[] = [];
@@ -1895,37 +1901,46 @@ export function AppShell() {
       tooltipParts.push(`context: ${percent !== null ? percent.toFixed(1) + "%" : "unknown"} of ${contextUsage.contextWindow.toLocaleString()} tokens`);
     }
     const tooltip = tooltipParts.join("  |  ");
-    const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;
-    const hasMobileValues = Boolean(
-      (tokens && (tokens.input > 0 || tokens.output > 0))
-      || costText
-      || mobileContextText,
-    );
+    if (mobile) {
+      return (
+        <button
+          type="button"
+          className="mobile-session-stats"
+          data-mobile-toolbar-stats="true"
+          onClick={() => { setMobileToolbarMoreOpen(false); toggleTopPanel("session"); }}
+          disabled={!showChat}
+          title={tooltip || translate("session.title")}
+          aria-label={`${translate("session.title")}${contextUsage?.percent != null ? ` · ${contextUsage.percent.toFixed(0)}%` : ""}`}
+          aria-pressed={activeTopPanel === "session"}
+          style={{ color: contextColor }}
+        >
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+            <path d="M4 20h16M7 16v-5M12 16V5M17 16V8" />
+          </svg>
+          {contextUsage?.percent != null && contextUsage.percent > 70 && <span className="mobile-context-alert" aria-hidden="true" />}
+        </button>
+      );
+    }
+
 
     return (
       <button
         type="button"
         onClick={() => toggleTopPanel("session")}
-        disabled={!showChat || covered}
-        tabIndex={covered ? -1 : undefined}
+        disabled={!showChat}
         title={tooltip || translate("session.title")}
         aria-label={translate("session.title")}
         aria-pressed={activeTopPanel === "session"}
-        aria-hidden={covered ? true : undefined}
-        className={mobile ? "mobile-session-stats" : undefined}
-        data-mobile-toolbar-stats={mobile ? "true" : undefined}
+
         style={{
-          marginLeft: mobile ? 0 : "auto",
+          marginLeft: "auto",
           display: "flex", alignItems: "center", justifyContent: "flex-end",
-          flex: mobile ? 1 : undefined,
           minWidth: 0,
-          gap: mobile ? 7 : 10,
-          paddingLeft: mobile ? 6 : 12,
-          paddingRight: mobile ? 6 : 12,
+          gap: 10,
+          paddingLeft: 12,
+          paddingRight: 12,
           height: "100%",
           overflow: "hidden",
-          visibility: covered ? "hidden" : "visible",
-          pointerEvents: covered ? "none" : "auto",
           background: activeTopPanel === "session" ? "var(--bg-selected)" : "none",
           border: "none",
           borderTop: activeTopPanel === "session" ? "2px solid var(--accent)" : "2px solid transparent",
@@ -1935,47 +1950,13 @@ export function AppShell() {
           transition: "color 0.1s, background 0.1s",
         }}
         onMouseEnter={(event) => {
-          if (showChat && !covered) event.currentTarget.style.color = "var(--text)";
+          if (showChat) event.currentTarget.style.color = "var(--text)";
         }}
         onMouseLeave={(event) => {
           event.currentTarget.style.color = activeTopPanel === "session" ? "var(--text)" : "var(--text-muted)";
         }}
       >
-        {mobile ? (
-          <>
-            {tokens && tokens.input > 0 && (
-              <span className="mobile-session-stat-io" style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
-                </svg>
-                {formatCompact(tokens.input)}
-              </span>
-            )}
-            {tokens && tokens.output > 0 && (
-              <span className="mobile-session-stat-io" style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
-                </svg>
-                {formatCompact(tokens.output)}
-              </span>
-            )}
-            {costText && (
-              <span className="mobile-session-stat-cost" style={{ color: "var(--text)", fontWeight: 500, flexShrink: 0 }}>
-                {costText}
-              </span>
-            )}
-            {mobileContextText && (
-              <span style={{ color: contextColor, flexShrink: 0 }}>
-                {mobileContextText}
-              </span>
-            )}
-            {!hasMobileValues && showChat && (
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", color: "var(--text-dim)" }}>
-                {translate("session.title")}
-              </span>
-            )}
-          </>
-        ) : (
+        {(
           <>
             {tokens && tokens.input > 0 && (
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -2021,16 +2002,12 @@ export function AppShell() {
   };
 
   const renderMainFileToggle = (mobile: boolean) => {
-    const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;
     return (
       <button
         type="button"
         onClick={handleRightPanelToggle}
-        disabled={covered}
-        tabIndex={covered ? -1 : undefined}
         aria-controls="file-panel"
         aria-expanded={rightPanelOpen}
-        aria-hidden={covered ? true : undefined}
         title={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
         aria-label={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
         data-mobile-toolbar-file={mobile ? "true" : undefined}
@@ -2038,14 +2015,12 @@ export function AppShell() {
           marginLeft: !mobile && !sessionStats && !contextUsage ? "auto" : 0,
           display: "flex", alignItems: "center", justifyContent: "center",
           width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
-          visibility: covered ? "hidden" : "visible",
-          pointerEvents: covered ? "none" : "auto",
           background: rightPanelOpen ? "var(--bg-selected)" : "none",
           border: "none", borderLeft: "1px solid var(--border)",
           color: rightPanelOpen ? "var(--text)" : "var(--text-muted)",
           cursor: "pointer", flexShrink: 0, transition: "color 0.12s, background 0.12s",
         }}
-        onMouseEnter={(event) => { if (!covered) event.currentTarget.style.color = "var(--text)"; }}
+        onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; }}
         onMouseLeave={(event) => { event.currentTarget.style.color = rightPanelOpen ? "var(--text)" : "var(--text-muted)"; }}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2115,19 +2090,6 @@ export function AppShell() {
         .session-info-popover,
         .session-info-popover::after {
           animation: none;
-        }
-      }
-      .mobile-session-stats {
-        container-type: inline-size;
-      }
-      @container (max-width: 158px) {
-        .mobile-session-stat-io {
-          display: none !important;
-        }
-      }
-      @container (max-width: 88px) {
-        .mobile-session-stat-cost {
-          display: none !important;
         }
       }
       @media (max-width: 640px) {
@@ -2306,7 +2268,8 @@ export function AppShell() {
           position: "fixed",
           inset: 0,
           zIndex: 199,
-          background: "rgba(0,0,0,0.4)",
+          background: "rgba(0,0,0,0.58)",
+          backdropFilter: "blur(2px)",
           opacity: sidebarOpen ? 1 : 0,
           pointerEvents: sidebarOpen ? "auto" : "none",
           transition: "opacity 0.25s ease",
@@ -2348,6 +2311,7 @@ export function AppShell() {
         <div ref={topBarRef} style={{ flexShrink: 0, background: "var(--bg)" }}>
         <div data-tauri-drag-region style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(48px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
           <button
+            className={isMobile ? "mobile-topbar-button" : undefined}
             onClick={handleSidebarToggle}
              title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
              aria-label={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
@@ -2383,8 +2347,14 @@ export function AppShell() {
                 height: "100%",
               }}
             >
-              {isNarrowMobile && (
+              <div className="mobile-chat-title" data-mobile-session-title="true" title={selectedSession?.name || selectedSession?.firstMessage || translate("sidebar.newSession")}>
+                {selectedSession?.name || selectedSession?.firstMessage || translate("sidebar.newSession")}
+              </div>
+              {renderSessionStatsButton(true)}
+              {renderMainFileToggle(true)}
                 <button
+                  ref={mobileToolbarMoreRef}
+                  className="mobile-topbar-button"
                   type="button"
                   onClick={handleMobileToolbarMoreToggle}
                   title={mobileToolbarMoreOpen ? translate("chat.close") : translate("chat.moreControls")}
@@ -2413,29 +2383,13 @@ export function AppShell() {
                     </svg>
                   )}
                 </button>
-              )}
-              {!isNarrowMobile && renderChatToolbarActions(true)}
-              {renderSessionStatsButton(true)}
-              {renderMainFileToggle(true)}
-              {isNarrowMobile && mobileToolbarMoreOpen && (
+              {mobileToolbarMoreOpen && (
                 <div
                   id="mobile-toolbar-actions"
                   role="toolbar"
                   aria-label={translate("chat.moreControls")}
                   data-mobile-toolbar-actions="true"
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                    left: TOP_BAR_ICON_BUTTON_SIZE,
-                    zIndex: 20,
-                    display: "flex",
-                    alignItems: "stretch",
-                    background: "color-mix(in srgb, var(--bg-panel) 94%, var(--bg))",
-                    boxShadow: "4px 0 18px rgba(0,0,0,0.12)",
-                    backdropFilter: "blur(10px)",
-                  }}
+                  className="mobile-toolbar-actions-panel"
                 >
                   {renderChatToolbarActions(true)}
                 </div>

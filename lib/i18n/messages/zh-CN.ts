@@ -547,6 +547,7 @@ export const zhCNLocale: LocalePlugin = {
     "sidebar.searchPartial": "结果不完整",
     "sidebar.searchFailed": "搜索失败",
     "sidebar.projectOptions": "选项",
+    "sidebar.sessionOptions": "会话操作",
     "sidebar.newSessionHere": "在此处新建会话",
     "sidebar.copyPath": "复制路径",
     "sidebar.removeFromList": "隐藏项目",

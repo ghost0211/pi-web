@@ -537,6 +537,7 @@ export const zhTWLocale: LocalePlugin = {
     "sidebar.searchPartial": "結果不完整",
     "sidebar.searchFailed": "搜尋失敗",
     "sidebar.projectOptions": "選項",
+    "sidebar.sessionOptions": "對話操作",
     "sidebar.newSessionHere": "在此處新增對話",
     "sidebar.copyPath": "複製路徑",
     "sidebar.removeFromList": "隱藏專案",

@@ -77,6 +77,7 @@ export function ContextMenu({ x, y, items, onClose, ariaLabel }: ContextMenuProp
   return createPortal(
     <div
       ref={menuRef}
+      className="context-menu"
       role="menu"
       aria-label={ariaLabel}
       onContextMenu={(event) => event.preventDefault()}

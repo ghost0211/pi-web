@@ -378,6 +378,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // Highest request id whose reply was applied. A reply applies only when it
   // is newer, so a failed newer read never discards an older good one.
   const contextUsageAppliedIdRef = useRef(0);
+  // Model-only snapshots must advance their own watermark even without usage.
+  const modelMetadataAppliedIdRef = useRef(0);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [customSystemPrompt, setCustomSystemPrompt] = useState<SessionSystemPromptCustomization | null>(null);
   const [forkingEntryId, setForkingEntryId] = useState<string | null>(null);
@@ -635,19 +637,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setContextUsage(state.contextUsage ?? null);
   }, []);
 
-  const refreshContextUsage = useCallback(async (sid: string) => {
-    const runId = promptRunIdRef.current;
-    const requestId = ++contextUsageRequestIdRef.current;
-    try {
-      const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
-      if (!res.ok) return;
-      const data = await res.json() as { state?: AgentStateResponse };
-      applyContextUsage(data.state, sid, runId, requestId);
-    } catch {
-      // A later message or the running-state poll retries the usage read.
-    }
-  }, [applyContextUsage]);
-
   const applyPrimaryThinkingLevel = useCallback((value: unknown, target: SelectedModel | null) => {
     const available = target ? modelThinkingLevelsRef.current[`${target.provider}:${target.modelId}`] : undefined;
     let level = normalizeThinkingLevelOption(value, available);
@@ -717,7 +706,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [t]);
 
   const applyAgentStateMetadata = useCallback((state: AgentStateResponse | undefined, announce = false, requestId?: number) => {
-    if (!state || (requestId !== undefined && requestId <= contextUsageAppliedIdRef.current)) return;
+    if (!state || (requestId !== undefined
+      && requestId <= Math.max(contextUsageAppliedIdRef.current, modelMetadataAppliedIdRef.current))) return;
+    if (!modelSwitchPendingRef.current && (state.model !== undefined || state.primaryModel !== undefined)) {
+      modelMetadataAppliedIdRef.current = Math.max(modelMetadataAppliedIdRef.current, requestId ?? contextUsageRequestIdRef.current);
+    }
     if (state.autoAdvance !== undefined) applyAutoAdvanceState(state.autoAdvance);
     if (state.suppressCompletionNotification !== undefined) autoAdvanceSuppressCompletionRef.current = state.suppressCompletionNotification;
     const actual = parseRuntimeModel(state.model);
@@ -746,6 +739,72 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       applyFallbackNotice(state.fallbackNotice, announce && activeFallback && fallbackNoticeAnnouncementRef.current.initialized, !activeFallback);
     }
   }, [applyRuntimeModel, applyPrimaryModelSelection, applyPrimaryThinkingLevel, applyFallbackModelSelection, applyFallbackNotice, applyAutoAdvanceState]);
+
+  const refreshContextUsage = useCallback(async (sid: string) => {
+    const runId = promptRunIdRef.current;
+    const requestId = ++contextUsageRequestIdRef.current;
+    try {
+      const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+      if (!res.ok) return;
+      const response = await res.json() as { state?: AgentStateResponse };
+      if (!sessionHookMountedRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== runId) return;
+      applyAgentStateMetadata(response.state, false, requestId);
+      applyContextUsage(response.state, sid, runId, requestId);
+    } catch {
+      // A later message or the running-state poll retries the read.
+    }
+  }, [applyAgentStateMetadata, applyContextUsage]);
+
+  // Observation only: never starts a wrapper or replays set_model. Idle SSE is
+  // deliberately closed after its grace period, so mobile wake-up and other
+  // windows' model changes need a separate, bounded metadata read.
+  const syncSessionModel = useCallback(async (sid: string, includeDisk = true) => {
+    if (modelSwitchPendingRef.current || sessionIdRef.current !== sid) return;
+    const runId = promptRunIdRef.current;
+    const requestId = ++contextUsageRequestIdRef.current;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const fresh = () => sessionHookMountedRef.current && sessionIdRef.current === sid
+      && promptRunIdRef.current === runId && !modelSwitchPendingRef.current
+      && requestId > Math.max(contextUsageAppliedIdRef.current, modelMetadataAppliedIdRef.current);
+    try {
+      const liveRes = await fetch(`/api/agent/${encodeURIComponent(sid)}`, { signal: controller.signal });
+      if (!liveRes.ok) return;
+      const live = await liveRes.json() as { state?: AgentStateResponse };
+      if (!fresh()) return;
+      if (live.state) {
+        applyAgentStateMetadata(live.state, false, requestId);
+        applyContextUsage(live.state, sid, runId, requestId);
+        return;
+      }
+      if (!includeDisk) return;
+      // A reaped/dormant wrapper has no live state. Only a one-entry, deferred
+      // disk snapshot is needed; do not replace the visible history window.
+      const detailRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}?tail=1&deferThinking=1&deferMedia=1`, { signal: controller.signal });
+      if (!detailRes.ok) return;
+      const detail = await detailRes.json() as SessionData;
+      if (!fresh()) return;
+      const actual = detail.context.model;
+      applyAgentStateMetadata({
+        ...(actual ? { model: { provider: actual.provider, id: actual.modelId } } : {}),
+        primaryModel: detail.primaryModel,
+        thinkingLevel: detail.context.thinkingLevel,
+        fallbackModel: detail.fallbackModel,
+        fallbackNotice: detail.fallbackNotice,
+      }, false, requestId);
+    } catch {
+      // Leave the last confirmed choice intact offline; visibility/online and
+      // the next prompt/assistant event retry, without resending any prompt.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, [applyAgentStateMetadata, applyContextUsage]);
+
+  const invalidateModelReads = useCallback(() => {
+    const barrier = ++contextUsageRequestIdRef.current;
+    modelMetadataAppliedIdRef.current = barrier;
+    contextUsageAppliedIdRef.current = barrier;
+  }, []);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false, options?: { force?: boolean }) => {
     let messagesLoaded = false;
@@ -788,10 +847,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       } else {
         setToolPresetState("default");
       }
-      const metadataFresh = promptRunIdRef.current === loadRunId && estimateRequestId > contextUsageAppliedIdRef.current;
+      const metadataFresh = promptRunIdRef.current === loadRunId
+        && estimateRequestId > Math.max(contextUsageAppliedIdRef.current, modelMetadataAppliedIdRef.current);
       setCurrentModelOverride((current) => modelSwitchPendingRef.current || !metadataFresh ? current : null);
       if (metadataFresh) {
         if (!modelSwitchPendingRef.current) {
+          modelMetadataAppliedIdRef.current = estimateRequestId;
           applyRuntimeModel(d.context.model);
           if (d.primaryModel !== undefined) applyPrimaryModelSelection(d.primaryModel);
           else if (d.context.model) applyPrimaryModelSelection({ ...d.context.model, thinkingLevel: d.context.thinkingLevel });
@@ -1037,12 +1098,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current ?? await ensureNewSession();
     if (!sid) return;
 
+    const runId = promptRunIdRef.current;
+    const requestId = ++contextUsageRequestIdRef.current;
     const [state] = await Promise.all([
       sendAgentCommand<AgentStateResponse>(sid, { type: "get_state" }),
       loadTools(sid),
     ]);
-    if (!sessionHookMountedRef.current || sessionIdRef.current !== sid) return;
-    applyAgentStateMetadata(state);
+    if (!sessionHookMountedRef.current || sessionIdRef.current !== sid || promptRunIdRef.current !== runId) return;
+    applyAgentStateMetadata(state, false, requestId);
     setSystemPrompt(state.systemPrompt ?? "");
     if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
   }, [applyAgentStateMetadata, ensureNewSession, loadTools]);
@@ -1248,6 +1311,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         || !eventStreamGraceActiveRef.current
       ) return;
 
+      const requestId = ++contextUsageRequestIdRef.current;
+      const runId = promptRunIdRef.current;
       try {
         const res = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1256,10 +1321,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           generation !== eventStreamGraceGenerationRef.current
           || sessionIdRef.current !== sid
           || !eventStreamGraceActiveRef.current
+          || promptRunIdRef.current !== runId
         ) return;
 
         const state = data.state;
-        applyAgentStateMetadata(state);
+        applyAgentStateMetadata(state, false, requestId);
         const promptActive = Boolean(data.running && state && (state.isStreaming || state.isPromptRunning));
         if (promptActive) {
           eventStreamGraceActiveRef.current = false;
@@ -1424,11 +1490,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [applyAgentStateMetadata, applyContextUsage, finishPromptWithoutStream]);
 
-  // Recovery net for missed SSE events: while the agent is running, verify
-  // against the server periodically and whenever the tab returns to the
-  // foreground or the network comes back.
+  // Recovery net for missed SSE events. Keep wake-up listeners even when idle:
+  // otherwise a phone returning after the SSE grace period shows stale models.
   useEffect(() => {
-    if (!agentRunning) return;
     const reconcile = () => {
       // Read the ref on every tick: for brand-new sessions the id is
       // assigned only after ensure_session returns.
@@ -1441,11 +1505,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!sid) return;
       // A suspended mobile browser can keep a dead EventSource in OPEN state.
       // Reconnect and reload completed turns missed while the tab was frozen.
-      eventConnectionRef.current?.refresh(sid);
-      void loadSession(sid);
-      reconcile();
+      if (agentRunningRef.current) {
+        eventConnectionRef.current?.refresh(sid);
+        void loadSession(sid);
+        reconcile();
+      } else {
+        void syncSessionModel(sid);
+      }
     };
-    const interval = setInterval(reconcile, AGENT_STATE_RECONCILE_MS);
+    let idleReadPending = false;
+    const tick = async () => {
+      if (agentRunningRef.current) { reconcile(); return; }
+      const sid = sessionIdRef.current;
+      if (!sid || idleReadPending || document.visibilityState !== "visible" || bashRunningRef.current) return;
+      idleReadPending = true;
+      // Poll only the live wrapper; disk history/tree snapshots are reserved
+      // for wake-up and dispatch rather than downloaded every fifteen seconds.
+      try { await syncSessionModel(sid, false); } finally { idleReadPending = false; }
+    };
+    const interval = setInterval(() => void tick(), AGENT_STATE_RECONCILE_MS);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", onVisible);
     window.addEventListener("pageshow", onVisible);
@@ -1455,7 +1533,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       window.removeEventListener("online", onVisible);
       window.removeEventListener("pageshow", onVisible);
     };
-  }, [agentRunning, loadSession, reconcileAgentState]);
+  }, [agentRunning, loadSession, reconcileAgentState, syncSessionModel]);
 
   useEffect(() => {
     agentRunningRef.current = agentRunning;
@@ -1818,8 +1896,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     maintainEventsConnected(sid);
     try {
       await sendAgentCommand(sid, { type: "start_auto_advance", config });
+      const runId = promptRunIdRef.current;
+      const requestId = ++contextUsageRequestIdRef.current;
       const state = await sendAgentCommand<AgentStateResponse>(sid, { type: "get_state", requireLiveSession: true });
-      if (sessionIdRef.current === sid) applyAgentStateMetadata(state);
+      if (sessionHookMountedRef.current && sessionIdRef.current === sid && promptRunIdRef.current === runId) {
+        applyAgentStateMetadata(state, false, requestId);
+      }
     } finally { autoAdvanceCommandPendingRef.current = false; if (sessionHookMountedRef.current) setAutoAdvanceBusy(false); }
   }, [applyAgentStateMetadata, maintainEventsConnected]);
 
@@ -1911,6 +1993,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         promoteNewSession(1, message);
       } else if (session) {
         sentSessionId = session.id;
+        // Calibrate the displayed choice at dispatch without delaying a prompt
+        // on a suspended phone, forcing a model, or replaying any tool work.
+        void syncSessionModel(session.id);
         maintainEventsConnected(session.id);
         promptRequestStarted = true;
         await sendAgentCommand(session.id, {
@@ -1959,7 +2044,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, maintainEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, maintainEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission, syncSessionModel]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -2157,18 +2242,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid || modelSwitchPendingRef.current) return;
     const target = { provider, modelId };
     const previousOverride = currentModelOverride;
+    invalidateModelReads();
     modelSwitchPendingRef.current = true;
     setCurrentModelOverride(target);
     setModelSwitching(true);
     try {
       await sendAgentCommand(sid, { type: "set_model", provider, modelId });
       await sendAgentCommand(sid, { type: "set_thinking_level", level: nextThinkingLevel });
+      // Invalidate reads started while this switch was pending as well.
+      invalidateModelReads();
       // Pi persists model_change synchronously. Reload the canonical session so
       // the model, thinking level, and active leaf all advance together.
       modelSwitchPendingRef.current = false;
       await loadSession(sid);
     } catch (e) {
       console.error("Failed to set model:", e);
+      invalidateModelReads();
       modelSwitchPendingRef.current = false;
       setCurrentModelOverride(previousOverride);
       addNotice({
@@ -2182,7 +2271,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       modelSwitchPendingRef.current = false;
       setModelSwitching(false);
     }
-  }, [addNotice, currentModelOverride, isCompacting, isNew, loadSession, modelThinkingLevels, modelThinkingLevelPins, setNewSessionModel, thinkingLevel]);
+  }, [addNotice, currentModelOverride, invalidateModelReads, isCompacting, isNew, loadSession, modelThinkingLevels, modelThinkingLevelPins, setNewSessionModel, thinkingLevel]);
 
   const handleFallbackModelChange = useCallback(async (model: FallbackModelRef | null) => {
     if (fallbackChangePendingRef.current || modelSwitchPendingRef.current || agentRunningRef.current || bashRunningRef.current || isCompacting) return;
@@ -2204,6 +2293,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
 
     const requestId = ++fallbackChangeRequestRef.current;
+    invalidateModelReads();
     fallbackChangePendingRef.current = true;
     setFallbackModelSwitching(true);
     try {
@@ -2229,11 +2319,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } finally {
       if (requestId === fallbackChangeRequestRef.current) {
+        invalidateModelReads();
         fallbackChangePendingRef.current = false;
         setFallbackModelSwitching(false);
       }
     }
-  }, [addNotice, applyFallbackModelSelection, isCompacting, loadSession]);
+  }, [addNotice, applyFallbackModelSelection, invalidateModelReads, isCompacting, loadSession]);
 
   const handleFallbackThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     const selected = fallbackModelRef.current;
@@ -2531,6 +2622,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (isNew) thinkingLevelOverrideRef.current = selectedLevel === "auto" ? null : selectedLevel;
     if (!sessionIdRef.current && !ensuringNewSessionRef.current) return;
     // Lock model changes until the active-model-only update completes.
+    invalidateModelReads();
     modelSwitchPendingRef.current = true;
     setModelSwitching(true);
     try {
@@ -2541,10 +2633,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (isNew) thinkingLevelOverrideRef.current = previousLevel === "auto" ? null : previousLevel;
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
     } finally {
+      invalidateModelReads();
       modelSwitchPendingRef.current = false;
       setModelSwitching(false);
     }
-  }, [addNotice, isCompacting, isNew, thinkingLevel]);
+  }, [addNotice, invalidateModelReads, isCompacting, isNew, thinkingLevel]);
 
   // Shared set_tools flow for preset and custom selections. The server may
   // rebuild the session when crossing the chat-only boundary; in that case the
@@ -2576,12 +2669,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setSlashCommands([]);
       setExtensionStatuses([]);
       setExtensionWidgets([]);
+      const runId = promptRunIdRef.current;
+      const requestId = ++contextUsageRequestIdRef.current;
       const [state] = await Promise.all([
         sendAgentCommand<AgentStateResponse>(activeSessionId, { type: "get_state" }),
         loadTools(activeSessionId),
       ]);
-      if (sessionHookMountedRef.current && sessionIdRef.current === activeSessionId) {
-        applyAgentStateMetadata(state);
+      if (sessionHookMountedRef.current && sessionIdRef.current === activeSessionId && promptRunIdRef.current === runId) {
+        applyAgentStateMetadata(state, false, requestId);
         setSystemPrompt(state.systemPrompt ?? "");
         if (state.customSystemPrompt !== undefined) setCustomSystemPrompt(state.customSystemPrompt ?? null);
       }
@@ -2662,6 +2757,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     sessionHookMountedRef.current = true;
     // Usage reads started before a remount are stale.
     contextUsageAppliedIdRef.current = contextUsageRequestIdRef.current;
+    modelMetadataAppliedIdRef.current = contextUsageRequestIdRef.current;
     if (session) {
       sessionIdRef.current = session.id;
       applyAutoAdvanceState(null);

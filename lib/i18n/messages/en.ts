@@ -537,6 +537,7 @@ export const enLocale: LocalePlugin = {
     "sidebar.searchPartial": "Partial results",
     "sidebar.searchFailed": "Search failed",
     "sidebar.projectOptions": "Options",
+    "sidebar.sessionOptions": "Session actions",
     "sidebar.newSessionHere": "New session here",
     "sidebar.copyPath": "Copy path",
     "sidebar.removeFromList": "Hide project",

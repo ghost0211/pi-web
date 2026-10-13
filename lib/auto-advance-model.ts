@@ -1,8 +1,10 @@
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type AssistantMessage, type Usage } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { resolveVisibleModels } from "./model-scope";
 import { parseAutoAdvanceDecision } from "./auto-advance-controller";
 import type { AutoAdvanceConfig } from "./auto-advance-types";
+import { resolveModelThinkingLevel } from "./model-thinking-level";
+import { isThinkingLevelOption } from "./thinking-level-options";
 
 export const AUTO_ADVANCE_MESSAGE_TYPE = "pi-web:auto-advance";
 export const AUTO_ADVANCE_RULES = `You are a tool-less surrogate supervising a bounded task. You are NOT the human user and cannot grant permission.
@@ -14,13 +16,13 @@ Return ONLY JSON: {"decision":"continue"|"complete"|"needs_user","reason":"brief
 export function autoAdvanceUsageTokens(usage: Partial<Usage> | undefined): number {
   const required = [usage?.input, usage?.output];
   if (required.some(n => typeof n !== "number" || !Number.isFinite(n) || n < 0)) {
-    throw new Error("Token usage unavailable; automatic advancement paused");
+    throw new Error("Token usage unavailable or invalid");
   }
   // Cache counters are optional in some provider responses; a missing value is
   // zero, but a present non-numeric one is still untrustworthy evidence.
   const optional = [usage?.cacheRead ?? 0, usage?.cacheWrite ?? 0];
   if (optional.some(n => typeof n !== "number" || !Number.isFinite(n) || n < 0)) {
-    throw new Error("Token usage unavailable; automatic advancement paused");
+    throw new Error("Token usage unavailable or invalid");
   }
   const accounted = [...required, ...optional] as number[];
   const total = typeof usage?.totalTokens === "number" && Number.isFinite(usage.totalTokens) && usage.totalTokens >= 0
@@ -47,7 +49,7 @@ export function autoAdvanceTranscript(messages: readonly unknown[]): string {
   return selected.join("\n\n");
 }
 
-export async function resolveAutoAdvanceModel(runtime: ModelRuntime, patterns: string[] | undefined, config: AutoAdvanceConfig) {
+async function resolveAutoAdvanceSelection(runtime: ModelRuntime, patterns: string[] | undefined, config: AutoAdvanceConfig) {
   const scope = await resolveVisibleModels(runtime, patterns);
   const model = scope.visible.find(m => m.provider === config.model.provider && m.id === config.model.modelId);
   if (!model) throw new Error("Surrogate model is unavailable or outside the enabled model scope");
@@ -56,33 +58,48 @@ export async function resolveAutoAdvanceModel(runtime: ModelRuntime, patterns: s
     throw new Error("Choose a physical chat model for the surrogate");
   }
   if (model.contextWindow < 8192) throw new Error("Surrogate model needs at least an 8k context window");
-  return model;
+  const preference = config.thinkingLevel === undefined ? "auto" : config.thinkingLevel;
+  if (!isThinkingLevelOption(preference)) throw new Error("Invalid surrogate thinking level");
+  if (preference !== "auto" && !getSupportedThinkingLevels(model).includes(preference)) {
+    throw new Error(`Surrogate thinking level ${preference} is not supported by this model`);
+  }
+  // Auto resolves against this model's scope pin/default only. Never read or
+  // mutate the main AgentSession's or its quota backup's thinking preference.
+  const thinkingLevel = resolveModelThinkingLevel(model, preference, scope.thinkingLevelPins[`${model.provider}/${model.id}`]);
+  return { model, thinkingLevel };
 }
 
-export async function evaluateAutoAdvance(runtime: ModelRuntime, patterns: string[] | undefined, config: AutoAdvanceConfig, messages: readonly unknown[], signal: AbortSignal, remainingTokens: number) {
+export async function resolveAutoAdvanceModel(runtime: ModelRuntime, patterns: string[] | undefined, config: AutoAdvanceConfig) {
+  return (await resolveAutoAdvanceSelection(runtime, patterns, config)).model;
+}
+
+export async function evaluateAutoAdvance(runtime: ModelRuntime, patterns: string[] | undefined, config: AutoAdvanceConfig, messages: readonly unknown[], signal: AbortSignal) {
   const latest = [...messages].reverse().find(m => (m as { role?: string })?.role === "assistant") as AssistantMessage | undefined;
   if (!latest || ["error", "aborted", "length", "deferred"].includes(latest.stopReason)) {
     throw new Error("No successful completed assistant answer to evaluate");
   }
   signal.throwIfAborted();
-  const model = await resolveAutoAdvanceModel(runtime, patterns, config);
+  const { model, thinkingLevel } = await resolveAutoAdvanceSelection(runtime, patterns, config);
   signal.throwIfAborted();
   const excerpt = autoAdvanceTranscript(messages);
-  // Bounded admission estimate; actual reported usage is charged on return.
   const content = JSON.stringify({ goal: config.goal, authorizedScope: config.scope, evidence: excerpt });
-  const estimatedInput = AUTO_ADVANCE_RULES.length + content.length;
-  const maxTokens = Math.min(1536, model.maxTokens, remainingTokens - estimatedInput);
-  if (maxTokens < 256) throw new Error("Insufficient remaining token budget for surrogate evaluation");
+  // This is only the surrogate's concise decision response, not a total Token
+  // budget or a cap on the main agent's answers/reasoning/tool work.
+  const maxTokens = Math.min(1536, model.maxTokens);
+  if (!Number.isFinite(maxTokens) || maxTokens < 256) throw new Error("Surrogate model output capacity is too small");
   const response = await runtime.completeSimple(model, {
     systemPrompt: AUTO_ADVANCE_RULES,
     messages: [{ role: "user", content, timestamp: Date.now() }],
     // Deliberately no tools, no main AgentSession/model/thinking mutation.
-  }, { signal, maxTokens, toolChoice: "none" });
+  }, { signal, maxTokens, toolChoice: "none", ...(thinkingLevel !== "off" ? { reasoning: thinkingLevel } : {}) });
   signal.throwIfAborted();
   if (response.stopReason !== "stop") throw new Error(response.errorMessage || `Surrogate stopped: ${response.stopReason}`);
   if (response.content.some(b => b.type === "toolCall")) throw new Error("Surrogate may not call tools");
   const text = response.content.filter(b => b.type === "text").map(b => b.text).join("\n");
-  return { decision: parseAutoAdvanceDecision(text), tokens: autoAdvanceUsageTokens(response.usage) };
+  let tokens: number | undefined;
+  try { tokens = autoAdvanceUsageTokens(response.usage); }
+  catch { /* Missing metrics do not block work now that there is no Token budget. */ }
+  return { decision: parseAutoAdvanceDecision(text), tokens };
 }
 
 export function autoAdvanceInstruction(config: AutoAdvanceConfig, instruction: string, round: number): string {

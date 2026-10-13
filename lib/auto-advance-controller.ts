@@ -1,3 +1,4 @@
+import { isThinkingLevelOption } from "./thinking-level-options";
 import {
   type AutoAdvanceConfig,
   type AutoAdvanceDecision,
@@ -18,8 +19,6 @@ export const TERMINAL_REASONS = [
   "goal_complete",
   "needs_user",
   "round_limit",
-  "time_limit",
-  "token_limit",
   "no_progress",
   "run_error",
   "aborted",
@@ -37,11 +36,7 @@ const MAX_GOAL_LENGTH = 4000;
 const MAX_SCOPE_LENGTH = 2000;
 const MAX_MODEL_STRING_LENGTH = 256;
 const MIN_ROUNDS = 1;
-const MAX_ROUNDS = 5;
-const MIN_MINUTES = 1;
-const MAX_MINUTES = 15;
-const MIN_TOKEN_BUDGET = 1000;
-const MAX_TOKEN_BUDGET = 20000;
+const MAX_ROUNDS = 99;
 const MAX_REASON_LENGTH = 2000;
 const MAX_NEXT_PROMPT_LENGTH = 4000;
 const MAX_DETAIL_LENGTH = 2000;
@@ -90,6 +85,10 @@ export function validateAutoAdvanceConfig(input: unknown): AutoAdvanceConfig {
     throw new Error(`model.modelId must be a non-empty string <= ${MAX_MODEL_STRING_LENGTH} characters`);
   }
 
+  if (raw.thinkingLevel !== undefined && !isThinkingLevelOption(raw.thinkingLevel)) {
+    throw new Error("thinkingLevel must be auto, off, minimal, low, medium, high, xhigh or max");
+  }
+
   if (
     typeof raw.maxRounds !== "number" ||
     !Number.isInteger(raw.maxRounds) ||
@@ -99,23 +98,8 @@ export function validateAutoAdvanceConfig(input: unknown): AutoAdvanceConfig {
     throw new Error(`maxRounds must be an integer between ${MIN_ROUNDS} and ${MAX_ROUNDS}`);
   }
 
-  if (
-    typeof raw.maxMinutes !== "number" ||
-    !Number.isInteger(raw.maxMinutes) ||
-    raw.maxMinutes < MIN_MINUTES ||
-    raw.maxMinutes > MAX_MINUTES
-  ) {
-    throw new Error(`maxMinutes must be an integer between ${MIN_MINUTES} and ${MAX_MINUTES}`);
-  }
-
-  if (
-    typeof raw.tokenBudget !== "number" ||
-    !Number.isInteger(raw.tokenBudget) ||
-    raw.tokenBudget < MIN_TOKEN_BUDGET ||
-    raw.tokenBudget > MAX_TOKEN_BUDGET
-  ) {
-    throw new Error(`tokenBudget must be an integer between ${MIN_TOKEN_BUDGET} and ${MAX_TOKEN_BUDGET}`);
-  }
+  // Old clients may still send maxMinutes/tokenBudget; ignore and strip them.
+  // They must never reintroduce a deadline or consumption threshold.
 
   return {
     goal: raw.goal,
@@ -124,9 +108,8 @@ export function validateAutoAdvanceConfig(input: unknown): AutoAdvanceConfig {
       provider: model.provider,
       modelId: model.modelId,
     },
+    ...(raw.thinkingLevel !== undefined ? { thinkingLevel: raw.thinkingLevel as AutoAdvanceConfig["thinkingLevel"] } : {}),
     maxRounds: raw.maxRounds,
-    maxMinutes: raw.maxMinutes,
-    tokenBudget: raw.tokenBudget,
   };
 }
 
@@ -202,8 +185,7 @@ export interface AutoAdvancePorts {
   evaluate: (
     config: AutoAdvanceConfig,
     signal: AbortSignal,
-    remainingTokens: number,
-  ) => Promise<{ decision: AutoAdvanceDecision | null; tokens: number }>;
+  ) => Promise<{ decision: AutoAdvanceDecision | null; tokens?: number }>;
   advance: (
     config: AutoAdvanceConfig,
     instruction: string,
@@ -225,7 +207,6 @@ export class AutoAdvanceController {
   private evalScheduled = false;
   private evalTimeout: ReturnType<typeof setTimeout> | null = null;
   private retryTimeout: ReturnType<typeof setTimeout> | null = null;
-  private timer: ReturnType<typeof setTimeout> | null = null;
   private abortController: AbortController | null = null;
   private lastPrompt: string | null = null;
   private settledDeferred = false;
@@ -299,13 +280,6 @@ export class AutoAdvanceController {
     }
   }
 
-  private clearTimer(): void {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
   private clearEvalTimeout(): void {
     if (this.evalTimeout !== null) {
       clearTimeout(this.evalTimeout);
@@ -337,9 +311,7 @@ export class AutoAdvanceController {
     const validated = validateAutoAdvanceConfig(config);
     this.destroyed = false;
     this.generation += 1;
-    const currentGen = this.generation;
 
-    this.clearTimer();
     this.clearEvalTimeout();
     this.abortController?.abort();
     this.abortController = null;
@@ -367,12 +339,6 @@ export class AutoAdvanceController {
       tokensUsed: 0,
     };
 
-    const durationMs = validated.maxMinutes * 60 * 1000;
-    this.timer = setTimeout(() => {
-      if (this.generation !== currentGen || !this.isActive()) return;
-      this.stopTerminal("time_limit");
-    }, durationMs);
-
     this.emitInitialState();
 
     if (this.isIdle()) {
@@ -387,7 +353,6 @@ export class AutoAdvanceController {
 
     const wasOwnsRun = this.ownsRunActive;
     this.generation += 1;
-    this.clearTimer();
     this.clearEvalTimeout();
     this.abortController?.abort();
     this.abortController = null;
@@ -413,7 +378,6 @@ export class AutoAdvanceController {
 
     const wasOwnsRun = this.ownsRunActive;
     this.generation += 1;
-    this.clearTimer();
     this.clearEvalTimeout();
     this.abortController?.abort();
     this.abortController = null;
@@ -424,7 +388,7 @@ export class AutoAdvanceController {
     this.settledDeferred = false;
 
     // pause must NOT abort main for manual_takeover/configuration_changed/archived/extension_ui;
-    // only stop/budget/destroy or actual run_error may abort own.
+    // only stop/destroy or actual run_error may abort own.
     if (wasOwnsRun && reason === "run_error") {
       this.safeAbortOwnedRun();
     }
@@ -444,7 +408,6 @@ export class AutoAdvanceController {
     if (this.isActive()) {
       const wasOwnsRun = this.ownsRunActive;
       this.generation += 1;
-      this.clearTimer();
       this.clearEvalTimeout();
       this.abortController?.abort();
       this.abortController = null;
@@ -465,7 +428,6 @@ export class AutoAdvanceController {
       }
       // "no active terminal state notification on destroy" -> do NOT call onTerminal!
     } else {
-      this.clearTimer();
       this.clearEvalTimeout();
       this.abortController?.abort();
       this.abortController = null;
@@ -477,7 +439,6 @@ export class AutoAdvanceController {
 
     const wasOwnsRun = this.ownsRunActive;
     this.generation += 1;
-    this.clearTimer();
     this.clearEvalTimeout();
     this.abortController?.abort();
     this.abortController = null;
@@ -545,22 +506,16 @@ export class AutoAdvanceController {
       return;
     }
 
-    if (this.state.tokensUsed >= this.state.config.tokenBudget) {
-      this.stopTerminal("token_limit");
-      return;
-    }
-
     this.state.phase = "evaluating";
     this.emitNextState();
     this.evaluating = true;
 
-    const remainingTokens = Math.max(0, this.state.config.tokenBudget - this.state.tokensUsed);
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
-    let result: { decision: AutoAdvanceDecision | null; tokens: number };
+    let result: { decision: AutoAdvanceDecision | null; tokens?: number };
     try {
-      result = await this.ports.evaluate(this.state.config, signal, remainingTokens);
+      result = await this.ports.evaluate(this.state.config, signal);
     } catch (error) {
       if (this.generation === gen) {
         this.evaluating = false;
@@ -578,19 +533,14 @@ export class AutoAdvanceController {
 
     if (this.generation !== gen || !this.isActive() || !this.state) return;
 
-    if (
-      !result ||
-      typeof result !== "object" ||
-      typeof result.tokens !== "number" ||
-      !Number.isFinite(result.tokens) ||
-      result.tokens < 0
-    ) {
-      this.pause("run_error", "Unknown token usage from evaluation");
+    if (!result || typeof result !== "object") {
+      this.pause("run_error", "Invalid evaluation result");
       return;
     }
 
-    this.state.tokensUsed += result.tokens;
-    this.emitNextState();
+    // Usage is observational now, not a permission to continue or a budget gate.
+    this.addTokens(result.tokens);
+    if (this.generation !== gen || !this.isActive() || !this.state) return;
 
     const decision = result.decision;
     if (
@@ -616,7 +566,6 @@ export class AutoAdvanceController {
 
     if (decision.decision === "complete") {
       this.generation += 1;
-      this.clearTimer();
       this.clearEvalTimeout();
       this.state.phase = "completed";
       this.state.reason = "goal_complete";
@@ -642,11 +591,6 @@ export class AutoAdvanceController {
 
       if (this.state.round >= this.state.config.maxRounds) {
         this.stopTerminal("round_limit");
-        return;
-      }
-
-      if (this.state.tokensUsed >= this.state.config.tokenBudget) {
-        this.stopTerminal("token_limit");
         return;
       }
 
@@ -701,11 +645,6 @@ export class AutoAdvanceController {
       return;
     }
 
-    if (this.state.tokensUsed >= this.state.config.tokenBudget) {
-      this.stopTerminal("token_limit");
-      return;
-    }
-
     if (!this.isIdle()) {
       this.state.phase = "waiting";
       this.emitNextState();
@@ -750,20 +689,13 @@ export class AutoAdvanceController {
     }
   }
 
-  addTokens(n: number): void {
-    if (typeof n !== "number" || !Number.isFinite(n) || n < 0) {
-      if (this.isActive()) {
-        this.pause("run_error", "Invalid token usage amount");
-      }
-      return;
-    }
+  addTokens(n: number | undefined): void {
     if (!this.state || !this.isActive()) return;
-    this.state.tokensUsed += n;
-    this.emitNextState();
-
-    // Immediately stopTerminal token_limit at >=cap
-    if (this.state.tokensUsed >= this.state.config.tokenBudget) {
-      this.stopTerminal("token_limit");
+    if (typeof n !== "number" || !Number.isFinite(n) || n < 0 || !Number.isFinite(this.state.tokensUsed + n)) {
+      this.state.usageIncomplete = true;
+    } else {
+      this.state.tokensUsed += n;
     }
+    this.emitNextState();
   }
 }

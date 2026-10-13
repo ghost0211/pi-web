@@ -18,10 +18,20 @@ import {
   isAutoAdvanceActive,
 } from "@/lib/auto-advance-types";
 import type { ModelSelectorOption } from "./ModelSelector";
+import { isThinkingLevelOption, normalizeThinkingLevelOption, THINKING_LEVEL_OPTIONS, type ThinkingLevelOption } from "@/lib/thinking-level-options";
+
+const THINKING_DESCRIPTIONS: Record<ThinkingLevelOption, string> = {
+  auto: "chat.thinkingUseDefault", off: "chat.thinkingOff", minimal: "chat.thinkingMinimal",
+  low: "chat.thinkingLow", medium: "chat.thinkingMedium", high: "chat.thinkingHigh",
+  xhigh: "chat.thinkingXhigh", max: "chat.thinkingMax",
+};
 
 export interface AutoAdvanceControlProps {
   state?: AutoAdvanceState | null;
   models: ModelSelectorOption[];
+  /** Surrogate capabilities keyed by provider:modelId, never the main/backup preference. */
+  thinkingLevels?: Record<string, string[]>;
+  thinkingLevelMaps?: Record<string, Record<string, string | null>>;
   disabled?: boolean;
   busy?: boolean;
   onStart: (config: AutoAdvanceConfig) => Promise<void>;
@@ -35,6 +45,8 @@ function getModelId(option: ModelSelectorOption): string { return option.modelId
 export function AutoAdvanceControl({
   state = null,
   models = [],
+  thinkingLevels,
+  thinkingLevelMaps,
   disabled = false,
   busy = false,
   onStart,
@@ -50,9 +62,8 @@ export function AutoAdvanceControl({
   const [selectedModel, setSelectedModel] = useState<{ provider: string; modelId: string } | null>(
     state?.config?.model ?? null,
   );
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>(state?.config?.thinkingLevel ?? "auto");
   const [maxRounds, setMaxRounds] = useState(String(state?.config?.maxRounds ?? 3));
-  const [maxMinutes, setMaxMinutes] = useState(String(state?.config?.maxMinutes ?? 10));
-  const [tokenBudget, setTokenBudget] = useState(String(state?.config?.tokenBudget ?? 20000));
   const [error, setError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -70,11 +81,31 @@ export function AutoAdvanceControl({
   const goalId = useId();
   const scopeId = useId();
   const modelId = useId();
+  const thinkingId = useId();
+  const thinkingHelpId = useId();
+  const scopeHelpId = useId();
   const roundsId = useId();
-  const minutesId = useId();
-  const budgetId = useId();
 
   const isActive = isAutoAdvanceActive(state);
+  const formDisabled = isActive || isStarting || busy || disabled;
+  const selectedKey = selectedModel ? `${selectedModel.provider}:${selectedModel.modelId}` : "";
+  const supportedThinking = thinkingLevels?.[selectedKey];
+  const unsupportedThinking = supportedThinking != null && !supportedThinking.some(level => level !== "off");
+  const effectiveThinking = supportedThinking == null ? "auto" : unsupportedThinking ? "off" : normalizeThinkingLevelOption(thinkingLevel, supportedThinking);
+  const thinkingOptions = supportedThinking == null ? ["auto" as const] : unsupportedThinking ? ["off" as const]
+    : THINKING_LEVEL_OPTIONS.filter(level => level === "auto" || supportedThinking.includes(level));
+  const thinkingLabel = (level: ThinkingLevelOption, key: string) => {
+    const mapped = level !== "auto" ? thinkingLevelMaps?.[key]?.[level] : undefined;
+    const value = mapped != null && mapped !== level ? `${level} → ${mapped}` : level;
+    return `${value} · ${t(THINKING_DESCRIPTIONS[level])}`;
+  };
+
+  // Metadata can arrive after the dialog opens. Preserve compatible choices,
+  // but never submit an explicit level that the newly selected model rejects.
+  useEffect(() => {
+    if (isActive || supportedThinking == null) return;
+    setThinkingLevel(current => unsupportedThinking ? "off" : normalizeThinkingLevelOption(current, supportedThinking));
+  }, [isActive, supportedThinking, unsupportedThinking]);
 
   // Status revisions must not overwrite an editable draft from the same activation.
   useEffect(() => {
@@ -83,9 +114,8 @@ export function AutoAdvanceControl({
       setGoal(config.goal);
       setScope(config.scope);
       setSelectedModel(config.model);
+      setThinkingLevel(config.thinkingLevel ?? "auto");
       setMaxRounds(String(config.maxRounds));
-      setMaxMinutes(String(config.maxMinutes));
-      setTokenBudget(String(config.tokenBudget));
     }
   }, [state?.id]);
 
@@ -100,13 +130,19 @@ export function AutoAdvanceControl({
     }
   }, [models, selectedModel]);
 
+  const trimmedRounds = maxRounds.trim();
+  const parsedRounds = Number(trimmedRounds);
+  const isRoundsValid =
+    trimmedRounds !== "" &&
+    Number.isInteger(parsedRounds) &&
+    parsedRounds >= 1 &&
+    parsedRounds <= 99;
+
   const isFormValid = Boolean(
     goal.trim().length > 0 &&
       scope.trim().length > 0 &&
       models.some(m => m.provider === selectedModel?.provider && m.modelId === selectedModel?.modelId) &&
-      Number.isInteger(Number(maxRounds)) && Number(maxRounds) >= 1 && Number(maxRounds) <= 5 &&
-      Number.isInteger(Number(maxMinutes)) && Number(maxMinutes) >= 1 && Number(maxMinutes) <= 15 &&
-      Number.isInteger(Number(tokenBudget)) && Number(tokenBudget) >= 1000 && Number(tokenBudget) <= 20000,
+      isRoundsValid,
   );
 
   const handleClose = useCallback(() => {
@@ -205,9 +241,8 @@ export function AutoAdvanceControl({
         goal: goal.trim(),
         scope: scope.trim(),
         model: { provider: selectedModel.provider, modelId: selectedModel.modelId },
+        thinkingLevel: effectiveThinking,
         maxRounds: Number(maxRounds),
-        maxMinutes: Number(maxMinutes),
-        tokenBudget: Number(tokenBudget),
       });
       if (attempt === startAttemptRef.current) setIsOpen(false);
     } catch (err: unknown) {
@@ -242,9 +277,8 @@ export function AutoAdvanceControl({
       setGoal(state.config.goal);
       setScope(state.config.scope);
       setSelectedModel(state.config.model);
+      setThinkingLevel(state.config.thinkingLevel ?? "auto");
       setMaxRounds(String(state.config.maxRounds));
-      setMaxMinutes(String(state.config.maxMinutes));
-      setTokenBudget(String(state.config.tokenBudget));
     }
   };
 
@@ -443,7 +477,7 @@ export function AutoAdvanceControl({
                   {t("autoAdvance.warning")}
                 </div>
                 <div style={{ color: "var(--text-muted)", fontSize: 11, lineHeight: 1.4, opacity: 0.85 }}>
-                  {t("autoAdvance.budgetHint")}
+                  {t("autoAdvance.runHint")}
                 </div>
               </div>
 
@@ -469,16 +503,25 @@ export function AutoAdvanceControl({
                     <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
                       {t("autoAdvance.limits", {
                         rounds: state.config?.maxRounds ?? maxRounds,
-                        minutes: state.config?.maxMinutes ?? maxMinutes,
                       })}
                     </span>
+                  </div>
+
+                  <div data-auto-advance-surrogate="" style={{ fontSize: 12, color: "var(--text-muted)", overflowWrap: "anywhere" }}>
+                    {t("autoAdvance.model")}: {state.config.model.provider}/{state.config.model.modelId}
+                    <br />
+                    {t("autoAdvance.thinkingLevel")}: {thinkingLabel(state.config.thinkingLevel ?? "auto", `${state.config.model.provider}:${state.config.model.modelId}`)}
                   </div>
 
                   <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
                     {t("autoAdvance.tokens", {
                       used: state.tokensUsed ?? 0,
-                      budget: state.config?.tokenBudget ?? tokenBudget,
                     })}
+                    {state.usageIncomplete && (
+                      <span style={{ marginLeft: 6 }}>
+                        · {t("autoAdvance.usageIncomplete")}
+                      </span>
+                    )}
                   </div>
 
                   {state.reason && (
@@ -560,7 +603,7 @@ export function AutoAdvanceControl({
                   data-auto-advance-autofocus=""
                   maxLength={4000}
                   value={goal}
-                  disabled={isActive || isStarting || disabled}
+                  disabled={formDisabled}
                   onChange={(e) => setGoal(e.target.value.slice(0, 4000))}
                   placeholder={t("autoAdvance.goal")}
                   rows={3}
@@ -589,9 +632,11 @@ export function AutoAdvanceControl({
                   id={scopeId}
                   maxLength={2000}
                   value={scope}
-                  disabled={isActive || isStarting || disabled}
+                  required
+                  aria-describedby={scopeHelpId}
+                  disabled={formDisabled}
                   onChange={(e) => setScope(e.target.value.slice(0, 2000))}
-                  placeholder={t("autoAdvance.scope")}
+                  placeholder={t("autoAdvance.scopePlaceholder")}
                   rows={2}
                   style={{
                     width: "100%",
@@ -606,6 +651,10 @@ export function AutoAdvanceControl({
                 />
               </div>
 
+              <div id={scopeHelpId} style={{ marginTop: -8, color: "var(--text-muted)", fontSize: 11, lineHeight: 1.5 }}>
+                {t("autoAdvance.scopeHelp")}
+              </div>
+
               {/* Model select */}
               <div>
                 <label htmlFor={modelId} style={{ display: "block", marginBottom: 4, fontWeight: 500, fontSize: 12 }}>
@@ -613,7 +662,8 @@ export function AutoAdvanceControl({
                 </label>
                 <select
                   id={modelId}
-                  disabled={isActive || isStarting || disabled}
+                  data-auto-advance-field="model"
+                  disabled={formDisabled}
                   value={
                     selectedModel
                       ? JSON.stringify({ provider: selectedModel.provider, modelId: selectedModel.modelId })
@@ -629,6 +679,9 @@ export function AutoAdvanceControl({
                       const parsed = JSON.parse(val) as { provider?: unknown; modelId?: unknown };
                       const match = models.find(m => m.provider === parsed.provider && m.modelId === parsed.modelId);
                       setSelectedModel(match ? { provider: match.provider, modelId: match.modelId } : null);
+                      const supported = match ? thinkingLevels?.[`${match.provider}:${match.modelId}`] : undefined;
+                      setThinkingLevel(current => supported == null ? "auto"
+                        : !supported.some(level => level !== "off") ? "off" : normalizeThinkingLevelOption(current, supported));
                     } catch { setSelectedModel(null); }
                   }}
                   style={{
@@ -660,89 +713,54 @@ export function AutoAdvanceControl({
                 </select>
               </div>
 
-              {/* Numeric limits row */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 135px), 1fr))", gap: 10 }}>
-                <div>
-                  <label htmlFor={roundsId} style={{ display: "block", marginBottom: 4, fontWeight: 500, fontSize: 12 }}>
-                    {t("autoAdvance.maxRounds")}
-                  </label>
-                  <input
-                    id={roundsId}
-                    type="number"
-                    min={1}
-                    max={5}
-                    value={maxRounds}
-                    disabled={isActive || isStarting || disabled}
-                    onChange={(e) => {
-                      setMaxRounds(e.target.value);
-                    }}
-                    style={{
-                      width: "100%",
-                      height: 34,
-                      padding: "0 8px",
-                      borderRadius: 6,
-                      border: "1px solid var(--border)",
-                      background: "var(--bg-panel, transparent)",
-                      color: "var(--text)",
-                      fontSize: 13,
-                    }}
-                  />
+              <div>
+                <label htmlFor={thinkingId} style={{ display: "block", marginBottom: 4, fontWeight: 500, fontSize: 12 }}>
+                  {t("autoAdvance.thinkingLevel")}
+                </label>
+                <select id={thinkingId} data-auto-advance-field="thinking" aria-describedby={thinkingHelpId}
+                  value={effectiveThinking} disabled={formDisabled || supportedThinking == null || unsupportedThinking}
+                  onChange={event => {
+                    const value = event.target.value;
+                    if (!formDisabled && supportedThinking != null && !unsupportedThinking && isThinkingLevelOption(value)
+                      && (value === "auto" || supportedThinking.includes(value))) setThinkingLevel(value);
+                  }}
+                  style={{ width: "100%", minWidth: 0, height: 36, padding: "0 10px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg-panel, transparent)", color: "var(--text)", fontSize: 13 }}>
+                  {thinkingOptions.map(level => <option key={level} value={level}>{thinkingLabel(level, selectedKey)}</option>)}
+                </select>
+                <div id={thinkingHelpId} style={{ marginTop: 5, color: "var(--text-muted)", fontSize: 11, lineHeight: 1.5 }}>
+                  {t("autoAdvance.thinkingLevelHelp")}
+                  {supportedThinking == null && <> {t("chat.thinkingLoading")}</>}
+                  {unsupportedThinking && <> {t("chat.thinkingUnsupported")}</>}
                 </div>
+              </div>
 
-                <div>
-                  <label htmlFor={minutesId} style={{ display: "block", marginBottom: 4, fontWeight: 500, fontSize: 12 }}>
-                    {t("autoAdvance.maxMinutes")}
-                  </label>
-                  <input
-                    id={minutesId}
-                    type="number"
-                    min={1}
-                    max={15}
-                    value={maxMinutes}
-                    disabled={isActive || isStarting || disabled}
-                    onChange={(e) => {
-                      setMaxMinutes(e.target.value);
-                    }}
-                    style={{
-                      width: "100%",
-                      height: 34,
-                      padding: "0 8px",
-                      borderRadius: 6,
-                      border: "1px solid var(--border)",
-                      background: "var(--bg-panel, transparent)",
-                      color: "var(--text)",
-                      fontSize: 13,
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor={budgetId} style={{ display: "block", marginBottom: 4, fontWeight: 500, fontSize: 12 }}>
-                    {t("autoAdvance.tokenBudget")}
-                  </label>
-                  <input
-                    id={budgetId}
-                    type="number"
-                    min={1000}
-                    max={20000}
-                    step={1}
-                    value={tokenBudget}
-                    disabled={isActive || isStarting || disabled}
-                    onChange={(e) => {
-                      setTokenBudget(e.target.value);
-                    }}
-                    style={{
-                      width: "100%",
-                      height: 34,
-                      padding: "0 8px",
-                      borderRadius: 6,
-                      border: "1px solid var(--border)",
-                      background: "var(--bg-panel, transparent)",
-                      color: "var(--text)",
-                      fontSize: 13,
-                    }}
-                  />
-                </div>
+              {/* Additional rounds */}
+              <div>
+                <label htmlFor={roundsId} style={{ display: "block", marginBottom: 4, fontWeight: 500, fontSize: 12 }}>
+                  {t("autoAdvance.maxRounds")}
+                </label>
+                <input
+                  id={roundsId}
+                  type="number"
+                  min={1}
+                  max={99}
+                  step={1}
+                  value={maxRounds}
+                  disabled={formDisabled}
+                  onChange={(e) => {
+                    setMaxRounds(e.target.value);
+                  }}
+                  style={{
+                    width: "100%",
+                    height: 34,
+                    padding: "0 8px",
+                    borderRadius: 6,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-panel, transparent)",
+                    color: "var(--text)",
+                    fontSize: 13,
+                  }}
+                />
               </div>
 
               {/* Missing validation message */}

@@ -84,6 +84,8 @@ interface Props {
   fallbackModelSwitching?: boolean;
   autoAdvanceState?: AutoAdvanceState | null;
   autoAdvanceBusy?: boolean;
+  thinkingLevels?: Record<string, string[]>;
+  thinkingLevelMaps?: Record<string, Record<string, string | null>>;
   onStartAutoAdvance?: (config: AutoAdvanceConfig) => Promise<void>;
   onStopAutoAdvance?: () => Promise<void>;
   onCompact?: () => void;
@@ -742,7 +744,7 @@ export function ContextUsageRing({
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, contextModel, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching, fallbackModel, onFallbackModelChange, fallbackModelSwitching,
-  autoAdvanceState, autoAdvanceBusy, onStartAutoAdvance, onStopAutoAdvance,
+  autoAdvanceState, autoAdvanceBusy, thinkingLevels, thinkingLevelMaps, onStartAutoAdvance, onStopAutoAdvance,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange, customToolNames, onCustomToolsChange, ephemeral, onEphemeralChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   fallbackThinkingLevel, onFallbackThinkingLevelChange, fallbackAvailableThinkingLevels, fallbackThinkingLevelMap,
@@ -2976,6 +2978,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {onStartAutoAdvance && onStopAutoAdvance && (
               <AutoAdvanceControl
                 state={autoAdvanceState} models={modelOptions}
+                thinkingLevels={thinkingLevels}
+                thinkingLevelMaps={thinkingLevelMaps}
                 onStart={onStartAutoAdvance} onStop={onStopAutoAdvance}
                 busy={autoAdvanceBusy}
                 disabled={isCompacting || modelSwitching || fallbackModelSwitching}

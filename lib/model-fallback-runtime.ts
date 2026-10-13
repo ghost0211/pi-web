@@ -56,11 +56,15 @@ type FailedAssistant = {
   errorMessage?: string;
   /** Machine code carried by the thrown provider error (e.g. CodexApiError.code). */
   errorCode?: string;
+  /** Evidence from this finalized assistant's request, not a later compaction/summary call. */
+  observed?: ObservedRequest;
 };
 
 type RuntimeInternal = {
   requestSequence: number;
   observed?: ObservedRequest;
+  /** The latest adapter throw, promoted only by the authoritative message_end event. */
+  thrown?: FailedAssistant;
   failed?: FailedAssistant;
   attempted: boolean;
 };
@@ -150,9 +154,9 @@ function observeFetch(fetchImpl: typeof globalThis.fetch, state: ModelFallbackRu
       request.providerError = { status: response.status };
       const read = readBoundedErrorBody(response)
         .then((body) => {
-          if (internalFor(state).observed?.id === request.id) {
-            request.providerError = { status: response.status, body };
-          }
+          // A finalized failure may already own this request while a summary
+          // has started. Update its bounded evidence, never a newer request.
+          request.providerError = { status: response.status, body };
         })
         .catch(() => {});
       request.bodyReady = Promise.race([
@@ -166,7 +170,8 @@ function observeFetch(fetchImpl: typeof globalThis.fetch, state: ModelFallbackRu
 
 /**
  * Preserve the SDK/provider callbacks while retaining bounded raw error evidence
- * for this wrapper's latest request. Success or a new request invalidates it.
+ * for each request. Only message_end promotes evidence into a main-answer
+ * failure; compaction/branch summaries share this adapter but are not answers.
  */
 export function observeModelFallbackErrors(streamFn: StreamFn, state: ModelFallbackRuntimeState): StreamFn {
   return async (model, context, options) => {
@@ -179,7 +184,9 @@ export function observeModelFallbackErrors(streamFn: StreamFn, state: ModelFallb
       modelId: model.id,
     };
     internal.observed = request;
-    internal.failed = undefined;
+    internal.thrown = undefined;
+    // Do not clear the finalized main-answer failure here: SDK summarization
+    // uses this same stream adapter before agent_before_settle.
 
     const originalOnResponse = options?.onResponse;
     const observedOptions: SimpleStreamOptions = {
@@ -199,7 +206,7 @@ export function observeModelFallbackErrors(streamFn: StreamFn, state: ModelFallb
       return await streamFn(model, context, observedOptions);
     } catch (error) {
       if (internalFor(state).observed?.id === request.id) {
-        internal.failed = {
+        internal.thrown = {
           provider: request.provider,
           api: request.api,
           modelId: request.modelId,
@@ -207,6 +214,7 @@ export function observeModelFallbackErrors(streamFn: StreamFn, state: ModelFallb
           // In-stream SSE/WebSocket errors have no HTTP evidence; keep the
           // structured code so classification does not depend on phrasing.
           errorCode: thrownErrorCode(error),
+          observed: request,
         };
       }
       throw error;
@@ -260,13 +268,11 @@ function findFailedEntryId(event: AgentBeforeSettleEvent, failed: FailedAssistan
 }
 
 async function classificationFor(
-  state: ModelFallbackRuntimeState,
   failed: FailedAssistant,
 ): Promise<QuotaExhaustion | null> {
-  const observed = internalFor(state).observed;
-  const observedFailure = observed && observed.provider === failed.provider && observed.modelId === failed.modelId
-    ? observed
-    : undefined;
+  const observedFailure = failed.observed;
+  // A later summarization failure is not evidence that the main request
+  // exhausted quota. The message_end snapshot is the only authoritative owner.
   await observedFailure?.bodyReady;
   return classifyQuotaExhaustion({
     provider: failed.provider,
@@ -327,6 +333,7 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
         const internal = internalFor(state);
         internal.failed = undefined;
         internal.observed = undefined;
+        internal.thrown = undefined;
         internal.attempted = false;
         state.cancelled = false;
       });
@@ -337,11 +344,19 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
         if (failure) {
           // The persisted assistant message carries only the flattened error
           // text; keep the structured code captured from the thrown error.
-          const prior = internal.failed;
-          internal.failed = prior && prior.provider === failure.provider && prior.modelId === failure.modelId
-            ? { ...failure, errorCode: prior.errorCode }
-            : failure;
-        } else if (event.message.role === "assistant") internal.failed = undefined;
+          const prior = internal.thrown;
+          const observed = internal.observed;
+          const observedFailure = observed && observed.provider === failure.provider && observed.modelId === failure.modelId
+            ? observed : undefined;
+          internal.failed = {
+            ...failure,
+            ...(prior && prior.provider === failure.provider && prior.modelId === failure.modelId ? { errorCode: prior.errorCode } : {}),
+            ...(observedFailure ? { observed: observedFailure } : {}),
+          };
+        } else if (event.message.role === "assistant") {
+          internal.failed = undefined;
+        }
+        if (event.message.role === "assistant") internal.thrown = undefined;
       });
 
       pi.on("agent_before_settle", async (event: AgentBeforeSettleEvent, ctx: ExtensionContext) => {
@@ -353,7 +368,7 @@ export function createModelFallbackExtension(state: ModelFallbackRuntimeState): 
         if (!selection || !failed || !current || sameFallbackModel(selection, refFromModel(current))) return undefined;
         if (current.provider !== failed.provider || current.id !== failed.modelId) return undefined;
 
-        const quota = await classificationFor(state, failed);
+        const quota = await classificationFor(failed);
         if (!quota || state.cancelled) return undefined;
 
         let target;

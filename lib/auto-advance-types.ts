@@ -1,12 +1,15 @@
+import type { ThinkingLevelOption } from "./thinking-level-options";
+
 /** Memory-only controller state. Reopening a saved session never arms it. */
 export interface AutoAdvanceConfig {
   goal: string;
   /** User-provided scope, not authorization invented by the surrogate. */
   scope: string;
   model: { provider: string; modelId: string };
+  /** Surrogate-only preference. Missing legacy values mean auto, never the main model's level. */
+  thinkingLevel?: ThinkingLevelOption;
+  /** Only continuation count is limited; no wall-clock or total Token budget. */
   maxRounds: number;
-  maxMinutes: number;
-  tokenBudget: number;
 }
 export type AutoAdvancePhase = "waiting" | "evaluating" | "running" | "completed" | "paused" | "stopped";
 export interface AutoAdvanceState {
@@ -17,7 +20,10 @@ export interface AutoAdvanceState {
   config: AutoAdvanceConfig;
   round: number;
   startedAt: number;
+  /** Observational total only; never a stopping threshold. */
   tokensUsed: number;
+  /** At least one response omitted or supplied invalid usage; total is partial. */
+  usageIncomplete?: boolean;
   reason?: string;
   detail?: string;
 }

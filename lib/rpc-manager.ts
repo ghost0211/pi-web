@@ -398,11 +398,11 @@ export class AgentSessionWrapper {
     });
     this.autoAdvance = new AutoAdvanceController({
       isIdle: () => this.isAlive() && !this.isAgentWorkRunning() && this.activeMutatingCommands === 0,
-      evaluate: async (config, signal, remainingTokens) => {
+      evaluate: async (config, signal) => {
         this.assertAutoAdvanceAllowed();
         const branchId = this.inner.sessionManager.getLeafId();
         const result = await evaluateAutoAdvance(this.inner.modelRuntime as ModelRuntime,
-          this.inner.settingsManager.getEnabledModels(), config, this.inner.messages ?? [], signal, remainingTokens);
+          this.inner.settingsManager.getEnabledModels(), config, this.inner.messages ?? [], signal);
         if (this.inner.sessionManager.getLeafId() !== branchId || this.isAgentWorkRunning()) {
           throw new Error("Conversation changed during surrogate evaluation");
         }
@@ -422,7 +422,7 @@ export class AgentSessionWrapper {
         // Every terminal transition is observable; only outcomes that need the
         // user's attention ring a completion notification. Takeover/config
         // changes stay silent so they cannot look like a finished task.
-        const notify = ["goal_complete", "needs_user", "no_progress", "round_limit", "time_limit", "token_limit", "run_error", "extension_ui"].includes(state.reason ?? "");
+        const notify = ["goal_complete", "needs_user", "no_progress", "round_limit", "run_error", "extension_ui"].includes(state.reason ?? "");
         this.emit({ type: "auto_advance_finished", state, notify });
         if (notify && !this.suppressCompletionNotifications) {
           try { this.onAgentRunComplete?.(this.sessionId); }
@@ -631,7 +631,7 @@ export class AgentSessionWrapper {
         const message = event.message as { role?: string; usage?: Parameters<typeof autoAdvanceUsageTokens>[0] } | undefined;
         if (message?.role === "assistant" || (message?.role === "toolResult" && message.usage)) {
           try { this.autoAdvance.addTokens(autoAdvanceUsageTokens(message.usage)); }
-          catch (error) { this.autoAdvance.pause("run_error", error instanceof Error ? error.message : String(error)); }
+          catch { this.autoAdvance.addTokens(undefined); }
         }
       }
       if (event.type === "agent_settled") {

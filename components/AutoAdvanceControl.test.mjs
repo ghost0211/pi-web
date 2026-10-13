@@ -216,7 +216,7 @@ test("renders title button when idle and opens dialog on click", () => {
   // Contains notices
   const allText = harness.text();
   assert.match(allText, /autoAdvance\.warning/);
-  assert.match(allText, /autoAdvance\.budgetHint/);
+  assert.match(allText, /autoAdvance\.runHint/);
   assert.match(allText, /autoAdvance\.surrogateMessage/);
 
   // Initial required state: Start is disabled
@@ -235,12 +235,14 @@ test("shows active round and leaves trigger & stop enabled when active even if d
     phase: "running",
     round: 3,
     startedAt: Date.now() - 60000,
-    tokensUsed: 8400,
+    tokensUsed: 4000000,
+    usageIncomplete: true,
     config: {
       goal: "Refactor core",
       scope: "src/core",
       model: { provider: "anthropic", modelId: "claude-3-5-sonnet/v2" },
-      maxRounds: 5,
+      maxRounds: 99,
+      // Legacy server fields must not restore removed controls or displays.
       maxMinutes: 15,
       tokenBudget: 20000,
     },
@@ -272,8 +274,11 @@ test("shows active round and leaves trigger & stop enabled when active even if d
   // Active dialog displays phase, tokens, limits
   const bodyText = harness.text();
   assert.match(bodyText, /autoAdvance\.phase\.running/);
-  assert.match(bodyText, /autoAdvance\.tokens:\{"used":8400,"budget":20000\}/);
-  assert.match(bodyText, /autoAdvance\.limits:\{"rounds":5,"minutes":15\}/);
+  assert.match(bodyText, /autoAdvance\.tokens:\{"used":4000000\}/);
+  assert.match(bodyText, /autoAdvance\.usageIncomplete/);
+  assert.match(bodyText, /autoAdvance\.limits:\{"rounds":99\}/);
+  assert.equal(harness.findAll(n => n.type === "input" && n.props.type === "number").length, 1);
+  assert.doesNotMatch(bodyText, /autoAdvance\.maxMinutes|autoAdvance\.tokenBudget|"minutes"|"budget"/);
 
   // Stop button MUST remain enabled despite disabled={true}
   const stopBtn = harness.button("autoAdvance.stop");
@@ -346,8 +351,8 @@ test("preserves slashes in native model selector and validates constraints", () 
   // Model select options preserve slashes in modelId
   const select = harness.find((n) => n.type === "select");
   assert.ok(select);
-  const options = harness.findAll((n) => n.type === "option");
-  assert.equal(options.length, 2);
+  const options = select.props.children;
+  assert.equal(options.length, 2, "count only model options, not the independent thinking selector");
   assert.match(options[0].props.value, /claude-3-5-sonnet\/v2/);
 
   // Goal and scope textareas with maxLength
@@ -371,9 +376,162 @@ test("preserves slashes in native model selector and validates constraints", () 
   assert.equal(startedConfig.scope, "components/ and lib/");
   assert.equal(startedConfig.model.modelId, "claude-3-5-sonnet/v2");
   assert.equal(startedConfig.maxRounds, 3);
-  assert.equal(startedConfig.maxMinutes, 10);
-  assert.equal(startedConfig.tokenBudget, 20000);
+  assert.equal(Object.hasOwn(startedConfig, "maxMinutes"), false);
+  assert.equal(Object.hasOwn(startedConfig, "tokenBudget"), false);
 
+  harness.cleanup();
+});
+
+function field(harness, name) {
+  return harness.find(n => n.type === "select" && n.props["data-auto-advance-field"] === name);
+}
+function openAndFill(harness) {
+  harness.render();
+  harness.find(n => n.type === "button" && n.props["aria-haspopup"] === "dialog").props.onClick();
+  harness.render();
+  harness.find(n => n.type === "textarea" && n.props.maxLength === 4000).props.onChange({ target: { value: "Bounded goal" } });
+  harness.find(n => n.type === "textarea" && n.props.maxLength === 2000).props.onChange({ target: { value: "Tests only; no commit or publish" } });
+  harness.render();
+}
+const reasonerKey = "anthropic:claude-3-5-sonnet/v2";
+const plainKey = "openai:gpt-4o";
+const capabilities = { [reasonerKey]: ["off", "minimal", "low", "medium", "high"], [plainKey]: ["off"] };
+
+test("surrogate thinking filters supported choices, shows provider mapping and submits canonical preference", async () => {
+  let submitted;
+  const harness = createHarness(AutoAdvanceControl, {
+    models: fixtureModels, thinkingLevels: capabilities, thinkingLevelMaps: { [reasonerKey]: { high: "2048" } },
+    onStart: async config => { submitted = config; }, onStop: async () => {},
+  });
+  openAndFill(harness);
+  const select = field(harness, "thinking");
+  assert.equal(select.props.value, "auto");
+  assert.equal(select.props.disabled, false);
+  assert.deepEqual(select.props.children.map(n => n.props.value), ["auto", "off", "minimal", "low", "medium", "high"]);
+  assert.match(harness.text(), /high → 2048/);
+  select.props.onChange({ target: { value: "high" } });
+  harness.render();
+  await harness.button("autoAdvance.start").props.onClick();
+  assert.equal(submitted.thinkingLevel, "high");
+  assert.equal(submitted.model.modelId, fixtureModels[0].modelId);
+  assert.equal(submitted.scope, "Tests only; no commit or publish");
+  assert.equal(Object.hasOwn(submitted, "primaryThinkingLevel"), false);
+  assert.equal(Object.hasOwn(submitted, "fallbackThinkingLevel"), false);
+  harness.cleanup();
+});
+
+test("model switching preserves compatible thinking but resets incompatible preferences and locks nonreasoning models", async () => {
+  let submitted;
+  const extra = { provider: "fixture", modelId: "reasoner", name: "Other reasoner" };
+  const models = [...fixtureModels, extra];
+  const harness = createHarness(AutoAdvanceControl, {
+    models, thinkingLevels: { ...capabilities, "fixture:reasoner": ["off", "low", "high"] },
+    onStart: async config => { submitted = config; }, onStop: async () => {},
+  });
+  openAndFill(harness);
+  field(harness, "thinking").props.onChange({ target: { value: "high" } });
+  harness.render();
+  field(harness, "model").props.onChange({ target: { value: JSON.stringify({ provider: extra.provider, modelId: extra.modelId }) } });
+  harness.render();
+  assert.equal(field(harness, "thinking").props.value, "high");
+  field(harness, "model").props.onChange({ target: { value: JSON.stringify({ provider: "openai", modelId: "gpt-4o" }) } });
+  harness.render();
+  assert.equal(field(harness, "thinking").props.value, "off");
+  assert.equal(field(harness, "thinking").props.disabled, true);
+  assert.deepEqual(field(harness, "thinking").props.children.map(n => n.props.value), ["off"]);
+  await harness.button("autoAdvance.start").props.onClick();
+  assert.equal(submitted.thinkingLevel, "off");
+  harness.cleanup();
+
+  const reset = createHarness(AutoAdvanceControl, {
+    models, thinkingLevels: { ...capabilities, "fixture:reasoner": ["off", "low"] }, onStart: async () => {}, onStop: async () => {},
+  });
+  openAndFill(reset);
+  field(reset, "thinking").props.onChange({ target: { value: "high" } });
+  reset.render();
+  field(reset, "model").props.onChange({ target: { value: JSON.stringify({ provider: extra.provider, modelId: extra.modelId }) } });
+  reset.render();
+  assert.equal(field(reset, "thinking").props.value, "auto");
+  field(reset, "thinking").props.onChange({ target: { value: "max" } });
+  reset.render();
+  assert.equal(field(reset, "thinking").props.value, "auto", "unlisted injected choices are rejected");
+  reset.cleanup();
+});
+
+test("unknown surrogate metadata stays auto-only and does not invent another model's preference", async () => {
+  let submitted;
+  const props = { models: fixtureModels, onStart: async config => { submitted = config; }, onStop: async () => {} };
+  const harness = createHarness(AutoAdvanceControl, props);
+  openAndFill(harness);
+  assert.equal(field(harness, "thinking").props.disabled, true);
+  assert.deepEqual(field(harness, "thinking").props.children.map(n => n.props.value), ["auto"]);
+  assert.match(harness.text(), /chat\.thinkingLoading/);
+  await harness.button("autoAdvance.start").props.onClick();
+  assert.equal(submitted.thinkingLevel, "auto", "server resolves against the surrogate itself");
+  harness.render({ ...props, thinkingLevels: capabilities });
+  harness.find(n => n.type === "button" && n.props["aria-haspopup"] === "dialog").props.onClick();
+  harness.render();
+  assert.equal(field(harness, "thinking").props.disabled, false);
+  harness.cleanup();
+});
+
+test("scope is explicit, empty by default, required and described by its example/help rather than prefilled authorization", () => {
+  const harness = createHarness(AutoAdvanceControl, { models: fixtureModels, thinkingLevels: capabilities, onStart: async () => {}, onStop: async () => {} });
+  harness.render();
+  harness.find(n => n.type === "button" && n.props["aria-haspopup"] === "dialog").props.onClick();
+  harness.render();
+  const scope = harness.find(n => n.type === "textarea" && n.props.maxLength === 2000);
+  assert.equal(scope.props.value, "");
+  assert.equal(scope.props.required, true);
+  assert.equal(scope.props.placeholder, "autoAdvance.scopePlaceholder");
+  assert.ok(harness.find(n => n.props?.htmlFor === scope.props.id));
+  assert.ok(harness.find(n => n.props?.id === scope.props["aria-describedby"]));
+  const thinking = field(harness, "thinking");
+  assert.ok(harness.find(n => n.props?.htmlFor === thinking.props.id));
+  assert.ok(harness.find(n => n.props?.id === thinking.props["aria-describedby"]));
+  harness.find(n => n.type === "textarea" && n.props.maxLength === 4000).props.onChange({ target: { value: "Goal" } });
+  scope.props.onChange({ target: { value: "   " } });
+  harness.render();
+  assert.equal(harness.button("autoAdvance.start").props.disabled, true);
+  harness.cleanup();
+});
+
+test("legacy activations restore auto and active/busy locks do not prevent Stop", async () => {
+  let stopped = 0;
+  const config = { goal: "G", scope: "S", model: { provider: "anthropic", modelId: "claude-3-5-sonnet/v2" }, maxRounds: 3, maxMinutes: 10, tokenBudget: 20000 };
+  const props = { models: fixtureModels, thinkingLevels: capabilities, state: { id: "legacy", revision: 1, phase: "running", round: 1, startedAt: Date.now(), tokensUsed: 0, config }, busy: true, disabled: true, onStart: async () => {}, onStop: async () => { stopped++; } };
+  const harness = createHarness(AutoAdvanceControl, props);
+  harness.render();
+  harness.find(n => n.type === "button" && n.props["aria-haspopup"] === "dialog").props.onClick();
+  harness.render();
+  assert.equal(field(harness, "thinking").props.value, "auto");
+  assert.equal(field(harness, "thinking").props.disabled, true);
+  assert.match(harness.text(), /anthropic\/claude-3-5-sonnet\/v2/);
+  assert.match(harness.text(), /auto · chat\.thinkingUseDefault/);
+  assert.equal(harness.button("autoAdvance.stop").props.disabled, false);
+  await harness.button("autoAdvance.stop").props.onClick();
+  assert.equal(stopped, 1);
+  harness.cleanup();
+});
+
+test("terminal activation restores its own thinking and revisions preserve the editable draft", async () => {
+  let submitted;
+  const config = { goal: "G", scope: "Local tests only", thinkingLevel: "high", model: { provider: "anthropic", modelId: "claude-3-5-sonnet/v2" }, maxRounds: 3, maxMinutes: 10, tokenBudget: 20000 };
+  const state = { id: "done", revision: 2, phase: "completed", round: 1, startedAt: Date.now(), tokensUsed: 100, config };
+  const props = { models: fixtureModels, thinkingLevels: capabilities, state, onStart: async value => { submitted = value; }, onStop: async () => {} };
+  const harness = createHarness(AutoAdvanceControl, props);
+  harness.render();
+  harness.find(n => n.type === "button" && n.props["aria-haspopup"] === "dialog").props.onClick();
+  harness.render();
+  assert.equal(field(harness, "thinking").props.value, "high");
+  field(harness, "thinking").props.onChange({ target: { value: "low" } });
+  harness.render({ ...props, state: { ...state, revision: 3, tokensUsed: 110 } });
+  assert.equal(field(harness, "thinking").props.value, "low", "same-activation observations must not overwrite the draft");
+  harness.button("autoAdvance.restart").props.onClick();
+  harness.render();
+  assert.equal(field(harness, "thinking").props.value, "high");
+  await harness.button("autoAdvance.start").props.onClick();
+  assert.equal(submitted.thinkingLevel, "high");
   harness.cleanup();
 });
 
@@ -534,7 +692,7 @@ test("renders terminal state with phase, reason, detail, and restart button", ()
   assert.match(bodyText, /autoAdvance\.phase\.completed/);
   assert.match(bodyText, /autoAdvance\.reason\.goal_complete/);
   assert.match(bodyText, /All test cases passed and verified\./);
-  assert.match(bodyText, /autoAdvance\.tokens:\{"used":12500,"budget":20000\}/);
+  assert.match(bodyText, /autoAdvance\.tokens:\{"used":12500\}/);
 
   // Restart button is visible
   const restartBtn = harness.button("autoAdvance.restart");
@@ -580,30 +738,30 @@ test("rejects malformed model ids and out-of-range limits instead of silently co
   harness.render();
   assert.equal(harness.button("autoAdvance.start").props.disabled, false);
 
-  // Out-of-range and non-integer limits keep the form invalid; drafts are not rewritten.
-  const [roundsInput, minutesInput, budgetInput] = numberInputs();
-  roundsInput.props.onChange({ target: { value: "99" } });
-  harness.render();
-  assert.equal(harness.button("autoAdvance.start").props.disabled, true);
-  assert.equal(numberInputs()[0].props.value, "99", "the user's draft is preserved for correction");
-  numberInputs()[0].props.onChange({ target: { value: "4" } });
-  minutesInput.props.onChange({ target: { value: "7.5" } });
-  harness.render();
-  assert.equal(harness.button("autoAdvance.start").props.disabled, true);
-  numberInputs()[1].props.onChange({ target: { value: "12" } });
-  budgetInput.props.onChange({ target: { value: "500" } });
-  harness.render();
-  assert.equal(harness.button("autoAdvance.start").props.disabled, true);
-  numberInputs()[2].props.onChange({ target: { value: "12000" } });
-  harness.render();
+  // Only one numeric constraint remains. Drafts are preserved, never clamped.
+  assert.equal(numberInputs().length, 1);
+  assert.equal(numberInputs()[0].props.min, 1);
+  assert.equal(numberInputs()[0].props.max, 99);
+  assert.equal(numberInputs()[0].props.step, 1);
+  for (const value of ["", " ", "0", "-1", "1.5", "100", "NaN", "Infinity", "1e309"]) {
+    numberInputs()[0].props.onChange({ target: { value } });
+    harness.render();
+    assert.equal(harness.button("autoAdvance.start").props.disabled, true, value);
+    assert.equal(numberInputs()[0].props.value, value, "invalid draft remains editable");
+  }
+  for (const value of ["1", "6", "25", "99"]) {
+    numberInputs()[0].props.onChange({ target: { value } });
+    harness.render();
+    assert.equal(harness.button("autoAdvance.start").props.disabled, false, value);
+  }
 
   harness.button("autoAdvance.start").props.onClick();
   assert.equal(submitted.length, 1, "exactly one submission after the form became valid");
   assert.equal(submitted[0].model.provider, "openai");
   assert.equal(submitted[0].model.modelId, "gpt-4o");
-  assert.equal(submitted[0].maxRounds, 4);
-  assert.equal(submitted[0].maxMinutes, 12);
-  assert.equal(submitted[0].tokenBudget, 12000);
+  assert.equal(submitted[0].maxRounds, 99);
+  assert.equal(Object.hasOwn(submitted[0], "maxMinutes"), false);
+  assert.equal(Object.hasOwn(submitted[0], "tokenBudget"), false);
 
   harness.cleanup();
 });
@@ -665,9 +823,10 @@ test("formats messages properly with real zh-CN locale translations", async () =
   const dialogText = harness.text();
   assert.match(dialogText, /替身消息 · 非用户授权/);
   assert.match(dialogText, /替身不是用户，不能新增授权/);
-  assert.match(dialogText, /预算统计启用后的主模型与替身用量/);
-  assert.match(dialogText, /已用 Token：3500 \/ 20000/);
-  assert.match(dialogText, /最多 3 轮 · 10 分钟/);
+  assert.match(dialogText, /无总时长或 Token 预算限制/);
+  assert.match(dialogText, /已用 Token：3500/);
+  assert.match(dialogText, /最多 3 轮/);
+  assert.doesNotMatch(dialogText, /3500 \/ 20000|10 分钟/);
   assert.match(dialogText, /主模型正在推进/);
 
   const stopBtn = harness.button("停止自动推进");

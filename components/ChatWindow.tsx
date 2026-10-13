@@ -133,6 +133,8 @@ function hasDisplayableProcessMessage(message: AgentMessage): boolean {
   if (message.role === "assistant") {
     return getDisplayableAssistantBlocks(message as AssistantMessage).length > 0;
   }
+  // Steering deliveries render as marked chips inside the run they joined.
+  if (message.role === "user") return message.delivery === "steer";
   return message.role === "custom";
 }
 
@@ -875,7 +877,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
             {(() => {
               let lastUserIdx = -1;
               for (let i = messages.length - 1; i >= 0; i--) {
-                if (messages[i].role === "user") { lastUserIdx = i; break; }
+                // Steering chips are part of the run, never its scroll anchor.
+                const candidate = messages[i];
+                if (candidate.role === "user" && candidate.delivery !== "steer") { lastUserIdx = i; break; }
               }
               const visibleRefIndexByMessage = new Map<number, number>();
               let refIdx = 0;

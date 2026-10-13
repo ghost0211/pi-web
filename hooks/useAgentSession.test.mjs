@@ -384,6 +384,16 @@ test("streaming submissions cannot be stranded in an idle direct queue", () => {
   assert.doesNotMatch(queueSource, /type: "follow_up"/);
 });
 
+test("delivered steering messages are tagged with the structural history rule", () => {
+  const messageEndSource = source.slice(
+    source.indexOf('case "message_end"'),
+    source.indexOf('case "tool_execution_start"'),
+  );
+  assert.match(messageEndSource, /isSteeringDeliveryContext\(prev\)/);
+  assert.match(messageEndSource, /delivery: "steer"/);
+  assert.match(messageEndSource, /mergeDeliveredUserMessage\(prev, tagged, optimisticKey\)/);
+});
+
 test("built-in clone switches to the independent child session", () => {
   const builtinSource = source.slice(
     source.indexOf("  const handleBuiltinSlashCommand"),

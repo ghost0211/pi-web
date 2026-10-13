@@ -34,18 +34,67 @@ const SUMMARY_LIMIT = 200;
 
 /**
  * A user prompt and a compaction summary both start ChatWindow display groups.
- * Only user prompts are navigable turn anchors: compaction cards remain visible
- * group boundaries, but must not become independent rail nodes.
+ * Only genuine user prompts are navigable turn anchors: compaction cards remain
+ * visible group boundaries, and steering ("引导插队") deliveries stay inside
+ * the ongoing run instead of becoming independent rail nodes.
  */
 export function isTurnGroupBoundary(message: AgentMessage | Partial<AgentMessage>): boolean {
-  if (message.role === "user") return true;
+  if (message.role === "user") return isTurnAnchor(message);
   return message.role === "custom"
     && (message as Partial<CustomMessage>).customType === "compaction";
 }
 
-/** Only a real user prompt can anchor a navigable chat turn. */
+/**
+ * Only a real user prompt can anchor a navigable chat turn. Steering messages
+ * injected into an ongoing run belong to that run's turn, never to a new one.
+ */
 export function isTurnAnchor(message: AgentMessage | Partial<AgentMessage>): boolean {
-  return message.role === "user";
+  return message.role === "user" && (message as { delivery?: string }).delivery !== "steer";
+}
+
+/** How one transcript message affects whether a run is still open for steering. */
+export type SteeringRunEffect = "open" | "close" | "neutral";
+
+/**
+ * Structural steering ("引导插队") detection. Pi persists steered user messages
+ * as plain user entries, so they can only be recognized by where they land: a
+ * user message delivered while a run is still open was injected by the steering
+ * queue. A run is open after an assistant turn with tool calls (unless it was
+ * aborted or errored — abort-synthetic "Operation aborted" tool results must
+ * not reopen it) and closed by a completed answer or a standalone `!` bash
+ * execution. User messages, tool results, compaction cards and custom cards are
+ * neutral: consecutive drained steering messages stay inside the open run, and
+ * auto-compaction can sit between mid-run traffic and a steering delivery.
+ *
+ * The one unavoidable approximation: a steering message drained right after the
+ * run's final answer is structurally identical to a fresh prompt, so it stays a
+ * normal turn — consistently in live delivery and after reload.
+ */
+export function steeringRunEffect(message: AgentMessage | Partial<AgentMessage>): SteeringRunEffect {
+  if (message.role === "assistant") {
+    const content = (message as Partial<AssistantMessage>).content;
+    const hasToolCalls = Array.isArray(content)
+      && content.some((block) => (block as { type?: string } | null)?.type === "toolCall");
+    const stopReason = (message as { stopReason?: string }).stopReason;
+    return hasToolCalls && stopReason !== "aborted" && stopReason !== "error" ? "open" : "close";
+  }
+  if (message.role === "bashExecution") return "close";
+  return "neutral";
+}
+
+/**
+ * True when a user message appended after `messages` would be a steering-queue
+ * delivery into a still-open run. Used to tag live deliveries with the same
+ * rule that marks reloaded history, so the marker survives a refresh unchanged.
+ */
+export function isSteeringDeliveryContext(messages: readonly (AgentMessage | Partial<AgentMessage>)[]): boolean {
+  let runOpen = false;
+  for (const message of messages) {
+    const effect = steeringRunEffect(message);
+    if (effect === "open") runOpen = true;
+    else if (effect === "close") runOpen = false;
+  }
+  return runOpen;
 }
 
 export function getMessagePreview(message: unknown): string {

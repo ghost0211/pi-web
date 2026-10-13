@@ -664,6 +664,7 @@ export const enLocale: LocalePlugin = {
     "chat.messagePlaceholder": "Message… Type / for commands, @ for files",
     "chat.steer": "Steer",
     "chat.followUp": "Follow-up",
+    "chat.steeringHint": "Steering message injected into the running turn · part of this turn, not a new one",
     "chat.send": "Send",
     "chat.attachImage": "Attach image",
     "chat.attachFile": "Attach file",

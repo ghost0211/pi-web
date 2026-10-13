@@ -480,3 +480,33 @@ test("shows Edit from here only when an anchor entry is available", () => {
   const unanchored = renderMessage(message, { entryId: "e-user", onNavigate: () => {}, onEditContent: () => {} });
   assert.doesNotMatch(unanchored, /Edit from here/);
 });
+
+test("renders steering deliveries as marked chips without prompt affordances", () => {
+  const html = renderMessage(
+    { role: "user", content: "改成先处理测试失败", delivery: "steer", timestamp: Date.parse("2026-03-01T08:00:00Z") },
+    { entryId: "s1", editAnchorEntryId: "e-parent", onNavigate: () => {}, onEditContent: () => {}, onFork: () => {} },
+  );
+  assert.match(html, /Steer/);
+  assert.match(html, /Steering message injected into the running turn/);
+  assert.match(html, /改成先处理测试失败/);
+  assert.doesNotMatch(html, /<button/);
+  assert.doesNotMatch(html, /Edit from here/);
+  assert.doesNotMatch(html, /background:var\(--user-bg\)/);
+});
+
+test("normal prompts keep the user bubble and never render the steering badge", () => {
+  const html = renderMessage({ role: "user", content: "hello there", timestamp: Date.parse("2026-03-01T08:00:00Z") });
+  assert.match(html, /background:var\(--user-bg\)/);
+  assert.doesNotMatch(html, /Steering message injected/);
+});
+
+test("steering chips keep attached images as previewable thumbnails", () => {
+  const html = renderMessage({
+    role: "user",
+    content: [{ type: "text", text: "看这个截图" }, { type: "image", data: "YWJj", mimeType: "image/png" }],
+    delivery: "steer",
+    timestamp: Date.parse("2026-03-01T08:00:00Z"),
+  });
+  assert.match(html, /data:image\/png;base64,YWJj/);
+  assert.match(html, /看这个截图/);
+});

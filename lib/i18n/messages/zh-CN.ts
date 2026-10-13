@@ -664,6 +664,7 @@ export const zhCNLocale: LocalePlugin = {
     "chat.messagePlaceholder": "消息…输入 / 使用命令，输入 @ 查找文件",
     "chat.steer": "引导",
     "chat.followUp": "后续消息",
+    "chat.steeringHint": "运行中插队发送的引导消息 · 属于当前轮次，不算新的对话轮次",
     "chat.send": "发送",
     "chat.attachImage": "附加图片",
     "chat.attachFile": "附加文件",

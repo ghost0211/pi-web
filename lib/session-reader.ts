@@ -15,7 +15,7 @@ import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "./tool-res
 import { resolveProject, type ProjectInfo } from "./worktree";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
 import { PLAN_TOOL_NAMES, planItemsFromInput, type PlanItem } from "./plan-items";
-import { buildTurnPreviews, type TurnPreview } from "./turn-index";
+import { buildTurnPreviews, steeringRunEffect, type TurnPreview } from "./turn-index";
 import { listSessionsIncremental } from "./session-list-scanner";
 import { buildRunDurationIndex, withRunDuration } from "./run-duration";
 
@@ -504,12 +504,18 @@ export function buildSessionHistory(
   const pageSize = tail && tail > 0 ? tail : Number.MAX_SAFE_INTEGER;
   const sliced = sliceActiveBranch(entries, leafId ?? null, pageSize, excludeLeaf);
   const runDurations = buildRunDurationIndex(entries);
+  // Steering detection must walk the whole branch: a page can start right at a
+  // steering delivery whose run-opening assistant turn lies outside the window.
+  const steeringEntryIds = collectSteeringEntryIds(entries, leafId ?? null);
   const messages: AgentMessage[] = [];
   const entryIds: string[] = [];
   let firstEntryParentId: string | null = null;
   for (const entry of sliced) {
-    const message = entryToUiMessage(entry, options);
+    let message = entryToUiMessage(entry, options);
     if (!message) continue;
+    if (steeringEntryIds.has(entry.id) && message.role === "user") {
+      message = { ...message, delivery: "steer" };
+    }
     if (messages.length === 0) firstEntryParentId = entry.parentId ?? null;
     messages.push(withRunDuration(message, entry.id, runDurations));
     entryIds.push(entry.id);
@@ -626,15 +632,47 @@ export function buildSessionTurnIndex(
 ): TurnPreview[] {
   if (leafId === null) return [];
   const branch = sliceActiveBranch(entries, leafId ?? null, Number.MAX_SAFE_INTEGER);
+  const steeringEntryIds = collectSteeringEntryIds(entries, leafId ?? null);
   const messages: Partial<AgentMessage>[] = [];
   const entryIds: string[] = [];
   for (const entry of branch) {
     const message = turnIndexMessage(entry);
     if (!message) continue;
+    if (steeringEntryIds.has(entry.id)) {
+      (message as { delivery?: string }).delivery = "steer";
+    }
     messages.push(message);
     entryIds.push(entry.id);
   }
   return buildTurnPreviews(messages, entryIds).filter((turn) => !turn.head);
+}
+
+/**
+ * Entry ids of user messages delivered from the steering queue mid-run
+ * ("引导插队"). Pi persists them as plain user entries, so they are recognized
+ * structurally: the previous run-shaping message still leaves a run open (see
+ * `steeringRunEffect`). Walking the raw branch is cheap — no tool-call
+ * normalization or media rewriting — so paged history windows stay exact even
+ * when the run-opening assistant turn is outside the loaded window.
+ */
+export function collectSteeringEntryIds(
+  entries: SessionEntry[],
+  leafId: string | null,
+): Set<string> {
+  const ids = new Set<string>();
+  let runOpen = false;
+  for (const entry of sliceActiveBranch(entries, leafId, Number.MAX_SAFE_INTEGER)) {
+    if (entry.type !== "message") continue;
+    const message = entry.message as Partial<AgentMessage>;
+    if (message.role === "user") {
+      if (runOpen) ids.add(entry.id);
+      continue;
+    }
+    const effect = steeringRunEffect(message);
+    if (effect === "open") runOpen = true;
+    else if (effect === "close") runOpen = false;
+  }
+  return ids;
 }
 
 /**

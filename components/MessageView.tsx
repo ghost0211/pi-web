@@ -257,6 +257,11 @@ function haveSameRelevantToolResults(
 
 export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, onOpenSession, entryId, onFork, forking, onNavigate, editAnchorEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, writtenFiles, onCompact, isCompacting, compactError }: Props) {
   if (message.role === "user") {
+    // Steering ("引导插队") deliveries render as marked chips inside the run
+    // they joined — never as a user bubble that starts a new turn.
+    if ((message as UserMessage).delivery === "steer") {
+      return <SteeringMessageView message={message as UserMessage} />;
+    }
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} editAnchorEntryId={editAnchorEntryId} onEditContent={onEditContent} sessionId={sessionId} />;
   }
   if (message.role === "assistant") {
@@ -301,6 +306,79 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.isCompacting === next.isCompacting
     && prev.compactError === next.compactError;
 });
+
+function SteeringMessageView({ message }: { message: UserMessage }) {
+  const { t } = useI18n();
+  const text = getMessageText(message.content);
+  const images = getMessageImages(message.content);
+  const time = formatTime(message.timestamp);
+  return (
+    <div style={{ marginBottom: 16, display: "flex", minWidth: 0 }} title={t("chat.steeringHint")} data-steering-chip="true">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          minWidth: 0,
+          maxWidth: "100%",
+          border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+          background: "color-mix(in srgb, var(--accent) 6%, transparent)",
+          borderRadius: 10,
+          padding: "6px 10px",
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            flexShrink: 0,
+            marginTop: 1,
+            fontSize: 10,
+            fontFamily: "var(--font-mono)",
+            fontWeight: 650,
+            padding: "1px 7px",
+            borderRadius: 999,
+            border: "1px solid color-mix(in srgb, var(--accent) 45%, transparent)",
+            color: "var(--accent)",
+            letterSpacing: 0.4,
+          }}
+        >
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
+          </svg>
+          {t("chat.steer")}
+        </span>
+        <span style={{ minWidth: 0, flex: 1 }}>
+          {text && (
+            <span style={{ display: "block", fontSize: 13, lineHeight: 1.55, color: "var(--text)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {text}
+            </span>
+          )}
+          {images.length > 0 && (
+            <span style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: text ? 6 : 0 }}>
+              {images.map((img, i) => {
+                const src = imageSource(img);
+                if (!src) return null;
+                return (
+                  <ImagePreview key={i} src={src}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={src}
+                      alt=""
+                      style={{ maxWidth: 160, maxHeight: 160, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid var(--border)" }}
+                    />
+                  </ImagePreview>
+                );
+              })}
+            </span>
+          )}
+        </span>
+        {time && <span style={{ flexShrink: 0, marginTop: 2, color: "var(--text-dim)", fontSize: 10 }}>{time}</span>}
+      </div>
+    </div>
+  );
+}
 
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, editAnchorEntryId, onEditContent, sessionId }: {
   message: UserMessage;

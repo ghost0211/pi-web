@@ -7,8 +7,11 @@ export function isSubagentReport(message: Partial<AgentMessage>): boolean {
 }
 
 export function isChatGroupAnchor(message: AgentMessage): boolean {
-  return message.role === "user" || (message.role === "custom"
-    && (message.customType === "compaction" || message.customType === "pi-web:auto-advance" || isSubagentReport(message)));
+  // A steering ("引导插队") delivery is not a group anchor: it belongs to the
+  // ongoing run it was injected into, so the run stays one prompt group.
+  if (message.role === "user") return message.delivery !== "steer";
+  return message.role === "custom"
+    && (message.customType === "compaction" || message.customType === "pi-web:auto-advance" || isSubagentReport(message));
 }
 
 export interface ChatMessageGroup {
@@ -33,7 +36,7 @@ export function buildChatMessageGroups(messages: readonly AgentMessage[]): ChatM
   let parentFollowUp = false;
   for (let startIndex = 0; startIndex < messages.length;) {
     const anchor = messages[startIndex];
-    const kind = anchor.role === "user" ? "prompt"
+    const kind = anchor.role === "user" && anchor.delivery !== "steer" ? "prompt"
       : anchor.role === "custom" && anchor.customType === "pi-web:auto-advance" ? "auto-advance"
       : isSubagentReport(anchor) ? "subagent-report"
       : isChatGroupAnchor(anchor) ? "compaction" : "standalone";

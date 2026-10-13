@@ -32,7 +32,7 @@ import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { calculateActiveContextTokens } from "@/lib/context-tokens";
 import { resolveModelContextWindow } from "@/lib/context-window";
 import { mergeDeliveredUserMessage, userMessageKey } from "@/lib/prompt-recovery";
-import type { TurnPreview } from "@/lib/turn-index";
+import { isSteeringDeliveryContext, type TurnPreview } from "@/lib/turn-index";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
 import { isStaleLocalPromptToken, PromptCompletionTracker } from "./prompt-completion";
@@ -1723,10 +1723,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           // messages. The run's initial prompt also emits one, but handleSend
           // already appended it optimistically. Consume only the still-adjacent
           // optimistic bubble; later same-text queue deliveries must render.
+          // Queue deliveries into a still-open run are steering ("引导插队")
+          // messages: tag them with the same structural rule used for reloaded
+          // history so the marker, turn rail and grouping survive a refresh.
           const delivered = normalizeToolCalls(completed) as UserMessage;
           const optimisticKey = optimisticUserMessageKeyRef.current;
           optimisticUserMessageKeyRef.current = null;
-          setMessages((prev) => mergeDeliveredUserMessage(prev, delivered, optimisticKey));
+          setMessages((prev) => {
+            const tagged = isSteeringDeliveryContext(prev)
+              ? { ...delivered, delivery: "steer" as const }
+              : delivered;
+            return mergeDeliveredUserMessage(prev, tagged, optimisticKey);
+          });
         } else if (completed) {
           const normalized = normalizeToolCalls(completed);
           estimateContextAfterMessageRef.current = true;

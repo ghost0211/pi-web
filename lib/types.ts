@@ -54,6 +54,14 @@ export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp?: number;
+  /**
+   * Delivery provenance for user messages injected into an ongoing run from
+   * the steering queue ("引导插队"). Pi persists them as plain user entries,
+   * so live deliveries are tagged from transcript structure and reloaded
+   * history is tagged by the same structural rule. Undefined means a normal
+   * prompt (follow-up deliveries included: they start a genuine new turn).
+   */
+  delivery?: "steer";
 }
 
 export interface AgentUsage {

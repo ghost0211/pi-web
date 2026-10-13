@@ -664,6 +664,7 @@ export const zhTWLocale: LocalePlugin = {
     "chat.messagePlaceholder": "訊息…輸入 / 使用命令，輸入 @ 搜尋檔案",
     "chat.steer": "引導",
     "chat.followUp": "後續訊息",
+    "chat.steeringHint": "執行中插隊送出的引導訊息 · 屬於目前輪次，不算新的對話輪次",
     "chat.send": "傳送",
     "chat.attachImage": "附加圖片",
     "chat.attachFile": "附加檔案",

@@ -45,18 +45,53 @@ test("offers all/today/7d/30d presets plus a custom date range", () => {
   assert.match(source, /if \(customFrom && customTo && customFrom > customTo\) return;/);
 });
 
-test("renders totals, trend, providers with nested models, and projects", () => {
+test("renders totals and the trend inside the non-scrolling block", () => {
   assert.match(source, /formatUsageCost\(data\.totals\.cost\)/);
   assert.match(source, /formatUsageTokens\(data\.totals\.tokens\.total\)/);
   assert.match(source, /data\.series\.length > 0 && \(/);
   assert.match(source, /points=\{data\.series\}/);
-  assert.match(source, /data\.providers\.map\(\(provider\) =>/);
+  // The filter bar, cards and chart live above the scroll container so a wheel
+  // scroll only moves the detail list.
+  const fixedAt = source.indexOf('className="usage-fixed"');
+  const cardsAt = source.indexOf('className="usage-cards"');
+  const chartAt = source.indexOf("<TrendChart");
+  const scrollAt = source.indexOf('className="usage-scroll"');
+  assert.ok(fixedAt > 0 && cardsAt > fixedAt, "cards belong to the fixed block");
+  assert.ok(chartAt > fixedAt && scrollAt > chartAt, "chart is fixed, details scroll");
+});
+
+test("providers and projects are dropdowns that render only the selected entry", () => {
+  const selects = source.match(/className="usage-select"/g) ?? [];
+  assert.equal(selects.length, 2, "one dropdown for providers, one for projects");
+  assert.match(source, /aria-label=\{t\("usage\.byProvider"\)\}/);
+  assert.match(source, /aria-label=\{t\("usage\.byProject"\)\}/);
+  // Options carry the identifying label plus its totals; only the active entry
+  // gets a detail block.
+  assert.match(source, /data\.providers\.map\(\(provider\) => \(/);
   assert.match(source, /key=\{provider\.provider\}/);
-  assert.match(source, /ModelRows models=\{provider\.models\}/);
-  assert.match(source, /data\.projects\.map\(\(project\) =>/);
+  assert.match(source, /data\.projects\.map\(\(project\) => \(/);
   assert.match(source, /key=\{project\.projectId\}/);
+  assert.match(source, /<ProviderDetail\s+provider=\{activeProvider\}/);
   assert.match(source, /key=\{model\.key\}/);
   assert.match(source, /formatUsageCost\(model\.cost\)/);
+  assert.doesNotMatch(
+    source,
+    /data\.providers\.map\(\(provider\) => \(\s*<ProviderDetail/,
+    "the provider list must not render every detail block",
+  );
+});
+
+test("selection falls back to the top entry when the current one disappears", () => {
+  assert.match(
+    source,
+    /data\.providers\.find\(\(item\) => item\.provider === selectedProvider\) \?\? data\.providers\[0\]/,
+  );
+  assert.match(
+    source,
+    /data\.projects\.find\(\(item\) => item\.projectId === selectedProject\) \?\? data\.projects\[0\]/,
+  );
+  assert.match(source, /onChange=\{\(event\) => setSelectedProvider\(event\.target\.value\)\}/);
+  assert.match(source, /onChange=\{\(event\) => setSelectedProject\(event\.target\.value\)\}/);
 });
 
 test("trend chart is CSS-only, accessible, and carries exact values in titles", () => {
@@ -71,6 +106,7 @@ test("provider rows show a token-share bar of the filtered total", () => {
   assert.match(source, /totalTokens=\{data\.totals\.tokens\.total\}/);
   assert.match(source, /provider\.tokens\.total \/ totalTokens/);
   assert.match(source, /className="usage-share-bar"/);
+  assert.match(source, /ModelRows models=\{provider\.models\}/);
 });
 
 test("flags partial scans, untimestamped records, and bounds the empty state", () => {

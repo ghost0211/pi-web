@@ -212,17 +212,18 @@ function TrendChart({ title, points, granularity, t }: {
 }
 
 /**
- * One provider block: a summary row with a token-share bar, then the provider's
- * models sorted by cost. The full `provider/model` key stays in the title.
+ * The selected provider's detail: summary row with a token-share bar, the token
+ * breakdown and the provider's models sorted by cost. The full
+ * `provider/model` key stays in the title.
  */
-function ProviderRows({ provider, totalTokens, t }: {
+function ProviderDetail({ provider, totalTokens, t }: {
   provider: ProviderUsage;
   totalTokens: number;
   t: Translate;
 }) {
   const share = totalTokens > 0 ? provider.tokens.total / totalTokens : 0;
   return (
-    <li className="usage-provider-row">
+    <div className="usage-provider-row">
       <div className="usage-project-head">
         <span className="usage-project-name" title={provider.provider}>{provider.provider}</span>
         <span className="usage-project-cost">{formatUsageCost(provider.cost)}</span>
@@ -238,7 +239,7 @@ function ProviderRows({ provider, totalTokens, t }: {
       </div>
       <TokenBreakdown tokens={provider.tokens} t={t} />
       <ModelRows models={provider.models} t={t} />
-    </li>
+    </div>
   );
 }
 
@@ -252,6 +253,9 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [appliedRange, setAppliedRange] = useState<AppliedRange>({});
+  // Detail selectors: only the chosen entry is rendered below the fixed block.
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const [selectedProject, setSelectedProject] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -307,6 +311,16 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
     ? `${appliedRange.from ?? "…"} – ${appliedRange.to ?? "…"}`
     : t("usage.range.all");
   const PRESETS: RangePreset[] = ["all", "today", "last7", "last30", "custom"];
+
+  // The selection falls back to the top entry (the response is cost-sorted)
+  // whenever the previous choice is absent from the current response, so a range
+  // change can never leave an empty detail panel behind.
+  const activeProvider = data && data.providers.length > 0
+    ? data.providers.find((item) => item.provider === selectedProvider) ?? data.providers[0]
+    : undefined;
+  const activeProject = data && data.projects.length > 0
+    ? data.projects.find((item) => item.projectId === selectedProject) ?? data.projects[0]
+    : undefined;
 
   return (
     <section className="usage-panel" aria-label={t("usage.title")}>
@@ -369,7 +383,9 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
         )}
       </div>
 
-      <div className="usage-scroll">
+      {/* Fixed block: filters, notices, summary cards and the trend chart stay
+          put while only the detail area below scrolls. */}
+      <div className="usage-fixed">
         {loading && !data && <div className="usage-status">{t("usage.loading")}</div>}
 
         {error && !data && (
@@ -412,51 +428,73 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
                 t={t}
               />
             )}
-
-            {data.projects.length === 0 && data.providers.length === 0 ? (
-              <div className="usage-status">{t("usage.empty")}</div>
-            ) : (
-              <>
-                {data.providers.length > 0 && (
-                  <section className="usage-section">
-                    <h3>{t("usage.byProvider")}</h3>
-                    <ul className="usage-provider-list">
-                      {data.providers.map((provider) => (
-                        <ProviderRows
-                          key={provider.provider}
-                          provider={provider}
-                          totalTokens={data.totals.tokens.total}
-                          t={t}
-                        />
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                {data.projects.length > 0 && (
-                  <section className="usage-section">
-                    <h3>{t("usage.byProject")}</h3>
-                    <ul className="usage-project-list">
-                      {data.projects.map((project) => (
-                        <li key={project.projectId} className="usage-project-row">
-                          <div className="usage-project-head">
-                            <span className="usage-project-name" title={project.name}>{project.name}</span>
-                            <span className="usage-project-cost">{formatUsageCost(project.cost)}</span>
-                          </div>
-                          <div className="usage-project-meta">
-                            <span>{formatUsageTokens(project.tokens.total)} {t("usage.tokens").toLowerCase()}</span>
-                            <span>{project.sessions} {t("usage.sessions").toLowerCase()}</span>
-                          </div>
-                          <TokenBreakdown tokens={project.tokens} t={t} />
-                          <ModelRows models={project.models} t={t} />
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-              </>
-            )}
           </>
+        )}
+      </div>
+
+      {/* Scrollable detail area: one dropdown per grouping, then the detail of
+          the selected entry only. */}
+      <div className="usage-scroll">
+        {data && (
+          data.projects.length === 0 && data.providers.length === 0 ? (
+            <div className="usage-status">{t("usage.empty")}</div>
+          ) : (
+            <>
+              {activeProvider && (
+                <section className="usage-section">
+                  <h3>{t("usage.byProvider")}</h3>
+                  <select
+                    className="usage-select"
+                    aria-label={t("usage.byProvider")}
+                    value={activeProvider.provider}
+                    onChange={(event) => setSelectedProvider(event.target.value)}
+                  >
+                    {data.providers.map((provider) => (
+                      <option key={provider.provider} value={provider.provider}>
+                        {provider.provider} · {formatUsageTokens(provider.tokens.total)} · {formatUsageCost(provider.cost)}
+                      </option>
+                    ))}
+                  </select>
+                  <ProviderDetail
+                    provider={activeProvider}
+                    totalTokens={data.totals.tokens.total}
+                    t={t}
+                  />
+                </section>
+              )}
+
+              {activeProject && (
+                <section className="usage-section">
+                  <h3>{t("usage.byProject")}</h3>
+                  <select
+                    className="usage-select"
+                    aria-label={t("usage.byProject")}
+                    value={activeProject.projectId}
+                    onChange={(event) => setSelectedProject(event.target.value)}
+                  >
+                    {data.projects.map((project) => (
+                      <option key={project.projectId} value={project.projectId}>
+                        {project.name} · {formatUsageTokens(project.tokens.total)} · {formatUsageCost(project.cost)}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="usage-project-row">
+                    <div className="usage-project-head">
+                      <span className="usage-project-name" title={activeProject.name}>{activeProject.name}</span>
+                      <span className="usage-project-cost">{formatUsageCost(activeProject.cost)}</span>
+                    </div>
+                    <div className="usage-project-meta">
+                      <span>{formatUsageTokens(activeProject.tokens.total)} {t("usage.tokens").toLowerCase()}</span>
+                      <span>{activeProject.entries} {t("usage.requests").toLowerCase()}</span>
+                      <span>{activeProject.sessions} {t("usage.sessions").toLowerCase()}</span>
+                    </div>
+                    <TokenBreakdown tokens={activeProject.tokens} t={t} />
+                    <ModelRows models={activeProject.models} t={t} />
+                  </div>
+                </section>
+              )}
+            </>
+          )
         )}
       </div>
 
@@ -580,6 +618,25 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           opacity: 0.6;
           cursor: default;
         }
+        .usage-fixed {
+          flex-shrink: 0;
+          padding: 12px 14px 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .usage-fixed .usage-banner { margin-bottom: 10px; }
+        .usage-select {
+          width: 100%;
+          margin-bottom: 8px;
+          padding: 4px 6px;
+          font-size: 11px;
+          font-family: inherit;
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          background: var(--bg);
+          color: var(--text);
+          cursor: pointer;
+        }
+        .usage-select:hover { background: var(--bg-hover); }
         .usage-scroll {
           min-height: 0;
           flex: 1;
@@ -646,7 +703,7 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           text-transform: uppercase;
           letter-spacing: 0.04em;
         }
-        .usage-project-list, .usage-model-list {
+        .usage-model-list {
           list-style: none;
           margin: 0;
           padding: 0;
@@ -736,7 +793,8 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           display: flex;
           align-items: flex-end;
           gap: 2px;
-          height: 72px;
+          /* Shrink on short viewports so the detail area below keeps usable room. */
+          height: clamp(40px, 10vh, 72px);
         }
         .usage-chart-bar-wrap {
           flex: 1 1 0;
@@ -767,11 +825,6 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           font-size: 9px;
           font-weight: 400;
           text-transform: none;
-        }
-        .usage-provider-list {
-          list-style: none;
-          margin: 0;
-          padding: 0;
         }
         .usage-provider-row {
           padding: 9px 10px;

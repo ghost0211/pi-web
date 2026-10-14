@@ -726,7 +726,7 @@ export function SettingsPanel({ cwd, sessionId, initialSection, onClose, onSessi
               onClose={onClose} />)}
             {sectionHost("ssh", <SshConfig embedded onClose={onClose} />)}
             {sectionHost("mcp", <McpConfig embedded key={cwd ?? "global"} cwd={cwd} sessionId={sessionId} onClose={onClose} onSessionReloaded={onSessionReloaded} />)}
-            {sectionHost("usage", <UsagePanel translate={t} />)}
+            {sectionHost("usage", <UsagePanel embedded translate={t} />)}
             {cwd && sectionHost("skills", <SkillsConfig embedded key={cwd} cwd={cwd} onClose={onClose} />)}
             {cwd && sectionHost("agents", <AgentsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}
             {cwd && sectionHost("plugins", <PluginsConfig embedded key={cwd} cwd={cwd} sessionId={sessionId} onClose={onClose} onReloaded={onSessionReloaded} />)}

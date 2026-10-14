@@ -5,6 +5,9 @@
 ; node_modules cannot shadow new hoisted dependencies. Keep the old files
 ; until both directories have been staged and the new payload is installed.
 ; Never remove $INSTDIR itself or any user settings/session directories.
+
+!include "${__FILEDIR__}\shortcut-name.nsh"
+
 !macro NSIS_HOOK_PREINSTALL
   ; Tauri calls this hook BEFORE its own running-app check.
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
@@ -60,14 +63,28 @@
   ClearErrors
 !macroend
 
+; Migrate before repairing a missing link so existing shortcut settings survive.
 ; The stock tauri-bundler template skips shortcut creation in /UPDATE mode.
-; Recreate a missing desktop shortcut, but leave existing shortcuts alone.
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro PI_WEB_CLEANUP_PREVIOUS_PAYLOADS
+  !ifmacrodef IsShortcutTarget
+    StrCpy $PiWebInstallationFinished 1
+    Call PiWebMigrateDesktopShortcut
+  !endif
   ${If} $UpdateMode = 1
-    ${IfNot} ${FileExists} "$DESKTOP\${PRODUCTNAME}.lnk"
-      CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-      !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
+    ${IfNot} ${FileExists} "${PI_WEB_DESKTOP_ROOT}\${PI_WEB_DESKTOP_SHORTCUT_NAME}.lnk"
+      CreateShortcut "${PI_WEB_DESKTOP_ROOT}\${PI_WEB_DESKTOP_SHORTCUT_NAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      !insertmacro SetLnkAppUserModelId "${PI_WEB_DESKTOP_ROOT}\${PI_WEB_DESKTOP_SHORTCUT_NAME}.lnk"
     ${EndIf}
   ${EndIf}
+!macroend
+
+; The native template only knows the legacy product-name shortcut. Remove our
+; renamed link AFTER a real uninstall, not if it is cancelled; preserve /UPDATE.
+!macro NSIS_HOOK_POSTUNINSTALL
+  !ifmacrodef IsShortcutTarget
+    ${If} $UpdateMode <> 1
+      Call un.PiWebRemoveDesktopShortcut
+    ${EndIf}
+  !endif
 !macroend

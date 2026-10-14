@@ -53,6 +53,17 @@ test("keeps every requested configuration surface inside the settings panel", ()
   }
 });
 
+test("usage delegates its embedded height to the full settings section", () => {
+  assert.match(panelSource, /sectionHost\("usage", <UsagePanel embedded translate=\{t\} \/>\)/);
+  for (const selector of ["settings-dialog-body", "settings-dialog-main", "settings-section-host"]) {
+    const rule = cssSource.match(new RegExp(`\\.${selector} \\{([^}]+)\\}`))?.[1] ?? "";
+    assert.match(rule, /flex: 1;/);
+    assert.match(rule, /min-height: 0;/);
+  }
+  const hostRule = cssSource.match(/\.settings-section-host \{([^}]+)\}/)?.[1] ?? "";
+  assert.match(hostRule, /height: 100%;/);
+});
+
 test("restores the settings section and each list detail selection", async () => {
   assert.match(shellSource, /getLastSettingsSection\(projectTrustCwd\)/);
   assert.match(panelSource, /setLastSettingsSection\(initialSection\)/);

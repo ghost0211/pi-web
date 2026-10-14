@@ -219,9 +219,12 @@ moves.
 The output is `src-tauri/target/release/bundle/nsis/Pi Web Desktop_<version>_x64-setup.exe`
 (per-user install, no admin required, WebView2 bootstrapper embedded).
 
-Naming note: the runtime titlebar, sidebar brand, About panel, and tray use
-**Pi Desktop**. The installer `productName` remains "Pi Web Desktop" (installer,
-Start Menu entry, install dir), while the `identifier` stays
+Naming note: the runtime titlebar, sidebar brand, About panel, tray, and startup
+waiting page use **Pi Desktop**. The Windows desktop shortcut is named **pi**;
+install/update hooks migrate the old shortcut without changing its target or
+arguments, and a real uninstall removes only a shortcut owned by this install.
+The installer `productName` remains "Pi Web Desktop" (installer, Start Menu entry,
+install dir), while the `identifier` stays
 `com.github.ghost0211.pi-web` so a newer installer upgrades an older install in
 place instead of leaving a duplicate entry, and the app-data/log location stays
 stable.

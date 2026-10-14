@@ -14,7 +14,7 @@
  * rendered — the response carries a basename-only project name instead.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   type ModelUsage,
   type ProjectUsage,
@@ -27,6 +27,8 @@ import { formatUsageCost, formatUsageTokens } from "@/lib/usage-format";
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
 export interface UsagePanelProps {
+  /** Fill the settings section instead of applying the standalone height cap. */
+  embedded?: boolean;
   /** Restrict the aggregation to one project directory. Optional. */
   cwd?: string;
   /** Stable server-computed project key. Takes precedence over `cwd`. Optional. */
@@ -243,8 +245,30 @@ function ProviderDetail({ provider, totalTokens, t }: {
   );
 }
 
-export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
+function ProjectDetail({ project, t }: { project: ProjectUsage; t: Translate }) {
+  return (
+    <div className="usage-project-row">
+      <div className="usage-project-head">
+        <span className="usage-project-name" title={project.name}>{project.name}</span>
+        <span className="usage-project-cost">{formatUsageCost(project.cost)}</span>
+      </div>
+      <div className="usage-project-meta">
+        <span>{formatUsageTokens(project.tokens.total)} {t("usage.tokens").toLowerCase()}</span>
+        <span>{project.entries} {t("usage.requests").toLowerCase()}</span>
+        <span>{project.sessions} {t("usage.sessions").toLowerCase()}</span>
+      </div>
+      <TokenBreakdown tokens={project.tokens} t={t} />
+      <ModelRows models={project.models} t={t} />
+    </div>
+  );
+}
+
+type DetailTab = "provider" | "project";
+const DETAIL_TABS: DetailTab[] = ["provider", "project"];
+
+export function UsagePanel({ embedded = false, cwd, projectKey, translate }: UsagePanelProps) {
   const t = useMemo(() => createTranslator(translate), [translate]);
+  const detailId = useId();
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -253,7 +277,9 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [appliedRange, setAppliedRange] = useState<AppliedRange>({});
-  // Detail selectors: only the chosen entry is rendered below the fixed block.
+  const [detailTab, setDetailTab] = useState<DetailTab>("provider");
+  // Empty selection means all, not the literal provider name "all". The two
+  // filters remain independent when switching tabs.
   const [selectedProvider, setSelectedProvider] = useState("");
   const [selectedProject, setSelectedProject] = useState("");
 
@@ -281,6 +307,10 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
       .then((payload) => {
         if (controller.signal.aborted) return;
         setData(payload);
+        // A removed choice resets to all permanently; widening the range later
+        // must not silently reactivate a filter the UI had stopped showing.
+        setSelectedProvider((previous) => payload.providers.some((item) => item.provider === previous) ? previous : "");
+        setSelectedProject((previous) => payload.projects.some((item) => item.projectId === previous) ? previous : "");
         setLoading(false);
       })
       .catch(() => {
@@ -312,18 +342,17 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
     : t("usage.range.all");
   const PRESETS: RangePreset[] = ["all", "today", "last7", "last30", "custom"];
 
-  // The selection falls back to the top entry (the response is cost-sorted)
-  // whenever the previous choice is absent from the current response, so a range
-  // change can never leave an empty detail panel behind.
-  const activeProvider = data && data.providers.length > 0
-    ? data.providers.find((item) => item.provider === selectedProvider) ?? data.providers[0]
-    : undefined;
-  const activeProject = data && data.projects.length > 0
-    ? data.projects.find((item) => item.projectId === selectedProject) ?? data.projects[0]
-    : undefined;
+  // If a range change removes the chosen entry, show all rather than leaving
+  // a stale dropdown value or blank detail panel. All keeps API cost order.
+  const providerValue = data?.providers.some((item) => item.provider === selectedProvider)
+    ? selectedProvider : "";
+  const projectValue = data?.projects.some((item) => item.projectId === selectedProject)
+    ? selectedProject : "";
+  const visibleProviders = (data?.providers ?? []).filter((item) => providerValue === "" || item.provider === providerValue);
+  const visibleProjects = (data?.projects ?? []).filter((item) => projectValue === "" || item.projectId === projectValue);
 
   return (
-    <section className="usage-panel" aria-label={t("usage.title")}>
+    <section className={`usage-panel${embedded ? " is-embedded" : ""}`} aria-label={t("usage.title")}>
       <header className="usage-header">
         <div className="usage-heading">
           <strong>{t("usage.title")}</strong>
@@ -432,70 +461,88 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
         )}
       </div>
 
-      {/* Scrollable detail area: one dropdown per grouping, then the detail of
-          the selected entry only. */}
-      <div className="usage-scroll">
-        {data && (
-          data.projects.length === 0 && data.providers.length === 0 ? (
-            <div className="usage-status">{t("usage.empty")}</div>
-          ) : (
-            <>
-              {activeProvider && (
-                <section className="usage-section">
-                  <h3>{t("usage.byProvider")}</h3>
-                  <select
-                    className="usage-select"
-                    aria-label={t("usage.byProvider")}
-                    value={activeProvider.provider}
-                    onChange={(event) => setSelectedProvider(event.target.value)}
-                  >
-                    {data.providers.map((provider) => (
-                      <option key={provider.provider} value={provider.provider}>
-                        {provider.provider} · {formatUsageTokens(provider.tokens.total)} · {formatUsageCost(provider.cost)}
-                      </option>
-                    ))}
-                  </select>
-                  <ProviderDetail
-                    provider={activeProvider}
-                    totalTokens={data.totals.tokens.total}
-                    t={t}
-                  />
-                </section>
-              )}
-
-              {activeProject && (
-                <section className="usage-section">
-                  <h3>{t("usage.byProject")}</h3>
-                  <select
-                    className="usage-select"
-                    aria-label={t("usage.byProject")}
-                    value={activeProject.projectId}
-                    onChange={(event) => setSelectedProject(event.target.value)}
-                  >
-                    {data.projects.map((project) => (
-                      <option key={project.projectId} value={project.projectId}>
-                        {project.name} · {formatUsageTokens(project.tokens.total)} · {formatUsageCost(project.cost)}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="usage-project-row">
-                    <div className="usage-project-head">
-                      <span className="usage-project-name" title={activeProject.name}>{activeProject.name}</span>
-                      <span className="usage-project-cost">{formatUsageCost(activeProject.cost)}</span>
-                    </div>
-                    <div className="usage-project-meta">
-                      <span>{formatUsageTokens(activeProject.tokens.total)} {t("usage.tokens").toLowerCase()}</span>
-                      <span>{activeProject.entries} {t("usage.requests").toLowerCase()}</span>
-                      <span>{activeProject.sessions} {t("usage.sessions").toLowerCase()}</span>
-                    </div>
-                    <TokenBreakdown tokens={activeProject.tokens} t={t} />
-                    <ModelRows models={activeProject.models} t={t} />
-                  </div>
-                </section>
-              )}
-            </>
-          )
+      {/* Tabs and the current dropdown stay visible while all detail cards
+          scroll. Switching tabs remounts the scroll panel at its top. */}
+      <div className="usage-detail-controls">
+        <div className="usage-detail-tabs" role="tablist" aria-label={t("usage.title")}>
+          {DETAIL_TABS.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              id={`${detailId}-tab-${tab}`}
+              data-detail-tab={tab}
+              aria-selected={detailTab === tab}
+              aria-controls={`${detailId}-panel`}
+              tabIndex={detailTab === tab ? 0 : -1}
+              onClick={() => setDetailTab(tab)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next: DetailTab = event.key === "Home" ? "provider"
+                  : event.key === "End" ? "project" : tab === "provider" ? "project" : "provider";
+                setDetailTab(next);
+                event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`[data-detail-tab="${next}"]`)?.focus();
+              }}
+            >
+              {t(tab === "provider" ? "usage.byProvider" : "usage.byProject")}
+            </button>
+          ))}
+        </div>
+        {detailTab === "provider" ? (
+          <select
+            key="provider"
+            className="usage-select"
+            aria-label={t("usage.byProvider")}
+            value={providerValue}
+            disabled={!data || data.providers.length === 0}
+            onChange={(event) => setSelectedProvider(event.target.value)}
+          >
+            <option value="">all</option>
+            {data && data.providers.map((provider) => (
+              <option key={provider.provider} value={provider.provider}>
+                {provider.provider} · {formatUsageTokens(provider.tokens.total)} · {formatUsageCost(provider.cost)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <select
+            key="project"
+            className="usage-select"
+            aria-label={t("usage.byProject")}
+            value={projectValue}
+            disabled={!data || data.projects.length === 0}
+            onChange={(event) => setSelectedProject(event.target.value)}
+          >
+            <option value="">all</option>
+            {data && data.projects.map((project) => (
+              <option key={project.projectId} value={project.projectId}>
+                {project.name} · {formatUsageTokens(project.tokens.total)} · {formatUsageCost(project.cost)}
+              </option>
+            ))}
+          </select>
         )}
+      </div>
+
+      <div
+        key={detailTab}
+        className="usage-scroll"
+        role="tabpanel"
+        id={`${detailId}-panel`}
+        aria-labelledby={`${detailId}-tab-${detailTab}`}
+        tabIndex={0}
+      >
+        {data && (detailTab === "provider" ? (
+          visibleProviders.length === 0 ? <div className="usage-status">{t("usage.empty")}</div> : (
+            visibleProviders.map((provider) => (
+              <ProviderDetail key={provider.provider} provider={provider} totalTokens={data.totals.tokens.total} t={t} />
+            ))
+          )
+        ) : (
+          visibleProjects.length === 0 ? <div className="usage-status">{t("usage.empty")}</div> : (
+            visibleProjects.map((project) => <ProjectDetail key={project.projectId} project={project} t={t} />)
+          )
+        ))}
       </div>
 
       <style>{`
@@ -506,6 +553,16 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           min-height: 220px;
           background: var(--bg-panel);
           border-bottom: 1px solid var(--border);
+        }
+        /* The settings shell owns the available height; only standalone panels
+           use the viewport cap above. Give all remaining room to the details. */
+        .usage-panel.is-embedded {
+          width: 100%;
+          height: 100%;
+          min-height: 0;
+          overflow: hidden;
+          container-name: usage-embedded;
+          container-type: size;
         }
         .usage-header {
           flex-shrink: 0;
@@ -624,6 +681,37 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           border-bottom: 1px solid var(--border);
         }
         .usage-fixed .usage-banner { margin-bottom: 10px; }
+        .usage-detail-controls {
+          flex-shrink: 0;
+          padding: 8px 14px 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .usage-detail-tabs {
+          display: flex;
+          gap: 16px;
+          margin-bottom: 8px;
+        }
+        .usage-detail-tabs button {
+          padding: 5px 0;
+          border: 0;
+          border-bottom: 2px solid transparent;
+          background: transparent;
+          color: var(--text-muted);
+          font: inherit;
+          font-size: 12px;
+          cursor: pointer;
+        }
+        .usage-detail-tabs button[aria-selected="true"] {
+          border-bottom-color: var(--accent);
+          color: var(--accent);
+          font-weight: 600;
+        }
+        .usage-detail-tabs button:hover { color: var(--accent); }
+        .usage-detail-tabs button:focus-visible,
+        .usage-select:focus-visible {
+          outline: 2px solid var(--accent);
+          outline-offset: 2px;
+        }
         .usage-select {
           width: 100%;
           margin-bottom: 8px;
@@ -641,6 +729,7 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           min-height: 0;
           flex: 1;
           overflow: auto;
+          overscroll-behavior: contain;
           padding: 12px 14px;
         }
         .usage-status {
@@ -844,6 +933,27 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           height: 100%;
           background: var(--accent);
           opacity: 0.65;
+        }
+        /* Compact spacing follows the actual section height (including the
+           mobile settings toolbar), not just the outer viewport. Keep every
+           summary value and the chart visible while freeing room for details. */
+        @container usage-embedded (max-height: 600px) {
+          .usage-header { min-height: 36px; padding-block: 4px; }
+          .usage-filter { padding-block: 6px; }
+          .usage-filter-chip { padding-block: 2px; }
+          .usage-fixed { padding-top: 8px; }
+          .usage-cards { gap: 6px; margin-bottom: 8px; }
+          .usage-card { padding: 6px 8px; }
+          .usage-card-value { margin-top: 2px; font-size: 16px; }
+          .usage-card-hint { margin-top: 1px; }
+          .usage-fixed .usage-section { margin-bottom: 8px; }
+          .usage-fixed .usage-section h3 { margin-bottom: 4px; }
+          .usage-chart { height: 40px; }
+          .usage-chart-labels { margin-top: 2px; }
+          .usage-detail-controls { padding-top: 6px; }
+          .usage-detail-tabs { margin-bottom: 4px; }
+          .usage-detail-tabs button { padding-block: 3px; }
+          .usage-select { margin-bottom: 4px; padding-block: 3px; }
         }
         @media (max-width: 640px) {
           .usage-panel {

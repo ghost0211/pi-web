@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Usage & Cost panel.
+ * Usage & Cost dashboard.
  *
  * Renders the cross-session aggregation produced by `GET /api/usage`: total
- * recorded tokens/cost, a per-project breakdown and a per-model breakdown.
+ * recorded tokens/cost, a trend series, a per-provider breakdown with nested
+ * models, and a per-project breakdown — all filterable to an arbitrary time
+ * period (presets or a custom from/to date range in the browser's timezone).
  *
  * The two scope props are optional. Omit both for the "all projects" view; pass
  * either a `projectKey` (preferred, groups worktrees with their main repo) or a
@@ -16,7 +18,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type ModelUsage,
   type ProjectUsage,
+  type ProviderUsage,
   type UsageResponse,
+  type UsageSeriesPoint,
 } from "@/lib/session-usage";
 import { formatUsageCost, formatUsageTokens } from "@/lib/usage-format";
 
@@ -60,6 +64,18 @@ const FALLBACK_LABELS: Record<string, string> = {
   "usage.tokens": "Tokens",
   "usage.partial": "Partial: some large or unreadable sessions were skipped",
   "usage.scanned": "{count} sessions scanned",
+  "usage.range.all": "All time",
+  "usage.range.today": "Today",
+  "usage.range.last7": "Last 7 days",
+  "usage.range.last30": "Last 30 days",
+  "usage.range.custom": "Custom",
+  "usage.range.from": "From",
+  "usage.range.to": "To",
+  "usage.range.apply": "Apply",
+  "usage.trend": "Token trend",
+  "usage.byProvider": "By provider",
+  "usage.provider": "Provider",
+  "usage.untimestamped": "{count} records without timestamps were excluded from the time filter",
 };
 
 function interpolate(message: string, params?: Record<string, string | number>): string {
@@ -121,12 +137,121 @@ function ModelRows({ models, t }: { models: ModelUsage[]; t: Translate }) {
   );
 }
 
+/** Time-range preset keys; "custom" is driven by the date inputs. */
+type RangePreset = "all" | "today" | "last7" | "last30" | "custom";
+
+/** Applied filter; an empty object means all time. */
+interface AppliedRange {
+  from?: string;
+  to?: string;
+}
+
+/** Formats a Date as the `YYYY-MM-DD` value the API expects (browser-local). */
+function localDateValue(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** Resolves a preset to its concrete date range; "all"/"custom" stay empty. */
+function presetRange(preset: RangePreset): AppliedRange {
+  const today = new Date();
+  const to = localDateValue(today);
+  if (preset === "today") return { from: to, to };
+  if (preset === "last7" || preset === "last30") {
+    const from = new Date(today);
+    from.setDate(from.getDate() - (preset === "last7" ? 6 : 29));
+    return { from: localDateValue(from), to };
+  }
+  return {};
+}
+
+/**
+ * CSS-only trend chart over the range: one bar per day (or month for long
+ * spans). Pure presentational — every bar carries a title with exact numbers.
+ */
+function TrendChart({ title, points, granularity, t }: {
+  title: string;
+  points: UsageSeriesPoint[];
+  granularity: "day" | "month";
+  t: Translate;
+}) {
+  const max = points.reduce((best, point) => Math.max(best, point.tokens.total), 0);
+  if (max <= 0) return null;
+  const summary = points
+    .map((point) => `${point.date}: ${formatUsageTokens(point.tokens.total)}`)
+    .join(", ");
+  return (
+    <section className="usage-section">
+      <h3>
+        {title}
+        <span className="usage-trend-granularity">
+          {granularity === "month" ? "YYYY-MM" : "YYYY-MM-DD"}
+        </span>
+      </h3>
+      <div className="usage-chart" role="img" aria-label={`${title}: ${summary}`}>
+        {points.map((point) => (
+          <div
+            key={point.date}
+            className="usage-chart-bar-wrap"
+            title={`${point.date} · ${formatUsageTokens(point.tokens.total)} ${t("usage.tokens").toLowerCase()} · ${formatUsageCost(point.cost)}`}
+          >
+            <div
+              className="usage-chart-bar"
+              style={{ height: `${Math.max(3, Math.round((point.tokens.total / max) * 100))}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="usage-chart-labels">
+        <span>{points[0]?.date}</span>
+        <span>{points[points.length - 1]?.date}</span>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * One provider block: a summary row with a token-share bar, then the provider's
+ * models sorted by cost. The full `provider/model` key stays in the title.
+ */
+function ProviderRows({ provider, totalTokens, t }: {
+  provider: ProviderUsage;
+  totalTokens: number;
+  t: Translate;
+}) {
+  const share = totalTokens > 0 ? provider.tokens.total / totalTokens : 0;
+  return (
+    <li className="usage-provider-row">
+      <div className="usage-project-head">
+        <span className="usage-project-name" title={provider.provider}>{provider.provider}</span>
+        <span className="usage-project-cost">{formatUsageCost(provider.cost)}</span>
+      </div>
+      <div className="usage-project-meta">
+        <span>{formatUsageTokens(provider.tokens.total)} {t("usage.tokens").toLowerCase()}</span>
+        <span>{Math.round(share * 100)}%</span>
+        <span>{provider.entries} {t("usage.requests").toLowerCase()}</span>
+        <span>{provider.sessions} {t("usage.sessions").toLowerCase()}</span>
+      </div>
+      <div className="usage-share" aria-hidden="true">
+        <div className="usage-share-bar" style={{ width: `${Math.min(100, Math.max(1, Math.round(share * 100)))}%` }} />
+      </div>
+      <TokenBreakdown tokens={provider.tokens} t={t} />
+      <ModelRows models={provider.models} t={t} />
+    </li>
+  );
+}
+
 export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
   const t = useMemo(() => createTranslator(translate), [translate]);
   const [data, setData] = useState<UsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [preset, setPreset] = useState<RangePreset>("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [appliedRange, setAppliedRange] = useState<AppliedRange>({});
 
   useEffect(() => {
     const controller = new AbortController();
@@ -136,6 +261,12 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
     const query = new URLSearchParams();
     if (projectKey) query.set("projectKey", projectKey);
     else if (cwd) query.set("cwd", cwd);
+    if (appliedRange.from) query.set("from", appliedRange.from);
+    if (appliedRange.to) query.set("to", appliedRange.to);
+    if (appliedRange.from || appliedRange.to) {
+      // The server buckets days in the browser's timezone via this offset.
+      query.set("tz", String(new Date().getTimezoneOffset()));
+    }
     const suffix = query.toString();
 
     fetch(`/api/usage${suffix ? `?${suffix}` : ""}`, { signal: controller.signal })
@@ -155,13 +286,27 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
       });
 
     return () => controller.abort();
-  }, [cwd, projectKey, reloadKey]);
+  }, [cwd, projectKey, reloadKey, appliedRange]);
+
+  const applyPreset = (next: RangePreset) => {
+    setPreset(next);
+    if (next !== "custom") setAppliedRange(presetRange(next));
+  };
+
+  const applyCustomRange = () => {
+    if (!customFrom && !customTo) return;
+    if (customFrom && customTo && customFrom > customTo) return;
+    setAppliedRange({
+      ...(customFrom ? { from: customFrom } : {}),
+      ...(customTo ? { to: customTo } : {}),
+    });
+  };
 
   const scopeLabel = data?.scope?.name ?? t("usage.allProjects");
-  const models = useMemo(
-    () => (data ? (data.models.length > 0 ? data.models : []) : []),
-    [data],
-  );
+  const rangeLabel = appliedRange.from || appliedRange.to
+    ? `${appliedRange.from ?? "…"} – ${appliedRange.to ?? "…"}`
+    : t("usage.range.all");
+  const PRESETS: RangePreset[] = ["all", "today", "last7", "last30", "custom"];
 
   return (
     <section className="usage-panel" aria-label={t("usage.title")}>
@@ -169,6 +314,7 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
         <div className="usage-heading">
           <strong>{t("usage.title")}</strong>
           <span className="usage-scope">{scopeLabel}</span>
+          <span className="usage-range-label">{rangeLabel}</span>
         </div>
         <button
           type="button"
@@ -179,6 +325,49 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           {loading ? t("usage.loading") : t("usage.refresh")}
         </button>
       </header>
+
+      <div className="usage-filter" role="group" aria-label={t("usage.range.custom")}>
+        {PRESETS.map((key) => (
+          <button
+            key={key}
+            type="button"
+            className={`usage-filter-chip${preset === key ? " active" : ""}`}
+            aria-pressed={preset === key}
+            onClick={() => applyPreset(key)}
+          >
+            {t(`usage.range.${key}`)}
+          </button>
+        ))}
+        {preset === "custom" && (
+          <span className="usage-filter-custom">
+            <input
+              type="date"
+              className="usage-filter-input"
+              aria-label={t("usage.range.from")}
+              value={customFrom}
+              max={customTo || undefined}
+              onChange={(event) => setCustomFrom(event.target.value)}
+            />
+            <span className="usage-filter-sep">–</span>
+            <input
+              type="date"
+              className="usage-filter-input"
+              aria-label={t("usage.range.to")}
+              value={customTo}
+              min={customFrom || undefined}
+              onChange={(event) => setCustomTo(event.target.value)}
+            />
+            <button
+              type="button"
+              className="usage-filter-apply"
+              onClick={applyCustomRange}
+              disabled={!customFrom && !customTo}
+            >
+              {t("usage.range.apply")}
+            </button>
+          </span>
+        )}
+      </div>
 
       <div className="usage-scroll">
         {loading && !data && <div className="usage-status">{t("usage.loading")}</div>}
@@ -196,6 +385,10 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           <>
             {data.partial && <div className="usage-banner">{t("usage.partial")}</div>}
 
+            {data.untimestampedRecords !== undefined && data.untimestampedRecords > 0 && (
+              <div className="usage-banner">{t("usage.untimestamped", { count: data.untimestampedRecords })}</div>
+            )}
+
             <div className="usage-cards">
               <SummaryCard label={t("usage.totalCost")} value={formatUsageCost(data.totals.cost)} />
               <SummaryCard
@@ -211,10 +404,35 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
               <SummaryCard label={t("usage.requests")} value={String(data.totals.entries)} />
             </div>
 
-            {data.projects.length === 0 && models.length === 0 ? (
+            {data.series.length > 0 && (
+              <TrendChart
+                title={t("usage.trend")}
+                points={data.series}
+                granularity={data.seriesGranularity}
+                t={t}
+              />
+            )}
+
+            {data.projects.length === 0 && data.providers.length === 0 ? (
               <div className="usage-status">{t("usage.empty")}</div>
             ) : (
               <>
+                {data.providers.length > 0 && (
+                  <section className="usage-section">
+                    <h3>{t("usage.byProvider")}</h3>
+                    <ul className="usage-provider-list">
+                      {data.providers.map((provider) => (
+                        <ProviderRows
+                          key={provider.provider}
+                          provider={provider}
+                          totalTokens={data.totals.tokens.total}
+                          t={t}
+                        />
+                      ))}
+                    </ul>
+                  </section>
+                )}
+
                 {data.projects.length > 0 && (
                   <section className="usage-section">
                     <h3>{t("usage.byProject")}</h3>
@@ -234,13 +452,6 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
                         </li>
                       ))}
                     </ul>
-                  </section>
-                )}
-
-                {models.length > 0 && (
-                  <section className="usage-section">
-                    <h3>{t("usage.byModel")}</h3>
-                    <ModelRows models={models} t={t} />
                   </section>
                 )}
               </>
@@ -286,6 +497,70 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
+        .usage-range-label {
+          flex-shrink: 0;
+          color: var(--text-dim);
+          font-size: 10px;
+          font-family: var(--font-mono);
+        }
+        .usage-filter {
+          flex-shrink: 0;
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 14px;
+          border-bottom: 1px solid var(--border);
+        }
+        .usage-filter-chip {
+          font-size: 11px;
+          font-family: inherit;
+          padding: 3px 10px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: transparent;
+          color: var(--text-muted);
+          cursor: pointer;
+        }
+        .usage-filter-chip:hover {
+          color: var(--text);
+          background: var(--bg-hover);
+        }
+        .usage-filter-chip.active {
+          color: var(--accent);
+          border-color: var(--accent);
+          background: color-mix(in srgb, var(--accent) 10%, transparent);
+        }
+        .usage-filter-custom {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .usage-filter-input {
+          font-size: 11px;
+          font-family: var(--font-mono);
+          padding: 3px 6px;
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          background: var(--bg);
+          color: var(--text);
+        }
+        .usage-filter-sep { color: var(--text-dim); }
+        .usage-filter-apply {
+          font-size: 11px;
+          font-family: var(--font-mono);
+          background: var(--bg-panel);
+          color: var(--text-muted);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          padding: 3px 9px;
+          cursor: pointer;
+        }
+        .usage-filter-apply:hover:not(:disabled) {
+          color: var(--text);
+          background: var(--bg-hover);
+        }
+        .usage-filter-apply:disabled { opacity: 0.6; cursor: default; }
         .usage-refresh {
           flex-shrink: 0;
           font-size: 11px;
@@ -456,6 +731,66 @@ export function UsagePanel({ cwd, projectKey, translate }: UsagePanelProps) {
           min-width: 62px;
           text-align: right;
           font-variant-numeric: tabular-nums;
+        }
+        .usage-chart {
+          display: flex;
+          align-items: flex-end;
+          gap: 2px;
+          height: 72px;
+        }
+        .usage-chart-bar-wrap {
+          flex: 1 1 0;
+          min-width: 2px;
+          height: 100%;
+          display: flex;
+          align-items: flex-end;
+        }
+        .usage-chart-bar {
+          width: 100%;
+          min-height: 2px;
+          border-radius: 2px 2px 0 0;
+          background: var(--accent);
+          opacity: 0.7;
+        }
+        .usage-chart-bar-wrap:hover .usage-chart-bar { opacity: 1; }
+        .usage-chart-labels {
+          display: flex;
+          justify-content: space-between;
+          margin-top: 4px;
+          color: var(--text-dim);
+          font-size: 10px;
+          font-family: var(--font-mono);
+        }
+        .usage-trend-granularity {
+          margin-left: 6px;
+          color: var(--text-dim);
+          font-size: 9px;
+          font-weight: 400;
+          text-transform: none;
+        }
+        .usage-provider-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+        .usage-provider-row {
+          padding: 9px 10px;
+          margin-bottom: 8px;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          background: var(--bg);
+        }
+        .usage-share {
+          height: 4px;
+          margin-top: 6px;
+          border-radius: 2px;
+          background: color-mix(in srgb, var(--border) 55%, transparent);
+          overflow: hidden;
+        }
+        .usage-share-bar {
+          height: 100%;
+          background: var(--accent);
+          opacity: 0.65;
         }
         @media (max-width: 640px) {
           .usage-panel {

@@ -242,6 +242,12 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - Continued rounds go through the existing mutation guard, so the deletion barrier, idle reaping, and `isRunning()` protections still apply. Per-round settlements suppress completion notifications; only the terminal outcome notifies once.
 - Archived sessions are refused by `/api/agent/[id]` (session-management metadata stays a route-level concern), and `pauseAutoAdvance()` runs when a session is archived. See `docs/auto-advance.md`.
 
+### Usage & cost dashboard
+- `GET /api/usage` sums the `usage` recorded in every session file (historical cost verbatim, never recomputed from a price catalog) and groups it by project, by provider (nested models), and by model, plus a trend series. `components/UsagePanel.tsx` filters it to an arbitrary time period: presets or custom dates sent as client-local `YYYY-MM-DD` `from`/`to` plus the browser's `getTimezoneOffset()` minutes as `tz`; `parseUsageRangeParams()` validates strictly (round-trip rejects impossible dates) and converts to absolute epoch-ms bounds. `from > to`, malformed dates, and `|tz| > 840` are 400s with static messages.
+- Each parsed session caches compact timestamped `UsageRecord[]` in the mtime/size-keyed LRU, so any range reuses one parse. Records without a usable timestamp join all-time totals but are excluded — and reported as `untimestampedRecords` — when a range is active; never guess a bucket for them.
+- Trend buckets are client-local calendar days (`at - tzOffset`); spans over 92 days merge into `YYYY-MM` months (`seriesGranularity` tells the UI which). Sessions/providers/models count distinct contributing sessions via per-bucket `Set`s keyed by scan order.
+- Privacy: the response carries basename-only project names and 12-char sha1 ids; scope values are never echoed. Resource bounds and skip reasons stay in `partial`/`skipped`.
+
 ### Completion sound
 - `hooks/useAudio.ts` stores the toggle in `localStorage` as `pi-sound-enabled` and reuses one `AudioContext`.
 - Browser autoplay policy means sound must be unlocked from a user gesture; `ChatInput` calls the unlock hook from interactive controls, and `ChatWindow` plays the tone from `onAgentEnd`.

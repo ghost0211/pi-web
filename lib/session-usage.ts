@@ -72,6 +72,20 @@ export interface ProjectUsage extends UsageMetric {
   models: ModelUsage[];
 }
 
+/** Per-provider aggregation with a model breakdown. */
+export interface ProviderUsage extends UsageMetric {
+  provider: string;
+  models: ModelUsage[];
+}
+
+/** One point of the trend series; `date` is `YYYY-MM-DD` or `YYYY-MM`. */
+export interface UsageSeriesPoint {
+  date: string;
+  tokens: UsageTokens;
+  cost: number;
+  entries: number;
+}
+
 /** Which scope produced a response. */
 export interface UsageScope {
   projectId?: string;
@@ -95,6 +109,19 @@ export interface UsageResponse {
   totals: UsageMetric;
   projects: ProjectUsage[];
   models: ModelUsage[];
+  /** Per-provider grouping with nested model breakdowns, sorted by cost. */
+  providers: ProviderUsage[];
+  /** Trend series over the applied range, oldest first. */
+  series: UsageSeriesPoint[];
+  /** Bucket width of `series`: days for spans up to 92 days, months beyond. */
+  seriesGranularity: "day" | "month";
+  /** The applied time filter, echoed as `YYYY-MM-DD` dates. */
+  range?: { from?: string; to?: string };
+  /**
+   * Usage records excluded from a ranged query because their entries carry no
+   * usable timestamp. Only reported when a range filter is active.
+   */
+  untimestampedRecords?: number;
   /** True when any session/file was skipped or a budget cut the scan short. */
   partial: boolean;
   scannedSessions: number;
@@ -115,6 +142,28 @@ export interface SessionUsage {
   entries: number;
   /** Per-model slices keyed by the normalized `provider/model` key. */
   models: Map<string, SessionUsageSlice>;
+  /**
+   * Per-record samples, one per usage-bearing entry, in file order. They power
+   * the dashboard's arbitrary time-range filtering and trend series; the cached
+   * per-session aggregate stores them so different ranges reuse one parse.
+   */
+  records: UsageRecord[];
+}
+
+/**
+ * One usage-bearing entry as a compact sample. `at` is epoch milliseconds from
+ * the entry (or message) timestamp; 0 marks a record without a usable
+ * timestamp, which ranged queries exclude and report.
+ */
+export interface UsageRecord {
+  at: number;
+  /** Normalized `provider/model` key, matching `SessionUsage.models`. */
+  modelKey: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
 }
 
 export interface SessionUsageSlice {
@@ -143,6 +192,16 @@ export interface CollectUsageOptions {
    * listed sessions (or tests) can pass it to avoid a second disk scan.
    */
   sessions?: readonly SessionInfo[];
+  /** Inclusive absolute time bounds (epoch ms) for the dashboard range filter. */
+  fromMs?: number;
+  toMs?: number;
+  /**
+   * Client timezone offset in minutes (`Date.getTimezoneOffset()`), used for
+   * day/month bucket labels. Defaults to UTC.
+   */
+  tzOffsetMinutes?: number;
+  /** Applied range echoed back in the response, as `YYYY-MM-DD` dates. */
+  rangeLabel?: { from?: string; to?: string };
   maxSessions?: number;
   maxEntries?: number;
   maxFileBytes?: number;
@@ -170,14 +229,6 @@ interface ModelRef {
   model: string;
 }
 
-function emptyUsageTokens(): UsageTokens {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-}
-
-function emptyMetric(): UsageMetric {
-  return { sessions: 0, entries: 0, tokens: emptyUsageTokens(), cost: 0 };
-}
-
 function numberOr0(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -195,8 +246,9 @@ export function normalizeUsageModel(provider: unknown, model: unknown): ModelRef
 }
 
 /**
- * Sums every usage record in a session file, attributing each one to the model
- * that produced it:
+ * Sums every usage record in a session file into per-model slices. The same
+ * parse also emits the timestamped per-record samples the dashboard filters by.
+ * Each record is attributed to the model that produced it:
  *   - an assistant message carries its own provider/model;
  *   - a tool-result message or a compaction/branch-summary entry has no model of
  *     its own, so it is attributed to the most recently seen model in file order
@@ -212,6 +264,7 @@ export function computeSessionUsage(entries: readonly SessionEntry[]): SessionUs
     cost: 0,
     entries: 0,
     models: new Map(),
+    records: [],
   };
 
   let current = normalizeUsageModel(undefined, undefined);
@@ -227,9 +280,9 @@ export function computeSessionUsage(entries: readonly SessionEntry[]): SessionUs
           // The message's own model is authoritative for the message itself and
           // for any tool results that follow it.
           current = normalizeUsageModel(message.provider, message.model);
-          if (message.usage) addUsage(usage, current, message.usage);
+          if (message.usage) addUsage(usage, current, message.usage, entryTimestampMs(entry));
         } else if (message.role === "toolResult") {
-          if (message.usage) addUsage(usage, current, message.usage);
+          if (message.usage) addUsage(usage, current, message.usage, entryTimestampMs(entry));
         }
         break;
       }
@@ -237,7 +290,7 @@ export function computeSessionUsage(entries: readonly SessionEntry[]): SessionUs
       case "branch_summary":
         // Reads from a compaction/summary entry as well as an assistant message:
         // pi charges these summarization calls to the active model.
-        if (entry.usage) addUsage(usage, current, entry.usage);
+        if (entry.usage) addUsage(usage, current, entry.usage, entryTimestampMs(entry));
         break;
       default:
         break;
@@ -248,7 +301,27 @@ export function computeSessionUsage(entries: readonly SessionEntry[]): SessionUs
   return usage;
 }
 
-function addUsage(target: SessionUsage, model: ModelRef, usage: AgentUsage): void {
+/**
+ * Best-effort epoch milliseconds for one entry: the entry's own timestamp,
+ * falling back to the message's numeric timestamp. Returns 0 when neither is
+ * usable; ranged queries exclude such records instead of guessing a bucket.
+ */
+function entryTimestampMs(entry: SessionEntry): number {
+  const raw = (entry as { timestamp?: unknown }).timestamp;
+  if (typeof raw === "string") {
+    const ms = Date.parse(raw);
+    if (Number.isFinite(ms)) return ms;
+  } else if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  const message = (entry as { message?: { timestamp?: unknown } }).message;
+  if (message && typeof message.timestamp === "number" && Number.isFinite(message.timestamp)) {
+    return message.timestamp;
+  }
+  return 0;
+}
+
+function addUsage(target: SessionUsage, model: ModelRef, usage: AgentUsage, at: number): void {
   const input = numberOr0(usage.input);
   const output = numberOr0(usage.output);
   const cacheRead = numberOr0(usage.cacheRead);
@@ -261,6 +334,7 @@ function addUsage(target: SessionUsage, model: ModelRef, usage: AgentUsage): voi
   target.cacheWrite += cacheWrite;
   target.cost += cost;
   target.entries += 1;
+  target.records.push({ at, modelKey: model.key, input, output, cacheRead, cacheWrite, cost });
 
   const slice = target.models.get(model.key) ?? {
     provider: model.provider,
@@ -378,8 +452,9 @@ function evictUsageCache(cache: Map<string, CachedSessionUsage>, limit: number):
 // ============================================================================
 
 /**
- * Lists sessions on disk, sums their recorded usage, and groups the result by
- * project and by model. Never throws for a single bad session — problems are
+ * Lists sessions on disk, sums their recorded usage within the applied time
+ * range, and groups the result by project, by model, and by provider, plus a
+ * day/month trend series. Never throws for a single bad session — problems are
  * reported through `skipped` / `partial`.
  */
 export async function collectUsage(options: CollectUsageOptions = {}): Promise<UsageResponse> {
@@ -388,6 +463,9 @@ export async function collectUsage(options: CollectUsageOptions = {}): Promise<U
   const maxFileBytes = options.maxFileBytes ?? USAGE_MAX_FILE_BYTES;
   const cacheLimit = options.cacheLimit ?? USAGE_CACHE_MAX_SESSIONS;
   const signal = options.signal;
+  const { fromMs, toMs } = options;
+  const rangeActive = fromMs !== undefined || toMs !== undefined;
+  const tzOffsetMinutes = normalizeTzOffsetMinutes(options.tzOffsetMinutes);
 
   const scopeKey = options.projectKey
     ? projectIdentityKey(options.projectKey)
@@ -403,14 +481,19 @@ export async function collectUsage(options: CollectUsageOptions = {}): Promise<U
     .sort((a, b) => String(b.modified ?? "").localeCompare(String(a.modified ?? "")));
 
   const projects = new Map<string, ProjectAccumulator>();
-  const models = new Map<string, ModelAccumulator>();
+  const models = new Map<string, ModelBucket>();
+  const providers = new Map<string, ProviderAccumulator>();
+  const series = new Map<string, UsageBucket>();
+  const totals = newSessionBucket();
   const skipped: UsageSkipSummary = { oversized: 0, unreadable: 0, budget: 0 };
+  let untimestampedRecords = 0;
   let scannedSessions = 0;
   let scannedEntries = 0;
 
-  for (const session of ordered) {
+  for (let sessionIndex = 0; sessionIndex < ordered.length; sessionIndex += 1) {
     if (scannedSessions >= maxSessions || scannedEntries >= maxEntries) break;
     if (signal?.aborted) break;
+    const session = ordered[sessionIndex];
 
     const result = loadSessionUsage(session.path, maxFileBytes, cacheLimit);
     if (result.kind === "oversized") {
@@ -425,28 +508,73 @@ export async function collectUsage(options: CollectUsageOptions = {}): Promise<U
     scannedSessions += 1;
     scannedEntries += result.entryCount;
 
-    // Sessions with no recorded usage never create an empty bucket row.
-    if (!hasUsage(result.usage)) continue;
+    // Records within the applied range. Untimestamped records are excluded from
+    // ranged queries and reported, never silently dropped or guessed.
+    let records = result.usage.records;
+    if (rangeActive) {
+      const inRange: UsageRecord[] = [];
+      for (const record of records) {
+        if (record.at === 0) {
+          untimestampedRecords += 1;
+          continue;
+        }
+        if (fromMs !== undefined && record.at < fromMs) continue;
+        if (toMs !== undefined && record.at > toMs) continue;
+        inRange.push(record);
+      }
+      records = inRange;
+    }
+
+    // Sessions with no recorded usage in range never create an empty bucket row.
+    if (records.length === 0) continue;
 
     const projectId = hashProjectId(projectKeyForSession(session));
-    const project = projects.get(projectId) ?? {
-      projectId,
-      name: projectDisplayName(session),
-      lastActivity: session.modified,
-      sessions: 0,
-      usage: emptySessionUsage(),
-      models: new Map<string, ModelAccumulator>(),
-    };
+    let project = projects.get(projectId);
+    if (!project) {
+      project = {
+        projectId,
+        name: projectDisplayName(session),
+        lastActivity: session.modified,
+        ...newSessionBucket(),
+        models: new Map<string, ModelBucket>(),
+      };
+      projects.set(projectId, project);
+    }
     if (session.modified && (!project.lastActivity || session.modified > project.lastActivity)) {
       project.lastActivity = session.modified;
     }
-    project.sessions += 1;
-    addSessionTotals(project.usage, result.usage);
-    for (const [key, slice] of result.usage.models) {
-      mergeModel(project.models, key, slice);
-      mergeModel(models, key, slice);
+
+    for (const record of records) {
+      const slice = result.usage.models.get(record.modelKey);
+      const provider = slice?.provider ?? UNKNOWN_MODEL;
+      const model = slice?.model ?? UNKNOWN_MODEL;
+
+      addRecord(totals, record);
+      totals.sessions.add(sessionIndex);
+      addModelRecord(models, record, provider, model, sessionIndex);
+      addModelRecord(project.models, record, provider, model, sessionIndex);
+      addRecord(project, record);
+      project.sessions.add(sessionIndex);
+
+      let providerBucket = providers.get(provider);
+      if (!providerBucket) {
+        providerBucket = { provider, ...newSessionBucket(), models: new Map<string, ModelBucket>() };
+        providers.set(provider, providerBucket);
+      }
+      addRecord(providerBucket, record);
+      providerBucket.sessions.add(sessionIndex);
+      addModelRecord(providerBucket.models, record, provider, model, sessionIndex);
+
+      if (record.at !== 0) {
+        const key = dayBucketKey(record.at, tzOffsetMinutes);
+        let bucket = series.get(key);
+        if (!bucket) {
+          bucket = newUsageBucket();
+          series.set(key, bucket);
+        }
+        addRecord(bucket, record);
+      }
     }
-    projects.set(projectId, project);
 
     // Sequential scan keeps at most one session's entries in memory, and the
     // yield keeps a large catalogue from blocking the server's event loop.
@@ -463,14 +591,21 @@ export async function collectUsage(options: CollectUsageOptions = {}): Promise<U
   const finalModels = [...models.values()]
     .map((model) => finalizeModel(model))
     .sort(compareModelUsage);
-
-  const totals = combineUsageMetrics(finalProjects);
+  const finalProviders = [...providers.values()]
+    .map((provider) => finalizeProvider(provider))
+    .sort(compareProviderUsage);
+  const trend = finalizeSeries(series);
 
   return {
     scope: buildScope(scopeKey, finalProjects),
-    totals,
+    totals: finalizeSessionBucket(totals),
     projects: finalProjects,
     models: finalModels,
+    providers: finalProviders,
+    series: trend.points,
+    seriesGranularity: trend.granularity,
+    ...(options.rangeLabel ? { range: options.rangeLabel } : {}),
+    ...(rangeActive && untimestampedRecords > 0 ? { untimestampedRecords } : {}),
     partial,
     scannedSessions,
     scannedEntries,
@@ -479,35 +614,75 @@ export async function collectUsage(options: CollectUsageOptions = {}): Promise<U
   };
 }
 
-interface ProjectAccumulator {
+interface ProjectAccumulator extends SessionBucket {
   projectId: string;
   name: string;
   lastActivity?: string;
-  /** Number of contributing sessions in this project. */
-  sessions: number;
-  usage: SessionUsage;
-  models: Map<string, ModelAccumulator>;
+  models: Map<string, ModelBucket>;
 }
 
-interface ModelAccumulator extends SessionUsageSlice {
-  sessions: number;
+interface ProviderAccumulator extends SessionBucket {
+  provider: string;
+  models: Map<string, ModelBucket>;
 }
 
-function emptySessionUsage(): SessionUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-    cost: 0,
-    entries: 0,
-    models: new Map(),
-  };
+/** Numeric sums for one aggregation bucket. */
+interface UsageBucket {
+  entries: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
 }
 
-function hasUsage(usage: SessionUsage): boolean {
-  return usage.entries > 0;
+/** A bucket that also tracks which scanned sessions contributed to it. */
+interface SessionBucket extends UsageBucket {
+  sessions: Set<number>;
+}
+
+interface ModelBucket extends SessionBucket {
+  provider: string;
+  model: string;
+}
+
+function newUsageBucket(): UsageBucket {
+  return { entries: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+}
+
+function newSessionBucket(): SessionBucket {
+  return { ...newUsageBucket(), sessions: new Set<number>() };
+}
+
+function addRecord(bucket: UsageBucket, record: UsageRecord): void {
+  bucket.entries += 1;
+  bucket.input += record.input;
+  bucket.output += record.output;
+  bucket.cacheRead += record.cacheRead;
+  bucket.cacheWrite += record.cacheWrite;
+  bucket.cost += record.cost;
+}
+
+function addModelRecord(models: Map<string, ModelBucket>, record: UsageRecord, provider: string, model: string, sessionIndex: number): void {
+  let bucket = models.get(record.modelKey);
+  if (!bucket) {
+    bucket = { ...newSessionBucket(), provider, model };
+    models.set(record.modelKey, bucket);
+  }
+  addRecord(bucket, record);
+  bucket.sessions.add(sessionIndex);
+}
+
+/** Client-local calendar day label (`YYYY-MM-DD`) for one record. */
+function dayBucketKey(at: number, tzOffsetMinutes: number): string {
+  // Shifting by the client's offset makes the UTC fields read as local time.
+  return new Date(at - tzOffsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+function normalizeTzOffsetMinutes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  // Real-world offsets stay within UTC±14:00.
+  return Math.max(-840, Math.min(840, Math.trunc(value)));
 }
 
 function projectKeyForSession(session: SessionInfo): string {
@@ -541,57 +716,36 @@ function sessionInScope(session: SessionInfo, scopeKey: string | undefined): boo
   return candidates.some((candidate) => candidate && projectIdentityKey(candidate) === scopeKey);
 }
 
-/** Adds a session's totals to a project's running total. */
-function addSessionTotals(target: SessionUsage, source: SessionUsage): void {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.cost += source.cost;
-  target.entries += source.entries;
-  target.total = target.input + target.output + target.cacheRead + target.cacheWrite;
-}
-
-/**
- * Merges one session's per-model slice into a model bucket. The caller invokes
- * this once per session, so `sessions` effectively counts the sessions that
- * used the model — both globally and within a single project.
- */
-function mergeModel(models: Map<string, ModelAccumulator>, key: string, slice: SessionUsageSlice): void {
-  const existing = models.get(key);
-  if (!existing) {
-    models.set(key, { ...slice, sessions: 1 });
-    return;
-  }
-  existing.sessions += 1;
-  existing.input += slice.input;
-  existing.output += slice.output;
-  existing.cacheRead += slice.cacheRead;
-  existing.cacheWrite += slice.cacheWrite;
-  existing.total += slice.total;
-  existing.cost += slice.cost;
-  existing.entries += slice.entries;
-}
-
-function sliceKey(slice: SessionUsageSlice): string {
-  return `${slice.provider}/${slice.model}`;
-}
-
-function finalizeModel(model: ModelAccumulator): ModelUsage {
+function finalizeModel(model: ModelBucket): ModelUsage {
   return {
-    key: sliceKey(model),
+    key: `${model.provider}/${model.model}`,
     provider: model.provider,
     model: model.model,
-    sessions: model.sessions,
+    sessions: model.sessions.size,
     entries: model.entries,
     tokens: {
       input: model.input,
       output: model.output,
       cacheRead: model.cacheRead,
       cacheWrite: model.cacheWrite,
-      total: model.total,
+      total: model.input + model.output + model.cacheRead + model.cacheWrite,
     },
     cost: model.cost,
+  };
+}
+
+function finalizeSessionBucket(bucket: SessionBucket): UsageMetric {
+  return {
+    sessions: bucket.sessions.size,
+    entries: bucket.entries,
+    tokens: {
+      input: bucket.input,
+      output: bucket.output,
+      cacheRead: bucket.cacheRead,
+      cacheWrite: bucket.cacheWrite,
+      total: bucket.input + bucket.output + bucket.cacheRead + bucket.cacheWrite,
+    },
+    cost: bucket.cost,
   };
 }
 
@@ -600,33 +754,67 @@ function finalizeProject(project: ProjectAccumulator): ProjectUsage {
     projectId: project.projectId,
     name: project.name,
     ...(project.lastActivity ? { lastActivity: project.lastActivity } : {}),
-    sessions: project.sessions,
-    entries: project.usage.entries,
-    tokens: {
-      input: project.usage.input,
-      output: project.usage.output,
-      cacheRead: project.usage.cacheRead,
-      cacheWrite: project.usage.cacheWrite,
-      total: project.usage.total,
-    },
-    cost: project.usage.cost,
+    ...finalizeSessionBucket(project),
     models: [...project.models.values()].map(finalizeModel).sort(compareModelUsage),
   };
 }
 
-function combineUsageMetrics(items: UsageMetric[]): UsageMetric {
-  const total = emptyMetric();
-  for (const item of items) {
-    total.sessions += item.sessions;
-    total.entries += item.entries;
-    total.tokens.input += item.tokens.input;
-    total.tokens.output += item.tokens.output;
-    total.tokens.cacheRead += item.tokens.cacheRead;
-    total.tokens.cacheWrite += item.tokens.cacheWrite;
-    total.tokens.total += item.tokens.total;
-    total.cost += item.cost;
+function finalizeProvider(provider: ProviderAccumulator): ProviderUsage {
+  return {
+    provider: provider.provider,
+    ...finalizeSessionBucket(provider),
+    models: [...provider.models.values()].map(finalizeModel).sort(compareModelUsage),
+  };
+}
+
+/** Day-span threshold beyond which the trend series switches to months. */
+const SERIES_MAX_DAY_SPAN = 92;
+
+function finalizeSeries(days: Map<string, UsageBucket>): { points: UsageSeriesPoint[]; granularity: "day" | "month" } {
+  const keys = [...days.keys()].sort();
+  if (keys.length === 0) return { points: [], granularity: "day" };
+  const spanDays = (Date.parse(`${keys[keys.length - 1]}T00:00:00.000Z`) - Date.parse(`${keys[0]}T00:00:00.000Z`)) / 86_400_000;
+  if (spanDays <= SERIES_MAX_DAY_SPAN) {
+    return { points: keys.map((date) => seriesPoint(date, days.get(date)!)), granularity: "day" };
   }
-  return total;
+  const months = new Map<string, UsageBucket>();
+  for (const [day, bucket] of days) {
+    const key = day.slice(0, 7);
+    let month = months.get(key);
+    if (!month) {
+      month = newUsageBucket();
+      months.set(key, month);
+    }
+    addBucket(month, bucket);
+  }
+  return {
+    points: [...months.keys()].sort().map((date) => seriesPoint(date, months.get(date)!)),
+    granularity: "month",
+  };
+}
+
+function addBucket(target: UsageBucket, source: UsageBucket): void {
+  target.entries += source.entries;
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.cost += source.cost;
+}
+
+function seriesPoint(date: string, bucket: UsageBucket): UsageSeriesPoint {
+  return {
+    date,
+    tokens: {
+      input: bucket.input,
+      output: bucket.output,
+      cacheRead: bucket.cacheRead,
+      cacheWrite: bucket.cacheWrite,
+      total: bucket.input + bucket.output + bucket.cacheRead + bucket.cacheWrite,
+    },
+    cost: bucket.cost,
+    entries: bucket.entries,
+  };
 }
 
 function buildScope(scopeKey: string | undefined, projects: ProjectUsage[]): UsageScope {
@@ -649,6 +837,72 @@ function compareModelUsage(a: ModelUsage, b: ModelUsage): number {
   return b.cost - a.cost
     || b.tokens.total - a.tokens.total
     || a.key.localeCompare(b.key);
+}
+
+function compareProviderUsage(a: ProviderUsage, b: ProviderUsage): number {
+  return b.cost - a.cost
+    || b.tokens.total - a.tokens.total
+    || a.provider.localeCompare(b.provider);
+}
+
+// ============================================================================
+// Time-range parameter parsing (shared by the API route, unit-testable)
+// ============================================================================
+
+/** Parsed and validated time-range query parameters. */
+export interface UsageRangeParams {
+  /** Inclusive absolute bounds in epoch ms; absent sides mean open-ended. */
+  fromMs?: number;
+  toMs?: number;
+  /** Client timezone offset in minutes (`Date.getTimezoneOffset()` semantics). */
+  tzOffsetMinutes: number;
+  /** Original `YYYY-MM-DD` values to echo back in the response. */
+  rangeLabel?: { from?: string; to?: string };
+}
+
+const DATE_PARAM_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const TZ_PARAM_PATTERN = /^-?\d{1,4}$/;
+const DAY_MS = 86_400_000;
+
+/**
+ * Parses `from` / `to` (`YYYY-MM-DD`, client-local calendar days) and `tz`
+ * (client `Date.getTimezoneOffset()` minutes) into absolute epoch-ms bounds.
+ * Returns an error string for any invalid parameter instead of guessing.
+ */
+export function parseUsageRangeParams(searchParams: URLSearchParams): UsageRangeParams | { error: string } {
+  const from = searchParams.get("from")?.trim() || undefined;
+  const to = searchParams.get("to")?.trim() || undefined;
+
+  let tzOffsetMinutes = 0;
+  const tzRaw = searchParams.get("tz");
+  if (tzRaw !== null && tzRaw !== "") {
+    if (!TZ_PARAM_PATTERN.test(tzRaw)) return { error: "Invalid tz parameter" };
+    const parsed = Number.parseInt(tzRaw, 10);
+    // Real-world offsets stay within UTC±14:00.
+    if (!Number.isFinite(parsed) || Math.abs(parsed) > 14 * 60) return { error: "Invalid tz parameter" };
+    tzOffsetMinutes = parsed;
+  }
+
+  for (const [name, value] of [["from", from], ["to", to]] as const) {
+    if (value === undefined) continue;
+    if (!DATE_PARAM_PATTERN.test(value)) return { error: `Invalid ${name} parameter` };
+    const ms = Date.parse(`${value}T00:00:00.000Z`);
+    // Round-trip rejects impossible calendar dates like 2026-02-30.
+    if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== value) {
+      return { error: `Invalid ${name} parameter` };
+    }
+  }
+  if (from !== undefined && to !== undefined && from > to) return { error: "from must not be after to" };
+
+  const tzMs = tzOffsetMinutes * 60_000;
+  return {
+    ...(from !== undefined ? { fromMs: Date.parse(`${from}T00:00:00.000Z`) + tzMs } : {}),
+    ...(to !== undefined ? { toMs: Date.parse(`${to}T00:00:00.000Z`) + tzMs + DAY_MS - 1 } : {}),
+    tzOffsetMinutes,
+    ...(from !== undefined || to !== undefined
+      ? { rangeLabel: { ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}) } }
+      : {}),
+  };
 }
 
 function yieldToEventLoop(): Promise<void> {

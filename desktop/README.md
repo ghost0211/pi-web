@@ -258,11 +258,16 @@ installer. This interrupts running agent sessions. The installer replaces the
 generated `server/` and `node/` payload directories rather than overlaying them:
 NSIS `/UPDATE` skips uninstalling, so files removed or re-hoisted in a newer
 build would otherwise survive and shadow the new dependencies. After checking
-the running app, preinstall renames old payloads to `server.previous` and
+the running app, preinstall kills any lingering bundled sidecar `node.exe`
+(matched by exact image path under the install directory, so unrelated Node.js
+processes are never touched), then renames old payloads to `server.previous` and
 `node.previous`; if staging the second directory fails, it restores the first
 before aborting. Postinstall removes these backups only after copying the new
-payloads. A locked backup is retained outside the live runtime paths; existing
-recovery copies are never overwritten. This applies to fresh installs,
+payloads; whatever is still locked is scheduled for deletion on reboot instead
+of blocking the next install. When both live payloads are intact, leftover
+`*.previous` directories from an earlier interrupted cleanup are removed
+automatically; recovery copies are kept and abort the install only while a live
+payload is missing. This applies to fresh installs,
 reinstalls and updates, and never removes the installation root, `~/.pi/` or
 the Desktop app-data directories. Regular browser and phone
 pages cannot invoke the native updater, even when they access the same server.
@@ -313,9 +318,14 @@ is a separate work item.
   in Tauri CLI 2.11 (tauri-apps/tauri#15342). If you upgrade the CLI and
   resources go missing, verify the install directory contains `server/` and
   `node/` next to the exe.
-- **Installer reports existing recovery payloads** — an interrupted copy or a
-  locked old runtime left `server.previous` / `node.previous` in the install
-  directory. Fully Quit Desktop and its old sidecar. Move these directories
+- **Installer reports existing recovery payloads** — current installers
+  self-heal: preinstall kills lingering bundled sidecars and removes stale
+  `server.previous` / `node.previous` remnants when the live payloads are
+  intact, and postinstall schedules locked leftovers for deletion on reboot.
+  The guard still aborts when a live payload is missing (the remnant may be the
+  only good copy) or when the remnant is locked by a process outside the
+  install directory. In those cases, fully Quit Desktop and its old sidecar.
+  Move these directories
   outside the install directory as backups before retrying the installer. If
   you need to restore the old installation instead, move any partial new
   `server/` / `node/` aside and rename the recovery copies back to their original

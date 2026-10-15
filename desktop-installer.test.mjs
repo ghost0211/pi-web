@@ -21,15 +21,44 @@ test("NSIS stages only generated payloads, rolls back staging failure and cleans
     ["$INSTDIR\\server.previous", "$INSTDIR\\server"],
   ]);
   assert.ok(commands.indexOf("CheckIfAppIsRunning") < commands.indexOf("Rename"));
-  assert.doesNotMatch(commands, /RMDir|UpdateMode|PassiveMode|APPDATA|LOCALAPPDATA|PROFILE|REBOOTOK/i);
+  // A force-quit update can orphan the bundled sidecar; kill it by exact image
+  // path BEFORE staging so a locked node.exe cannot leave *.previous remnants.
+  assert.ok(commands.indexOf("PI_WEB_KILL_BUNDLED_NODE") > commands.indexOf("CheckIfAppIsRunning"));
+  assert.ok(commands.indexOf("PI_WEB_KILL_BUNDLED_NODE") < commands.indexOf("Rename"));
+  // Benign remnants from an interrupted cleanup are deleted immediately, but
+  // only while BOTH live payloads are intact; preinstall never touches live
+  // payloads, never schedules reboot-time deletion, and never leaves the
+  // install directory.
+  assert.match(commands, /\$\{If\} \$\{FileExists\} "\$INSTDIR\\server"\s*\$\{AndIf\} \$\{FileExists\} "\$INSTDIR\\node"\s*RMDir \/r "\$INSTDIR\\server\.previous"\s*RMDir \/r "\$INSTDIR\\node\.previous"\s*ClearErrors\s*\$\{EndIf\}/);
+  assert.deepEqual([...commands.matchAll(/RMDir\s+\/r\s+"([^"]+)"/gi)].map((m) => m[1]).sort(), [
+    "$INSTDIR\\node.previous", "$INSTDIR\\server.previous",
+  ]);
+  assert.doesNotMatch(commands, /UpdateMode|PassiveMode|APPDATA|LOCALAPPDATA|PROFILE|REBOOTOK/i);
   assert.equal((commands.match(/\bAbort\b/g) ?? []).length, 4, "staging/recovery failures must fail closed");
   assert.equal((commands.match(/SetErrorLevel 2/g) ?? []).length, 4, "passive updates must report failure");
+
+  // The sidecar killer is best-effort and strictly scoped to this install:
+  // exact node.exe image paths, a bounded wait, and it never aborts.
+  const kill = hooks.match(/!macro PI_WEB_KILL_BUNDLED_NODE\b([\s\S]*?)!macroend/)?.[1];
+  assert.ok(kill, "orphaned sidecar cleanup is required");
+  assert.match(kill, /Join-Path \$+InstallDir 'node\\node\.exe'/);
+  assert.match(kill, /Join-Path \$+InstallDir 'node\.previous\\node\.exe'/);
+  assert.match(kill, /Name = 'node\.exe'/);
+  assert.match(kill, /\$\$targets -contains \$\$_\.ExecutablePath/);
+  assert.match(kill, /AddSeconds\(10\)/);
+  assert.doesNotMatch(kill, /\bAbort\b/);
+
   const cleanup = hooks.match(/!macro PI_WEB_CLEANUP_PREVIOUS_PAYLOADS\b([\s\S]*?)!macroend/)?.[1];
   assert.ok(cleanup);
-  assert.deepEqual([...cleanup.matchAll(/RMDir\s+\/r\s+"([^"]+)"/gi)].map((m) => m[1]), [
+  assert.ok(cleanup.indexOf("PI_WEB_KILL_BUNDLED_NODE") < cleanup.indexOf("RMDir"), "kill before cleanup");
+  // Locked remnants are scheduled for deletion on reboot instead of blocking
+  // the next install; live payloads and the install root are never scheduled.
+  assert.deepEqual([...cleanup.matchAll(/RMDir\s+\/r\s+\/REBOOTOK\s+"([^"]+)"/gi)].map((m) => m[1]), [
     "$INSTDIR\\server.previous", "$INSTDIR\\node.previous",
   ]);
-  assert.doesNotMatch(cleanup, /Abort|REBOOTOK/i);
+  assert.doesNotMatch(cleanup, /\bAbort\b/);
+  assert.deepEqual([...hooks.matchAll(/\/REBOOTOK/g)].length > 0, true);
+  assert.doesNotMatch(commands, /\/REBOOTOK/);
   assert.match(hooks, /!macro NSIS_HOOK_POSTINSTALL\s+!insertmacro PI_WEB_CLEANUP_PREVIOUS_PAYLOADS[\s\S]*?CreateShortcut/);
 });
 
@@ -211,16 +240,81 @@ try { [Console]::WriteLine('ready'); Start-Sleep -Seconds 30 } finally { [void][
   }
 
   for (const dir of ["server", "node"]) {
-    await t.test(`existing ${dir}.previous is never overwritten`, () => {
+    await t.test(`existing ${dir}.previous auto-cleans when live payloads are intact`, () => {
+      rmSync(installDir, { recursive: true, force: true });
+      cpSync(sourceDir, installDir, { recursive: true });
+      const recovery = join(installDir, `${dir}.previous`, "recover.txt");
+      write(recovery, "stale-cleanup-remnant");
+      const result = spawnSync(installer, ["/S", "/UPDATE"], { encoding: "utf8", timeout: 30_000 });
+      // Both live payloads exist, so the remnant is a leftover from an
+      // interrupted cleanup, not a recovery copy: remove it and proceed.
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(existsSync(recovery), false);
+      assert.equal(existsSync(join(installDir, `${dir}.previous`)), false);
+      assert.equal(readFileSync(join(installDir, "installed.txt"), "utf8"), "finished");
+      assert.equal(importSdk(serverDir).status, 0);
+    });
+
+    await t.test(`existing ${dir}.previous aborts when a live payload is missing`, () => {
       rmSync(installDir, { recursive: true, force: true });
       cpSync(sourceDir, installDir, { recursive: true });
       const recovery = join(installDir, `${dir}.previous`, "recover.txt");
       write(recovery, "preserve-recovery-copy");
-      const result = spawnSync(installer, ["/S", "/UPDATE"], { timeout: 30_000 });
-      assert.equal(result.status, 2);
+      rmSync(join(installDir, dir), { recursive: true, force: true });
+      const result = spawnSync(installer, ["/S", "/UPDATE"], { encoding: "utf8", timeout: 30_000 });
+      // A live payload is missing, so the remnant may be the only good copy:
+      // keep the fail-closed guard and never touch it or the other payload.
+      assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
       assert.equal(readFileSync(recovery, "utf8"), "preserve-recovery-copy");
-      assert.equal(importSdk(serverDir).status, 0);
       assert.equal(existsSync(join(installDir, "installed.txt")), false);
+      const other = dir === "server" ? "node" : "server";
+      assert.equal(existsSync(join(installDir, other)), true, "untouched payload must remain");
+      assert.equal(existsSync(join(installDir, `${other}.previous`)), false);
     });
   }
+
+  await t.test("orphaned bundled sidecar is killed by exact image path before staging", async () => {
+    rmSync(installDir, { recursive: true, force: true });
+    cpSync(sourceDir, installDir, { recursive: true });
+    // Pretend a previous force-quit update left a live sidecar running from
+    // the install dir, plus an unrelated Node.js process that must survive.
+    const sidecarExe = join(installDir, "node", "node.exe");
+    cpSync(process.execPath, sidecarExe);
+    const sentinelExe = join(root, "sentinel", "node.exe");
+    cpSync(process.execPath, sentinelExe);
+    const sidecar = spawn(sidecarExe, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const sentinel = spawn(sentinelExe, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    t.after(() => { for (const p of [sidecar, sentinel]) { if (p.exitCode === null && p.signalCode === null) p.kill(); } });
+    await new Promise((resolve, reject) => {
+      let started = 0;
+      const timer = setTimeout(() => reject(new Error("fixture processes failed to start")), 5_000);
+      for (const p of [sidecar, sentinel]) {
+        p.once("spawn", () => { started += 1; if (started === 2) { clearTimeout(timer); resolve(); } });
+        p.once("error", (error) => { clearTimeout(timer); reject(error); });
+      }
+    });
+    const result = spawnSync(installer, ["/S", "/UPDATE"], { encoding: "utf8", timeout: 60_000 });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    // The exact-path killer removed the fake sidecar, so the locked payload
+    // could be staged, installed and cleaned up.
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sidecar survived the update")), 10_000);
+      if (sidecar.exitCode !== null || sidecar.signalCode !== null) { clearTimeout(timer); resolve(); return; }
+      sidecar.once("exit", () => { clearTimeout(timer); resolve(); });
+    });
+    assert.equal(readFileSync(join(installDir, "installed.txt"), "utf8"), "finished");
+    assert.equal(existsSync(join(installDir, "server.previous")), false);
+    assert.equal(existsSync(join(installDir, "node.previous")), false);
+    // Exact image-path matching: the unrelated Node.js process is untouched.
+    assert.equal(sentinel.exitCode, null);
+    assert.equal(sentinel.signalCode, null);
+    assert.equal(importSdk(serverDir).status, 0);
+    // Kill and await the sentinel before temp-dir cleanup releases its exe.
+    sentinel.kill();
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sentinel did not exit")), 5_000);
+      if (sentinel.exitCode !== null || sentinel.signalCode !== null) { clearTimeout(timer); resolve(); return; }
+      sentinel.once("exit", () => { clearTimeout(timer); resolve(); });
+    });
+  });
 });

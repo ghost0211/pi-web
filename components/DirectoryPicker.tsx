@@ -55,6 +55,18 @@ interface Props {
   error?: string | null;
 }
 
+/** Translate a mkdir failure code into the picker's localized message. */
+function newFolderErrorMessage(
+  code: string | undefined,
+  t: (key: string, params?: Record<string, string | number>) => string,
+  fallback: string,
+): string {
+  const key = code ? `directoryPicker.newFolderError.${code}` : "";
+  const translated = key ? t(key) : "";
+  // An unknown code still surfaces the server's own message instead of a raw key.
+  return translated && translated !== key ? translated : fallback;
+}
+
 export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false, error }: Props) {
   const { t } = useI18n();
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
@@ -65,6 +77,10 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
   const [drives, setDrives] = useState<DirectoryEntry[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingBusy, setCreatingBusy] = useState(false);
+  const [newFolderError, setNewFolderError] = useState<string | null>(null);
 
   const navigateTo = useCallback(async (directory?: string) => {
     setLoading(true);
@@ -77,6 +93,12 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
       setPathInput(nextPath);
       setDirectories(data.directories ?? []);
       setDrives(data.drives ?? null);
+      // A pending "new folder" name belonged to the previous directory. Never
+      // keep it armed across a navigation: the user would create it somewhere
+      // they did not intend.
+      setCreating(false);
+      setNewFolderName("");
+      setNewFolderError(null);
     } catch (cause) {
       setLoadError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -88,6 +110,49 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
     setPortalTarget(document.body);
     void navigateTo(initialPath || undefined);
   }, [initialPath, navigateTo]);
+
+  const closeNewFolder = useCallback(() => {
+    setCreating(false);
+    setNewFolderName("");
+    setNewFolderError(null);
+  }, []);
+
+  const openNewFolder = useCallback(() => {
+    setCreating(true);
+    setNewFolderName("");
+    setNewFolderError(null);
+  }, []);
+
+  const createFolder = useCallback(async () => {
+    const name = newFolderName.trim();
+    if (!name || creatingBusy || !currentPath) return;
+    setCreatingBusy(true);
+    setNewFolderError(null);
+    try {
+      const response = await fetch("/api/cwd/mkdir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent: currentPath, name }),
+      });
+      const data = await response.json() as { path?: string; error?: string; code?: string };
+      if (!response.ok || !data.path) {
+        throw Object.assign(new Error(data.error ?? `HTTP ${response.status}`), { code: data.code });
+      }
+      closeNewFolder();
+      // Navigate into the folder that was just created: that is the directory
+      // the user is about to select, and it also refreshes the listing.
+      await navigateTo(data.path);
+    } catch (cause) {
+      const code = (cause as { code?: string }).code;
+      setNewFolderError(newFolderErrorMessage(
+        code,
+        t,
+        cause instanceof Error ? cause.message : String(cause),
+      ));
+    } finally {
+      setCreatingBusy(false);
+    }
+  }, [closeNewFolder, creatingBusy, currentPath, navigateTo, newFolderName, t]);
 
   const handlePathSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -167,6 +232,66 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
           </button>
         </form>
 
+        {creating && (
+          <form
+            className="directory-picker-new-folder"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createFolder();
+            }}
+            style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, padding: "8px 14px", borderBottom: "1px solid var(--border)", background: "var(--bg-hover)" }}
+          >
+            <label htmlFor="directory-new-folder" style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>
+              {t("directoryPicker.newFolderName")}
+            </label>
+            <input
+              className="directory-picker-new-folder-input"
+              id="directory-new-folder"
+              type="text"
+              value={newFolderName}
+              placeholder={t("directoryPicker.newFolderPlaceholder")}
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              disabled={creatingBusy}
+              onChange={(event) => {
+                setNewFolderName(event.target.value);
+                setNewFolderError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && !creatingBusy) {
+                  event.stopPropagation();
+                  closeNewFolder();
+                }
+              }}
+              style={{ minWidth: 0, flex: 1, height: 32, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 6, outline: "none", background: "var(--bg)", color: "var(--text)", fontFamily: "var(--font-mono)", fontSize: 12 }}
+            />
+            <button
+              className="directory-picker-action"
+              type="submit"
+              disabled={creatingBusy || !newFolderName.trim()}
+              style={{ minWidth: 58, height: 32, padding: "0 12px", border: 0, borderRadius: 6, background: "var(--accent)", color: "#fff", fontWeight: 600, cursor: creatingBusy || !newFolderName.trim() ? "default" : "pointer", opacity: creatingBusy || !newFolderName.trim() ? 0.6 : 1 }}
+            >
+              {creatingBusy ? t("directoryPicker.creatingFolder") : t("directoryPicker.createFolder")}
+            </button>
+            <button
+              className="directory-picker-action"
+              type="button"
+              onClick={closeNewFolder}
+              disabled={creatingBusy}
+              style={{ height: 32, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 6, background: "none", color: "var(--text-muted)", cursor: creatingBusy ? "default" : "pointer" }}
+            >
+              {t("i18n.cancel")}
+            </button>
+          </form>
+        )}
+
+        {creating && newFolderError && (
+          <div className="directory-picker-new-folder-error" role="alert" style={{ flexShrink: 0, padding: "6px 18px", borderBottom: "1px solid var(--border)", color: "#dc2626", fontSize: 11, overflowWrap: "anywhere" }}>
+            {newFolderError}
+          </div>
+        )}
+
         <div className="directory-picker-list" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "8px 10px" }}>
           {loading ? (
             <div style={{ padding: 8, color: "var(--text-dim)", fontSize: 11 }}>{t("directoryPicker.loadingDirectories")}</div>
@@ -210,18 +335,34 @@ export function DirectoryPicker({ onCancel, onSelect, initialPath, busy = false,
           {(loadError || error) && <div style={{ padding: "8px", color: "#dc2626", fontSize: 11 }}>{loadError ?? error}</div>}
         </div>
 
-        <div className="directory-picker-footer" style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, flexShrink: 0, padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
-          <button className="directory-picker-action" type="button" onClick={onCancel} disabled={busy} style={{ padding: "6px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "none", color: "var(--text-muted)", cursor: busy ? "default" : "pointer", fontSize: 13 }}>{t("i18n.cancel")}</button>
+        <div className="directory-picker-footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexShrink: 0, padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
           <button
             className="directory-picker-action"
             type="button"
-            onClick={() => onSelect(currentPath)}
-            disabled={!canSelect}
-            title={hasUncommittedPath ? t("directoryPicker.openBeforeSelecting") : t("directoryPicker.selectCurrentDirectory")}
-            style={{ padding: "6px 16px", border: 0, borderRadius: 6, background: "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 600, opacity: canSelect ? 1 : 0.6, cursor: canSelect ? "pointer" : "default" }}
+            onClick={openNewFolder}
+            disabled={busy || creating || !currentPath}
+            title={t("directoryPicker.newFolderHere")}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid var(--border)", borderRadius: 6, background: "none", color: "var(--text-muted)", cursor: busy || creating || !currentPath ? "default" : "pointer", fontSize: 13, opacity: busy || creating || !currentPath ? 0.6 : 1 }}
           >
-            {busy ? t("i18n.checking") : t("directoryPicker.selectThisFolder")}
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
+              <path d="M1.5 3h4l1.5 2h7.5v7.5h-13z" />
+              <path d="M8 8.5v3M6.5 10h3" />
+            </svg>
+            {t("directoryPicker.newFolder")}
           </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="directory-picker-action" type="button" onClick={onCancel} disabled={busy} style={{ padding: "6px 14px", border: "1px solid var(--border)", borderRadius: 6, background: "none", color: "var(--text-muted)", cursor: busy ? "default" : "pointer", fontSize: 13 }}>{t("i18n.cancel")}</button>
+            <button
+              className="directory-picker-action"
+              type="button"
+              onClick={() => onSelect(currentPath)}
+              disabled={!canSelect}
+              title={hasUncommittedPath ? t("directoryPicker.openBeforeSelecting") : t("directoryPicker.selectCurrentDirectory")}
+              style={{ padding: "6px 16px", border: 0, borderRadius: 6, background: "var(--accent)", color: "#fff", fontSize: 13, fontWeight: 600, opacity: canSelect ? 1 : 0.6, cursor: canSelect ? "pointer" : "default" }}
+            >
+              {busy ? t("i18n.checking") : t("directoryPicker.selectThisFolder")}
+            </button>
+          </div>
         </div>
       </div>
     </div>,

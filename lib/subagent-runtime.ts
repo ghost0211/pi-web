@@ -14,9 +14,6 @@ import {
   type SystemPromptState,
 } from "./system-prompt-extension";
 import {
-  subagentFinalText,
-  subagentNotificationContent,
-  subagentToolDetails,
   type StartSubagentRequest,
   type SubagentExecution,
   type SubagentExtensionRuntime,
@@ -374,25 +371,6 @@ export function createSubagentController(
     await wrapper.inner.steer(message.trim());
   }
 
-  async function notifyParent(run: SubagentRunInfo): Promise<void> {
-    let parent = dependencies.getSession(run.parentSessionId);
-    if (!parent?.isAlive()) {
-      const sessionFile = await dependencies.resolveSessionPath(run.parentSessionId);
-      if (!sessionFile) throw new Error(`Parent session not found: ${run.parentSessionId}`);
-      parent = await dependencies.reopenSession(run.parentSessionId, sessionFile);
-    }
-    await parent.waitUntilReady();
-    if (!parent.isAlive()) throw new Error(`Parent session is no longer available: ${run.parentSessionId}`);
-    await parent.inner.sendCustomMessage({
-      customType: "pi-web:subagent-notification",
-      content: subagentNotificationContent(run),
-      display: true,
-      // Keep the original report for the UI; model-only attribution/guidance
-      // belongs to content because the SDK does not send details to the LLM.
-      details: { ...subagentToolDetails(run), reportText: subagentFinalText(run) },
-    }, { deliverAs: "followUp", triggerTurn: true });
-  }
-
   async function abort(sessionId: string): Promise<void> {
     const wrapper = dependencies.getSession(sessionId);
     if (!wrapper?.isAlive() || !wrapper.isRunning()) throw new Error("Subagent is not running");
@@ -402,7 +380,7 @@ export function createSubagentController(
   }
 
   return {
-    extensionRuntime: { start, get, steer, notifyParent },
+    extensionRuntime: { start, get, steer },
     get,
     steer,
     abort,

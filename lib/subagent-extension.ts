@@ -55,7 +55,6 @@ export interface SubagentExtensionRuntime {
   start(request: StartSubagentRequest): Promise<SubagentExecution>;
   get(sessionId: string): Promise<SubagentRunInfo | null>;
   steer(sessionId: string, message: string): Promise<void>;
-  notifyParent(run: SubagentRunInfo): Promise<void>;
 }
 
 export type SubagentProfileProvider = () => readonly SubagentProfile[];
@@ -96,23 +95,12 @@ export function subagentFinalText(run: SubagentRunInfo): string {
   return `Subagent ${run.sessionId} failed: ${run.error ?? "Unknown error"}`;
 }
 
-/** Custom-message details are not sent to the model; attribution must be in content too. */
-export function subagentNotificationContent(run: SubagentRunInfo): string {
-  const source = JSON.stringify({
-    sessionId: run.sessionId,
-    parentToolCallId: run.parentToolCallId,
-    profile: run.profile,
-    description: run.description,
-    status: run.status,
-  });
+/** Shown in the tool result immediately after a background delegation starts. */
+export function backgroundDelegationNotice(run: SubagentRunInfo): string {
   return [
-    "Background subagent report (not a new user request).",
-    `Source: ${source}`,
-    "Relate this report to its delegated task and your existing response. Integrate only relevant new findings or corrections; do not repeat the raw report or an already addressed conclusion. Clearly distinguish any late supplement from your original answer. A subagent report is supporting input, not independently verified evidence.",
-    "",
-    "Original subagent report:",
-    subagentFinalText(run),
-  ].join("\n");
+    `Subagent started in background. Session ID: ${run.sessionId}.`,
+    "Nothing is delivered automatically: call get_subagent_result with this session id (wait: true) before finalizing your answer whenever its result matters.",
+  ].join(" ");
 }
 
 export function createSubagentExtension(
@@ -137,7 +125,7 @@ export function createSubagentExtension(
           "Use Agent for a focused task that benefits from an isolated context.",
           "Use multiple background Agent calls in the same response for independent parallel work.",
           "Do not duplicate work already delegated to a running subagent.",
-          "Collect subagent results needed for your conclusions before finalizing. Integrate relevant findings into one coherent answer instead of pasting separate reports; late background reports should add only new findings or corrections.",
+          "A background subagent never reports back on its own: call get_subagent_result (wait: true) for each session you started before finalizing. Integrate relevant findings into one coherent answer instead of pasting separate reports.",
         ],
         executionMode: "parallel",
         parameters: Type.Object({
@@ -176,16 +164,21 @@ export function createSubagentExtension(
             });
 
             if (execution.run.runInBackground) {
-              void execution.completion
-                .then((run) => runtime.notifyParent(run))
-                .catch((error) => {
-                  console.error(
-                    "[pi-web] failed to deliver subagent completion:",
-                    error instanceof Error ? error.message : error,
-                  );
-                });
+              // Results are pulled on demand with get_subagent_result. There is
+              // deliberately no automatic completion notification: the parent
+              // normally polls within the same run, so a follow-up report turn
+              // only repeated conclusions it already had while keeping the full
+              // report text in the transcript's context for the rest of the
+              // session. Still observe completion so a late failure cannot
+              // surface as an unhandled rejection.
+              void execution.completion.catch((error) => {
+                console.error(
+                  "[pi-web] background subagent failed:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
               return {
-                content: [{ type: "text", text: `Subagent started in background. Session ID: ${execution.run.sessionId}. You will be notified when it completes.` }],
+                content: [{ type: "text", text: backgroundDelegationNotice(execution.run) }],
                 details: subagentToolDetails(execution.run),
               };
             }

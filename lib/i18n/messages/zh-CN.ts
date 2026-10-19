@@ -630,6 +630,8 @@ export const zhCNLocale: LocalePlugin = {
     "chat.collapseProcess": "收起处理详情",
     "chat.expandProcess": "展开处理详情",
     "chat.filesWritten": "改动的文件",
+    "chat.commandGeneratedFiles": "命令生成",
+    "chat.commandGeneratedHint": "由本轮运行的命令生成，已按文件修改时间核实",
     "chat.turnOutcome": "本轮成果",
     "chat.recordedCommands": "执行的命令（{count}）",
     "chat.commandFailures": "有命令执行失败",

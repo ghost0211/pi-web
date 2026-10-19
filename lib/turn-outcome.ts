@@ -1,5 +1,6 @@
 import type { AgentMessage, AssistantContentBlock, ToolResultMessage } from "./types";
-import { extractTurnWrittenFiles, type WrittenFile } from "./turn-written-files";
+import { extractTurnClaimedFiles, extractTurnWrittenFiles, type WrittenFile } from "./turn-written-files";
+import { isShellCommandToolName } from "./tool-names";
 
 export interface TurnCommand {
   id: string;
@@ -11,10 +12,30 @@ export interface TurnCommand {
 
 export interface TurnOutcome {
   files: WrittenFile[];
+  /**
+   * Paths the reply text claims as deliverables without a matching write/edit
+   * tool call (typically shell-generated outputs). Candidates only — callers
+   * must corroborate them (existence + mtime inside the turn window) before
+   * display; see `extractTurnClaimedFiles`.
+   */
+  claimed: WrittenFile[];
   commands: TurnCommand[];
 }
 
 const OUTPUT_PREVIEW_LIMIT = 4000;
+
+/** Slack between entry timestamps and filesystem mtimes (clock skew, queued entries). */
+export const CLAIMED_MTIME_SLACK_MS = 120_000;
+
+/**
+ * A claimed path counts as a turn deliverable only when the file exists and
+ * its mtime falls inside the turn window. `sinceTs` is the turn's
+ * user-message timestamp (ms); without it no claim can be verified.
+ */
+export function isClaimedFileFromTurn(meta: { mtimeMs?: unknown }, sinceTs: number | undefined): boolean {
+  if (typeof sinceTs !== "number" || !Number.isFinite(sinceTs)) return false;
+  return typeof meta.mtimeMs === "number" && meta.mtimeMs >= sinceTs - CLAIMED_MTIME_SLACK_MS;
+}
 
 /** Uses only the supplied turn's recorded calls/results, never assistant claims.
  * A completed command is not evidence that tests ran or that changes are correct.
@@ -30,9 +51,10 @@ export function buildTurnOutcome(messages: readonly AgentMessage[], cwd?: string
   const commands: TurnCommand[] = [];
   const seen = new Set<string>();
   for (const block of content) {
-    // The built-in bash contract is known. Custom tools may use different
-    // arguments or completion semantics, so do not guess from their names.
-    if (block.type !== "toolCall" || block.toolName !== "bash" || seen.has(block.toolCallId)) continue;
+    // The built-in bash/powershell contract is known ({command} input,
+    // exit on completion). Custom tools may use different arguments or
+    // completion semantics, so do not guess from their names.
+    if (block.type !== "toolCall" || !isShellCommandToolName(block.toolName) || seen.has(block.toolCallId)) continue;
     const command = block.input?.command;
     if (typeof command !== "string" || !command.trim()) continue;
     seen.add(block.toolCallId);
@@ -46,5 +68,6 @@ export function buildTurnOutcome(messages: readonly AgentMessage[], cwd?: string
       truncated: output.length > OUTPUT_PREVIEW_LIMIT,
     });
   }
-  return { files: extractTurnWrittenFiles(content, results, cwd), commands };
+  const files = extractTurnWrittenFiles(content, results, cwd);
+  return { files, claimed: extractTurnClaimedFiles(content, files, cwd), commands };
 }

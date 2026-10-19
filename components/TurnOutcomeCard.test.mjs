@@ -20,6 +20,8 @@ const render = (outcome, props = {}) => renderToStaticMarkup(
 );
 
 test("ordinary conversations do not get an empty results card", () => {
+  assert.equal(render({ files: [], commands: [], claimed: [] }), "");
+  // Legacy fixtures without the claimed field stay valid.
   assert.equal(render({ files: [], commands: [] }), "");
 });
 
@@ -69,4 +71,17 @@ test("forwards a localized diff notice through to the file list", () => {
 test("passes the diff handler down without opening the file itself", () => {
   assert.match(source, /onOpenGitDiff=\{onOpenGitDiff\}/);
   assert.match(source, /diffNotice=\{diffNotice\}/);
+});
+
+test("claimed deliverables render no row before client verification", () => {
+  // SSR/effects-less rendering: the claimed row only appears after the
+  // client-side mtime check passes, so a claim alone never paints.
+  const html = render({
+    files: [{ filePath: "/project/build.py" }],
+    commands: [],
+    claimed: [{ filePath: "/project/sql/V1__Init.sql" }],
+  }, { sinceTs: 1000 });
+  assert.match(html, /build\.py/);
+  assert.doesNotMatch(html, /V1__Init\.sql/);
+  assert.doesNotMatch(html, /Command-generated/);
 });

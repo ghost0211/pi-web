@@ -630,6 +630,8 @@ export const zhTWLocale: LocalePlugin = {
     "chat.collapseProcess": "收起處理詳細資料",
     "chat.expandProcess": "展開處理詳細資料",
     "chat.filesWritten": "已變更的檔案",
+    "chat.commandGeneratedFiles": "命令產生",
+    "chat.commandGeneratedHint": "由本輪執行的命令產生，已按檔案修改時間核實",
     "chat.turnOutcome": "本輪成果",
     "chat.recordedCommands": "執行的命令（{count}）",
     "chat.commandFailures": "有命令執行失敗",

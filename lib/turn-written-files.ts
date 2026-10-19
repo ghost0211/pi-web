@@ -80,6 +80,67 @@ function readApplyPatchPaths(input: Record<string, unknown> | undefined, result:
 }
 
 /**
+ * File paths the turn's assistant text *claims* as deliverables but no
+ * `write`/`edit`/`apply_patch` call recorded — typically outputs of a shell
+ * command (e.g. a generator script writing `sql/V1.0.0...__Init.sql`).
+ *
+ * A claim is a *candidate*, not evidence: callers must corroborate it (Pi Web
+ * checks the file exists and its mtime falls inside the turn window) before
+ * showing it. Sources are deliberately narrow: inline-code spans and bold
+ * spans only, since prose mentions are far noisier than code-formatted paths.
+ */
+export function extractTurnClaimedFiles(
+  content: AssistantContentBlock[],
+  alreadyWritten: readonly WrittenFile[],
+  cwd?: string,
+): WrittenFile[] {
+  const writtenSet = new Set(alreadyWritten.map((file) => file.filePath));
+  const seen = new Set<string>();
+  const claimed: WrittenFile[] = [];
+
+  for (const block of content) {
+    if (block.type !== "text") continue;
+    for (const candidate of extractPathCandidates(block.text)) {
+      const filePath = resolveLocalFilePath(candidate, cwd);
+      if (!filePath || writtenSet.has(filePath) || seen.has(filePath)) continue;
+      seen.add(filePath);
+      claimed.push({ filePath });
+      if (claimed.length >= MAX_CLAIMED_FILES) return claimed;
+    }
+  }
+  return claimed;
+}
+
+const MAX_CLAIMED_FILES = 12;
+
+// Inline code `...` (not fenced blocks — those are content, not references).
+const INLINE_CODE_PATTERN = /`([^`\n]+)`/g;
+
+function looksLikeFilePath(raw: string): boolean {
+  const value = raw.trim();
+  if (value.length < 3 || value.length > 200) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return false; // URLs
+  if (/^--?/.test(value)) return false; // CLI flags
+  if (!/[\\/]/.test(value)) return false; // must contain a separator
+  // Ends with a plausible extension after the last separator.
+  const tail = value.split(/[\\/]/).pop() ?? "";
+  if (!/^[^\s]+\.[A-Za-z0-9]{1,10}$/.test(tail)) return false;
+  return true;
+}
+
+function extractPathCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (const match of text.matchAll(INLINE_CODE_PATTERN)) {
+    const span = match[1] ?? "";
+    // A span may carry trailing size annotations: `path.sql (260 KB)` or CJK parens.
+    const head = span.split(/[\s（(]/)[0] ?? "";
+    const cleaned = head.replace(/[。，；、,;\u3002]+$/u, "").trim();
+    if (looksLikeFilePath(cleaned)) candidates.push(cleaned);
+  }
+  return candidates;
+}
+
+/**
  * Collect the distinct files a single assistant turn actually wrote.
  *
  * Every entry is derived from a `write`/`edit`/`apply_patch` tool call whose

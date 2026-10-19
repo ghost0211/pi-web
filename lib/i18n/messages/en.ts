@@ -630,6 +630,8 @@ export const enLocale: LocalePlugin = {
     "chat.collapseProcess": "Collapse process details",
     "chat.expandProcess": "Expand process details",
     "chat.filesWritten": "Files changed",
+    "chat.commandGeneratedFiles": "Command-generated",
+    "chat.commandGeneratedHint": "Produced by commands run this turn; verified by file modification time.",
     "chat.turnOutcome": "Turn results",
     "chat.recordedCommands": "Commands run ({count})",
     "chat.commandFailures": "Some commands failed",

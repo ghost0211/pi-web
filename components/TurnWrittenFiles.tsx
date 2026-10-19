@@ -29,13 +29,17 @@ const FILE_BUTTON_STYLE: CSSProperties = {
   cursor: "pointer",
 };
 
-const DIFF_BUTTON_STYLE: CSSProperties = {
+export const TURN_FILE_BUTTON_STYLE = FILE_BUTTON_STYLE;
+
+export const TURN_DIFF_BUTTON_STYLE: CSSProperties = {
   ...FILE_BUTTON_STYLE,
   padding: "2px 6px",
   fontFamily: "inherit",
   color: "var(--text-muted)",
   background: "transparent",
 };
+
+const DIFF_BUTTON_STYLE = TURN_DIFF_BUTTON_STYLE;
 
 /**
  * Lists the files a turn actually wrote, as buttons that open each one in the

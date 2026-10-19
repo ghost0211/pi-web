@@ -1038,6 +1038,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                   <TurnOutcomeCard
                     key={`outcome-${entryIds[userIdx] ?? userIdx}`}
                     outcome={buildTurnOutcome(messages.slice(contentStartIndex, endIdx), messageCwd)}
+                    sinceTs={messages[userIdx]?.timestamp}
                     onOpenFile={onOpenFile}
                     onOpenGitDiff={onOpenGitDiff}
                     diffNotice={t("chat.reviewDiffNotice")}

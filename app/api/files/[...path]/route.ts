@@ -499,6 +499,7 @@ export async function GET(
       const documentMime = getDocumentMime(filePath);
       return NextResponse.json({
         size: stat.size,
+        mtimeMs: stat.mtimeMs,
         language: getLanguage(filePath),
         mime: imageMime || audioMime || documentMime || "text/plain",
         previewKind: documentPreviewKind(filePath),

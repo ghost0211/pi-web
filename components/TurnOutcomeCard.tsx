@@ -2,6 +2,7 @@
 
 import { useI18n } from "@/hooks/useI18n";
 import type { TurnOutcome } from "@/lib/turn-outcome";
+import { TurnClaimedFiles } from "./TurnClaimedFiles";
 import { TurnWrittenFiles } from "./TurnWrittenFiles";
 
 /**
@@ -13,8 +14,10 @@ import { TurnWrittenFiles } from "./TurnWrittenFiles";
  * `initialDisplayMode="diff"`, i.e. FileViewer's own working-tree-vs-HEAD diff
  * request — see `TurnWrittenFiles` for the accompanying scope notice.
  */
-export function TurnOutcomeCard({ outcome, onOpenFile, onOpenGitDiff, diffNotice }: {
+export function TurnOutcomeCard({ outcome, sinceTs, onOpenFile, onOpenGitDiff, diffNotice }: {
   outcome: TurnOutcome;
+  /** Turn start (user-message timestamp, ms); gates claimed-file verification. */
+  sinceTs?: number;
   onOpenFile?: (filePath: string) => void;
   /** Open a written file in the viewer's repository-level git-diff mode. */
   onOpenGitDiff?: (filePath: string) => void;
@@ -22,7 +25,8 @@ export function TurnOutcomeCard({ outcome, onOpenFile, onOpenGitDiff, diffNotice
   diffNotice?: string;
 }) {
   const { t } = useI18n();
-  if (!outcome.files.length && !outcome.commands.length) return null;
+  const claimed = outcome.claimed ?? [];
+  if (!outcome.files.length && !outcome.commands.length && !claimed.length) return null;
   return (
     <section aria-label={t("chat.turnOutcome")} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", marginBottom: 20, minWidth: 0 }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>
@@ -32,6 +36,14 @@ export function TurnOutcomeCard({ outcome, onOpenFile, onOpenGitDiff, diffNotice
         files={outcome.files}
         onOpenFile={onOpenFile}
         onOpenGitDiff={onOpenGitDiff}
+        diffNotice={diffNotice}
+      />
+      <TurnClaimedFiles
+        claimed={claimed}
+        sinceTs={sinceTs}
+        onOpenFile={onOpenFile}
+        onOpenGitDiff={onOpenGitDiff}
+        showDiffNotice={Boolean(onOpenGitDiff) && outcome.files.length === 0}
         diffNotice={diffNotice}
       />
       {outcome.commands.length > 0 && (

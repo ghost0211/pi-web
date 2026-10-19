@@ -32,3 +32,13 @@ export function isApplyPatchToolName(toolName: string): boolean {
     name.endsWith(".apply_patch") ||
     name.endsWith("_apply_patch");
 }
+
+/**
+ * Pi's built-in shell tools. Both take `{ command }` and complete when the
+ * command exits, so their calls double as command records. MCP servers may
+ * expose shells under other names with different contracts — do not guess.
+ */
+export function isShellCommandToolName(toolName: string): boolean {
+  const name = toolName.toLowerCase();
+  return name === "bash" || name === "powershell";
+}

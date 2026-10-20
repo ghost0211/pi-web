@@ -8,6 +8,7 @@ const completionSource = (await readFile(new URL("./prompt-completion.ts", impor
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
 const { isStaleLocalPromptToken, PromptCompletionTracker } = await jiti.import("./prompt-completion.ts");
 const chatWindowSource = (await readFile(new URL("../components/ChatWindow.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const streamingReplySource = (await readFile(new URL("../components/StreamingReply.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const chatInputSource = (await readFile(new URL("../components/ChatInput.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const appShellSource = (await readFile(new URL("../components/AppShell.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
@@ -441,8 +442,9 @@ test("starts prompts without awaiting SSE and hides an empty agent phase", () =>
   assert.match(sendSource, /maintainEventsConnected\(sid\);[\s\S]*?await sendAgentCommand\(sid, \{/);
   assert.match(sendSource, /maintainEventsConnected\(session\.id\);[\s\S]*?await sendAgentCommand\(session\.id, \{/);
   assert.doesNotMatch(sendSource, /await ensureEventsConnected/);
-  assert.match(chatWindowSource, /const hasStreamingContent = Boolean\(streamState\.streamingMessage\?\.content\.length\)/);
-  assert.match(chatWindowSource, /streamState\.isStreaming && hasStreamingContent && streamState\.streamingMessage/);
+  assert.match(chatWindowSource, /useStreamingSelector\(streamingStore, selectHasStreamingContent\)/);
+  assert.match(chatWindowSource, /useStreamingSelector\(streamingStore, selectIsStreaming\)/);
+  assert.match(chatWindowSource, /isStreaming && hasStreamingContent && \(/);
   assert.match(chatWindowSource, /agentRunning && !hasStreamingContent && agentPhase/);
   assert.match(chatWindowSource, /return null;/);
 });
@@ -508,8 +510,12 @@ test("keeps one reducer-owned assistant partial and consumes Pi JSON deltas", ()
     source.indexOf('case "tool_execution_start"'),
   );
 
-  assert.match(source, /streamReducer,[\s\S]*type ClientAssistantMessageEvent/);
+  assert.match(source, /createStreamingStore/);
+  assert.match(source, /type ClientAssistantMessageEvent/);
+  // The reducer itself has exactly one owner; the hook must not carry a second
+  // copy of the streaming message outside the store.
   assert.doesNotMatch(source, /streamingMessageRef/);
+  assert.doesNotMatch(source, /streamReducer\(/);
   assert.match(connectedSource, /dispatch\(\{ type: "end" \}\)/);
   assert.match(connectedSource, /event\.isStreaming === true/);
   assert.match(connectedSource, /agentRunningRef\.current = true/);
@@ -546,7 +552,7 @@ test("shows the latest streamed tool execution progress in the running phase", (
   assert.match(chatWindowSource, /chat\.runningNamedTool[\s\S]*latest\.progress/);
 });
 
-test("reconnects active shell output to its streaming tool call", () => {
+test("reconnects active shell output to its streaming tool call", async () => {
   const updateSource = source.slice(
     source.indexOf('case "tool_execution_update"'),
     source.indexOf('case "tool_execution_end"'),
@@ -561,7 +567,12 @@ test("reconnects active shell output to its streaming tool call", () => {
   assert.match(updateSource, /content,/);
   assert.match(endSource, /setActiveToolResults[\s\S]*next\.delete\(id\)/);
   assert.match(chatWindowSource, /const map = new Map\(activeToolResults\)/);
-  assert.match(chatWindowSource, /<MessageView message=\{streamState\.streamingMessage as AgentMessage\} toolResults=\{toolResultsMap\}/);
+  // The streaming bubble moved into its own component so a chunk no longer
+  // re-renders the whole chat; it still receives the same tool results map.
+  assert.match(chatWindowSource, /<StreamingReply/);
+  const streamingSource = streamingReplySource;
+  assert.match(streamingSource, /<MessageView[\s\S]*?message=\{streamingMessage as AgentMessage\}[\s\S]*?toolResults=\{toolResults\}/);
+  assert.match(streamingSource, /useStreamingSelector\(streamingStore, selectStreamingMessage\)/);
 });
 
 test("plays the enabled sound once for each extension dialog", () => {
@@ -703,7 +714,7 @@ test("keeps prompt anchor measurement outside the React update cycle", () => {
   );
   assert.notEqual(anchorEffectStart, -1);
   const syncEffectStart = chatWindowSource.indexOf(
-    "useLayoutEffect(() => {\n    promptAnchorUpdateRef.current?.();",
+    "useLayoutEffect(() => {\n    const update = () => promptAnchorUpdateRef.current?.();",
     anchorEffectStart,
   );
   assert.notEqual(syncEffectStart, -1);
@@ -727,7 +738,8 @@ test("keeps prompt anchor measurement outside the React update cycle", () => {
   assert.match(anchorLifecycleEffectSource, /if \(disposed \|\| promptAnchorMeasureFrameRef\.current !== null\) return/);
   assert.match(anchorLifecycleEffectSource, /promptAnchorMeasureFrameRef\.current = requestAnimationFrame\(\(\) => \{\s*promptAnchorMeasureFrameRef\.current = null;\s*updatePromptAnchorSpacer\(\)/);
   assert.match(anchorLifecycleEffectSource, /disposed = true;[\s\S]*?promptAnchorUpdateRef\.current === updatePromptAnchorSpacer[\s\S]*?cancelAnimationFrame\(promptAnchorMeasureFrameRef\.current\)/);
-  assert.match(anchorSyncEffectSource, /promptAnchorUpdateRef\.current\?\.\(\);\s*\}, \[streamState\.streamingMessage\]\)/);
+  assert.match(anchorSyncEffectSource, /const update = \(\) => promptAnchorUpdateRef\.current\?\.\(\);\s*update\(\);\s*return streamingStore\.subscribe\(update\);\s*\}, \[streamingStore\]\)/);
+  assert.match(anchorSyncEffectSource, /streamingStore\.subscribe/);
   assert.match(chatWindowSource, /<div ref=\{messageContentRef\} style=\{\{/);
 });
 

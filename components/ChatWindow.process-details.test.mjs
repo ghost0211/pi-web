@@ -70,6 +70,6 @@ test("surfaces output limit truncation as terminal answer and offers compact on 
   assert.match(source, /isAssistantTruncated\(finalAssistant\)/);
   assert.match(
     source,
-    /recoverTruncation: !isReadOnlyConversation && endIdx === messages\.length && !streamState\.isStreaming\s*&& isAssistantTruncated\(finalAssistant\) && !hasAssistantAnswer\(finalAssistant\)/,
+    /recoverTruncation: !isReadOnlyConversation && endIdx === messages\.length && !isStreaming\s*&& isAssistantTruncated\(finalAssistant\) && !hasAssistantAnswer\(finalAssistant\)/,
   );
 });

@@ -43,6 +43,7 @@ function fixture() {
     setError: (value) => { if (value) writes.errors.push(value); },
     calculateActiveContextTokens: () => ({ tokens: 0 }), resolveModelContextWindow: () => 100000,
     setAgentRunning() {}, setAgentPhase() {}, setRetryInfo() {}, setActiveToolResults() {}, dispatch() {},
+    setExtensionQuestionnaire() {},
   });
   for (const name of ["applyPrimaryThinkingLevel", "applyPrimaryModelSelection", "applyRuntimeModel", "applyFallbackModelSelection", "applyFallbackNotice", "applyAgentStateMetadata", "settleUiStage", "loadSession"]) context[name] = callback(name).runInContext(context);
   const node = nodes.find((node) => ts.isCaseClause(node) && node.expression.getText(source) === '"model_fallback"');

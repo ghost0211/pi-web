@@ -43,6 +43,6 @@ test("ChatWindow supplies duration after settlement including process-free answe
   assert.match(source, /getGroupRunDuration\(messages, contentStartIndex, endIdx\)/);
   assert.match(source, /if \(processCount > 0 \|\| durationText\)/);
   assert.match(source, /durationText=\{durationText\}/);
-  assert.match(source, /const isLiveTail = \(sessionBusy \|\| streamState\.isStreaming\)/);
+  assert.match(source, /const isLiveTail = \(sessionBusy \|\| isStreaming\)/);
   assert.match(source, /runDuration\.estimated \? "chat.runDurationEstimated" : "chat.runDuration"/);
 });

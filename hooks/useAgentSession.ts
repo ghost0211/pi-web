@@ -18,6 +18,7 @@ import type {
 } from "@/lib/types";
 import { isBlockingExtensionUiRequest } from "@/lib/browser-notifications";
 import { normalizeToolCalls } from "@/lib/normalize";
+import type { NormalizedAnswers } from "@/lib/ask-user-question";
 import { isPromptRejectedError, sendAgentCommand } from "@/lib/agent-client";
 import { clearDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/draft-store";
 import { getPreferredToolSelection, setPreferredToolSelection } from "@/lib/tool-preset-preference";
@@ -43,8 +44,8 @@ import {
   shouldShowScrollToLatest,
 } from "@/lib/chat-lazy-load";
 import {
-  INITIAL_STREAMING_STATE,
-  streamReducer,
+  createStreamingStore,
+  type StreamAction,
   type ClientAssistantMessageEvent,
 } from "@/lib/streaming-message";
 
@@ -121,6 +122,7 @@ function normalizeQueuedMessages(q?: { steering?: string[]; followUp?: string[] 
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionUiCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
+type ExtensionUiQuestionnaireRequest = Extract<ExtensionUiRequest, { method: "questionnaire" }>;
 export type NoticeType = "info" | "success" | "warning" | "error";
 
 export type NoticeItem = {
@@ -335,7 +337,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [turnIndex, setTurnIndex] = useState<TurnPreview[]>([]);
   // Navigation target for "Edit from here" on the first message (#628).
   const [firstEntryParentId, setFirstEntryParentId] = useState<string | null>(null);
-  const [streamState, dispatch] = useReducer(streamReducer, INITIAL_STREAMING_STATE);
+  // Streaming state lives outside React state: a chunk must not re-render the
+  // whole chat. ChatWindow subscribes to the slices it shows.
+  const [streamingStore] = useState(createStreamingStore);
+  const dispatch = useCallback(
+    (action: StreamAction) => streamingStore.dispatch(action),
+    [streamingStore],
+  );
   const [agentRunning, setAgentRunning] = useState(false);
   const [bashRunning, setBashRunning] = useState(false);
   const [pendingBash, setPendingBash] = useState<{ command: string; excludeFromContext: boolean } | null>(null);
@@ -398,6 +406,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
+  const [extensionQuestionnaire, setExtensionQuestionnaire] = useState<ExtensionUiQuestionnaireRequest | null>(null);
   const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
@@ -1214,6 +1223,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  /**
+   * Send questionnaire answers. Rejects on a transport failure so the panel can
+   * keep the user's selection and retry instead of dropping it silently.
+   */
+  const respondToQuestionnaire = useCallback(async (
+    request: ExtensionUiQuestionnaireRequest,
+    response: { answers: NormalizedAnswers } | { cancelled: true },
+  ) => {
+    const sid = sessionIdRef.current;
+    if (!sid) throw new Error("No active session for the questionnaire");
+    await sendAgentCommand(sid, {
+      type: "extension_ui_response",
+      id: request.id,
+      ...response,
+    });
+    setExtensionQuestionnaire((current) => current?.id === request.id ? null : current);
+  }, []);
+
   const addNotice = useCallback((notice: { id?: string; message: string; type?: NoticeType }) => {
     const message = notice.message.trim();
     if (!message) return;
@@ -1231,6 +1258,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (isBlockingExtensionUiRequest(request)) onAttentionNeeded?.(request);
 
     switch (request.method) {
+      case "questionnaire":
+        setExtensionQuestionnaire(request);
+        break;
       case "select":
       case "confirm":
       case "input":
@@ -1289,9 +1319,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setAgentPhase(null);
     setRetryInfo(null);
     setActiveToolResults(new Map());
+    // A pending questionnaire belongs to the run that just settled; leaving it
+    // on screen would invite an answer into a request nobody is waiting for.
+    setExtensionQuestionnaire(null);
     dispatch({ type: "end" });
     return wasRunning;
-  }, []);
+  }, [dispatch]);
 
   const notifyPromptStage = useCallback((runId: number) => {
     if (!promptCompletionRef.current.notify(runId)) return false;
@@ -1863,7 +1896,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyPrimaryModelSelection, applyRuntimeModel, applyAutoAdvanceState, cancelEventStreamGrace, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
+  }, [addNotice, applyAgentStateMetadata, applyContextUsage, applyFallbackNotice, applyPrimaryModelSelection, applyRuntimeModel, applyAutoAdvanceState, cancelEventStreamGrace, dispatch, handleExtensionUiRequest, loadSession, notifyPromptStage, onAgentEnd, refreshContextUsage, scheduleEventStreamClose, scrollToBottom, settleUiStage]);
   handleAgentEventRef.current = handleAgentEvent;
 
   // Tab unmount only disconnects observation; it cannot restart server-owned advancement.
@@ -2052,7 +2085,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, maintainEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, reconcileAgentState, restoreSubmission, syncSessionModel]);
+  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, maintainEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, dispatch, reconcileAgentState, restoreSubmission, syncSessionModel]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;
@@ -2942,7 +2975,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   return {
     // State
-    data, loading, error, activeLeafId, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
+    data, loading, error, activeLeafId, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamingStore,
     turnIndex, ensureEntryLoaded,
     agentRunning, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
@@ -2950,6 +2983,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     autoAdvanceState, autoAdvanceBusy, handleStartAutoAdvance, handleStopAutoAdvance,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    extensionQuestionnaire, respondToQuestionnaire,
     isAutoModelSelection: isNew && newSessionModel === null && currentModelOverride === null,
     agentPhase,
     isNew,

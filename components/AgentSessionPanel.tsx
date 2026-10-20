@@ -3,6 +3,9 @@
 import { useMemo, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { SessionInfo, SubagentSessionStatus } from "@/lib/types";
+import type { FamilyMemberUsage } from "@/lib/agent-family-usage";
+import { formatRunDuration } from "@/lib/run-duration";
+import { useFamilyUsage } from "@/hooks/useFamilyUsage";
 
 interface Props {
   rootSession: SessionInfo;
@@ -14,6 +17,14 @@ interface Props {
 
 function sessionTitle(session: SessionInfo): string {
   return session.name || session.firstMessage || session.id.slice(0, 12);
+}
+
+/** Compact token counts for the secondary line: 8.4k, 1.2M. */
+function formatCompact(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return "0";
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(count < 10_000 ? 1 : 0)}k`;
+  return String(Math.round(count));
 }
 
 function formatRelativeTime(value: string, locale: string): string {
@@ -37,8 +48,7 @@ function statusColor(status: SubagentSessionStatus): string {
   return "var(--text-dim)";
 }
 
-function StatusIcon({ status }: { status: SubagentSessionStatus }) {
-  if (status === "running" || status === "starting") {
+function StatusIcon({ status }: { status: SubagentSessionStatus }) {  if (status === "running" || status === "starting") {
     return (
       <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" opacity="0.25" />
@@ -72,12 +82,14 @@ function AgentRow({
   main,
   selected,
   running,
+  usage,
   onSelect,
 }: {
   session: SessionInfo;
   main?: boolean;
   selected: boolean;
   running: boolean;
+  usage?: FamilyMemberUsage;
   onSelect: () => void;
 }) {
   const { locale, t } = useI18n();
@@ -87,6 +99,15 @@ function AgentRow({
   const secondary = main
     ? sessionTitle(session)
     : `${relation?.profile ?? t("agentSwitcher.subagent")} · ${formatRelativeTime(session.modified, locale)}`;
+  const usageText = usage
+    ? [
+        usage.measuredDurationMs > 0 || usage.estimatedDurationMs > 0
+          ? formatRunDuration(usage.measuredDurationMs + usage.estimatedDurationMs, locale)
+          : null,
+        usage.tokens > 0 ? t("agentSwitcher.usageTokens", { count: formatCompact(usage.tokens) }) : null,
+        usage.cost > 0 ? `$${usage.cost.toFixed(4)}` : null,
+      ].filter(Boolean).join(" · ")
+    : "";
 
   return (
     <button
@@ -135,6 +156,16 @@ function AgentRow({
         <span style={{ display: "block", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 11 }} title={secondary}>
           {secondary}
         </span>
+        {usageText && (
+          <span
+            title={usage?.durationEstimated ? t("agentSwitcher.usageEstimatedHint") : undefined}
+            style={{ display: "block", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-dim)", fontSize: 10, fontVariantNumeric: "tabular-nums" }}
+          >
+            {usageText}
+            {usage?.durationEstimated ? " ~" : ""}
+            {usage?.costIncomplete ? ` · ${t("agentSwitcher.usageIncomplete")}` : ""}
+          </span>
+        )}
       </span>
       <span style={{ display: "flex", alignItems: "center", gap: 6, color: main && !running ? "var(--text-dim)" : statusColor(status), fontSize: 11, whiteSpace: "nowrap" }}>
         {main && !running ? (
@@ -151,7 +182,7 @@ function AgentRow({
 }
 
 export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, runningSessionIds, onSelectSession }: Props) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [query, setQuery] = useState("");
   const sortedSubagents = useMemo(() => [...subagents].sort((a, b) => {
     const aRunning = runningSessionIds.has(a.id);
@@ -169,6 +200,12 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
     : sortedSubagents;
   const runningCount = subagents.filter((session) => runningSessionIds.has(session.id)).length;
 
+  // Only poll while this panel is open and a member of the family is running;
+  // a settled family is read once. The hook never starts a session.
+  const familyRunning = runningSessionIds.has(rootSession.id)
+    || subagents.some((session) => runningSessionIds.has(session.id));
+  const { usage, total, incomplete } = useFamilyUsage(rootSession, subagents, familyRunning);
+
   return (
     <div
       role="listbox"
@@ -184,7 +221,7 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
       }}
     >
       <div>
-        <div style={{ minHeight: 44, display: "flex", alignItems: "center", gap: 8, padding: "7px 12px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ minHeight: 44, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "7px 12px", borderBottom: "1px solid var(--border)" }}>
           <strong style={{ fontSize: 12, fontWeight: 600 }}>{t("agentSwitcher.title")}</strong>
           <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
             {t("agentSwitcher.count", { count: subagents.length })}
@@ -192,6 +229,30 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
           {runningCount > 0 && (
             <span style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 11 }}>
               {t("agentSwitcher.runningCount", { count: runningCount })}
+            </span>
+          )}
+          {total && (
+            <span
+              title={t("agentSwitcher.usageTotalHint")}
+              style={{
+                // Its own row at every width: crammed into the title line it
+                // wrapped into unreadable fragments on narrow panels.
+                flexBasis: "100%",
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 8,
+                color: "var(--text-dim)",
+                fontSize: 11,
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {(total.measuredDurationMs > 0 || total.estimatedDurationMs > 0) && (
+                <span>{formatRunDuration(total.measuredDurationMs + total.estimatedDurationMs, locale)}</span>
+              )}
+              {total.tokens > 0 && <span>{t("agentSwitcher.usageTokens", { count: formatCompact(total.tokens) })}</span>}
+              {total.cost > 0 && <span>${total.cost.toFixed(4)}</span>}
+              {incomplete && <span title={t("agentSwitcher.usageIncompleteHint")}>· {t("agentSwitcher.usageIncomplete")}</span>}
             </span>
           )}
         </div>
@@ -217,6 +278,7 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
             main
             selected={rootSession.id === selectedSessionId}
             running={runningSessionIds.has(rootSession.id)}
+            usage={usage[rootSession.id]}
             onSelect={() => onSelectSession(rootSession)}
           />
           {visibleSubagents.map((session) => (
@@ -225,6 +287,7 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
               session={session}
               selected={session.id === selectedSessionId}
               running={runningSessionIds.has(session.id)}
+              usage={usage[session.id]}
               onSelect={() => onSelectSession(session)}
             />
           ))}

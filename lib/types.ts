@@ -1,5 +1,6 @@
 // Types mirrored from pi-mono coding-agent session-manager
 import type { NestedToolCalls } from "@earendil-works/pi-ai";
+import type { NormalizedAnswers, Question } from "./ask-user-question";
 
 export interface SessionHeader {
   type: "session";
@@ -179,6 +180,16 @@ export type ExtensionUiRequest =
   | {
       type: "extension_ui_request";
       id: string;
+      method: "questionnaire";
+      /** Heading shown above the questions. */
+      title?: string;
+      questions: Question[];
+      /** The `ask_user_question` call this questionnaire answers. */
+      toolCallId?: string;
+    }
+  | {
+      type: "extension_ui_request";
+      id: string;
       method: "notify";
       message: string;
       notifyType?: "info" | "warning" | "error";
@@ -220,12 +231,14 @@ export type ExtensionUiRequest =
 
 export type BlockingExtensionUiRequest = Extract<
   ExtensionUiRequest,
-  { method: "select" | "confirm" | "input" | "editor" | "custom" }
+  { method: "select" | "confirm" | "input" | "editor" | "custom" | "questionnaire" }
 >;
 
 export type ExtensionUiResponse =
   | { type: "extension_ui_response"; id: string; value: string }
   | { type: "extension_ui_response"; id: string; confirmed: boolean }
+  /** Answers to a `questionnaire` request. */
+  | { type: "extension_ui_response"; id: string; answers: NormalizedAnswers }
   | { type: "extension_ui_response"; id: string; cancelled: true };
 
 export interface ExtensionStatusItem {

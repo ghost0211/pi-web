@@ -16,15 +16,18 @@ import { ProcessDetailsGroup } from "./ProcessDetailsGroup";
 import { normalizeThinkingLevelOption } from "@/lib/thinking-level-options";
 import { MessageView } from "./MessageView";
 import { ChatInput, type ChatInputHandle } from "./ChatInput";
-import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { StreamingReply, StreamingMinimap } from "./StreamingReply";
 import { ChatScrollbar } from "./ChatScrollbar";
 import { ExtensionStatusBar } from "./ExtensionStatusBar";
+import { AskUserQuestionPanel } from "./AskUserQuestionPanel";
 import { KimiTaskDock } from "./KimiTaskDock";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { RemoteDirPicker } from "./RemoteDirPicker";
 import { AnsiText } from "./AnsiText";
 import { useI18n } from "@/hooks/useI18n";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
+import { useStreamingSelector, selectHasStreamingContent, selectIsStreaming } from "@/hooks/useStreamingSelector";
+import { useMessageRefs } from "./ChatMinimap";
 import { extractAssistantSnippet } from "@/lib/notification-text";
 import { useDragDrop } from "@/hooks/useDragDrop";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -206,13 +209,14 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
   }, [chatInputRef]);
 
   const {
-    loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamState,
+    loading, error, messages, activeToolResults, entryIds, historyCursor, hasEarlierMessages, firstEntryParentId, streamingStore,
     turnIndex, ensureEntryLoaded,
     agentRunning, bashRunning, pendingBash, modelNames, modelList, modelError, modelScopeWarnings, modelThinkingLevels, modelThinkingLevelMaps, fallbackModel, fallbackModelSwitching, toolPreset, customToolNames, thinkingLevel,
     retryInfo, contextUsage, contextModel, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, modelSwitching, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput, setNoticePaused,
+    extensionQuestionnaire, respondToQuestionnaire,
     isAutoModelSelection,
     autoAdvanceState, autoAdvanceBusy, handleStartAutoAdvance, handleStopAutoAdvance,
     agentPhase,
@@ -371,7 +375,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
 
   const visibleMessages = messages.filter((m) => m.role === "user" || m.role === "assistant");
   // Stable Map identity: `messages` doesn't change during streaming updates
-  // (the streaming message lives in streamState), so memoized MessageViews
+  // (the streaming message lives in the streaming store), so memoized MessageViews
   // skip re-rendering on every message_update event. An inline `new Map()`
   // here used to defeat MessageView's memo() on each streamed chunk.
   const toolResultsMap = useMemo(() => {
@@ -448,8 +452,11 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       railJumpRequestsRef.current -= 1;
     }
   }, [ensureEntryLoaded, messages.length, session?.id, sessionIdRef]);
-  const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !sessionBusy;
-  const hasStreamingContent = Boolean(streamState.streamingMessage?.content.length);
+  // Only a reply's presence, not its chunks: those re-render the streaming
+  // bubble alone. Keeps the whole chat out of the per-token render path.
+  const isStreaming = useStreamingSelector(streamingStore, selectIsStreaming);
+  const hasStreamingContent = useStreamingSelector(streamingStore, selectHasStreamingContent);
+  const isEmptyNew = isNew && messages.length === 0 && !isStreaming && !sessionBusy;
   const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
   const messageContentRef = useRef<HTMLDivElement | null>(null);
   const promptAnchorSpacerRef = useRef<HTMLDivElement | null>(null);
@@ -546,9 +553,14 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     scrollUserMsgToTop,
   ]);
 
+  // Each chunk changes the reply's height, so the anchor spacer must be
+  // re-measured per chunk. Subscribing to the store directly does that without
+  // putting the streaming message into this component's render path.
   useLayoutEffect(() => {
-    promptAnchorUpdateRef.current?.();
-  }, [streamState.streamingMessage]);
+    const update = () => promptAnchorUpdateRef.current?.();
+    update();
+    return streamingStore.subscribe(update);
+  }, [streamingStore]);
 
   const availableThinkingLevels = displayModelValue
     ? (modelThinkingLevels[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
@@ -715,6 +727,13 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
         </div>
       )}
 
+      {!isReadOnlySubagent && extensionQuestionnaire && (
+        <AskUserQuestionPanel
+          request={extensionQuestionnaire}
+          onRespond={(_request, response) => respondToQuestionnaire(extensionQuestionnaire, response)}
+        />
+      )}
+
       {!isReadOnlySubagent && extensionDialog && (
         <ExtensionDialog
           request={extensionDialog}
@@ -860,12 +879,12 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       <>
       <div className="relative flex min-w-0 flex-1 overflow-hidden">
         {isMobile ? null : (
-          <ChatMinimap
+          <StreamingMinimap
             branchKey={activeLeafId}
             messages={messages}
             entryIds={entryIds}
             turnIndex={turnIndex}
-            streamingMessage={streamState.streamingMessage}
+            streamingStore={streamingStore}
             scrollContainer={scrollContainerRef}
             messageRefs={messageRefs}
             onRevealTurn={revealTurnForMinimap}
@@ -913,7 +932,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     if (r === "assistant") { showTimestamp = false; break; }
                   }
                   // Hide on the currently-streaming tail (the streaming bubble owns the live timestamp)
-                  if (showTimestamp && streamState.isStreaming && idx === messages.length - 1) {
+                  if (showTimestamp && isStreaming && idx === messages.length - 1) {
                     showTimestamp = false;
                   }
                 }
@@ -961,7 +980,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 const { startIndex: userIdx, endIndex: endIdx, contentStartIndex } = group;
                 const finalAssistantIdx = findFinalAssistantIndex(messages, contentStartIndex - 1, endIdx);
                 const runDuration = getGroupRunDuration(messages, contentStartIndex, endIdx);
-                const isLiveTail = (sessionBusy || streamState.isStreaming) && endIdx === messages.length
+                const isLiveTail = (sessionBusy || isStreaming) && endIdx === messages.length
                   && (!runDuration || runDuration.estimated);
                 if (finalAssistantIdx === -1 || isLiveTail) {
                   let labeled = false;
@@ -1027,7 +1046,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 if (finalAnswerMessage) {
                   rendered.push(renderMessage(finalAssistantIdx, {
                     messageOverride: finalAnswerMessage, parentFollowUp: group.parentFollowUp,
-                    recoverTruncation: !isReadOnlyConversation && endIdx === messages.length && !streamState.isStreaming
+                    recoverTruncation: !isReadOnlyConversation && endIdx === messages.length && !isStreaming
                       && isAssistantTruncated(finalAssistant) && !hasAssistantAnswer(finalAssistant),
                   }));
                 }
@@ -1039,6 +1058,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                     key={`outcome-${entryIds[userIdx] ?? userIdx}`}
                     outcome={buildTurnOutcome(messages.slice(contentStartIndex, endIdx), messageCwd)}
                     sinceTs={messages[userIdx]?.timestamp}
+                    cwd={messageCwd}
                     onOpenFile={onOpenFile}
                     onOpenGitDiff={onOpenGitDiff}
                     diffNotice={t("chat.reviewDiffNotice")}
@@ -1058,13 +1078,18 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
                 </>
               );
             })()}
-            {streamState.isStreaming && hasStreamingContent && streamState.streamingMessage && (
-              <>
-                {needsStreamingFollowUpLabel(messages, messageGroups.at(-1)) && (
-                  <div className="chat-parent-follow-up" data-parent-follow-up="true">{t("subagent.parentFollowUp")}</div>
-                )}
-                <MessageView message={streamState.streamingMessage as AgentMessage} toolResults={toolResultsMap} isStreaming modelNames={modelNames} cwd={messageCwd} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
-              </>
+            {isStreaming && hasStreamingContent && (
+              <StreamingReply
+                streamingStore={streamingStore}
+                toolResults={toolResultsMap}
+                modelNames={modelNames}
+                cwd={messageCwd}
+                onOpenFile={onOpenFile}
+                onOpenSession={onOpenSession}
+                followUpLabel={needsStreamingFollowUpLabel(messages, messageGroups.at(-1))
+                  ? t("subagent.parentFollowUp")
+                  : null}
+              />
             )}
 
             {agentRunning && !hasStreamingContent && agentPhase && (
@@ -1115,7 +1140,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
         <KimiTaskDock
           messages={messages}
           pendingBash={pendingBash}
-          agentRunning={agentRunning || streamState.isStreaming}
+          agentRunning={agentRunning || isStreaming}
           subagentSessions={subagentSessions}
           runningSessionIds={runningSessionIds}
           onOpenSession={onOpenSession}

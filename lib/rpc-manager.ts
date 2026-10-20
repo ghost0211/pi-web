@@ -48,6 +48,9 @@ import type {
   SessionMessageEntry,
 } from "./types";
 import { createHeadlessCustomUiTui, DEFAULT_CUSTOM_UI_COLUMNS, type HeadlessCustomUiTui } from "./custom-ui-terminal";
+import { createAskUserQuestionExtension } from "./ask-user-question-extension";
+import type { NormalizedAnswers, Question } from "./ask-user-question";
+import { createPresentFilesExtension } from "./present-files-extension";
 import {
   createSubagentExtension,
   preferPiWebSubagentExtension,
@@ -801,7 +804,7 @@ export class AgentSessionWrapper {
   }
 
   private emit(event: AgentEvent): void {
-    if (event.type === "extension_ui_request" && ["select", "confirm", "input", "editor", "custom"].includes(event.method as string) && !event.closed) {
+    if (event.type === "extension_ui_request" && ["select", "confirm", "input", "editor", "custom", "questionnaire"].includes(event.method as string) && !event.closed) {
       this.autoAdvance.pause("extension_ui");
     }
     for (const listener of this.listeners) {
@@ -2059,6 +2062,25 @@ export class AgentSessionWrapper {
     });
   }
 
+  /**
+   * Show a structured questionnaire and resolve with the user's answers.
+   * Resolves undefined when the user dismissed it or the run was aborted, which
+   * the tool reports as a decline (never a silent default answer).
+   */
+  requestQuestionnaire(
+    questions: Question[],
+    toolCallId: string,
+    signal?: AbortSignal,
+  ): Promise<NormalizedAnswers | undefined> {
+    return this.requestExtensionUi<NormalizedAnswers | undefined>(
+      { method: "questionnaire", questions, toolCallId },
+      undefined,
+      (response) => "answers" in response ? response.answers : undefined,
+      undefined,
+      signal,
+    );
+  }
+
   private createExtensionUiContext(): ExtensionUiContextLike {
     return {
       select: (title, options, opts) => this.requestExtensionUi(
@@ -2774,6 +2796,21 @@ async function startRpcSessionGuarded(
     };
     const modelFallbackExtension = modelFallbackState ? createModelFallbackExtension(modelFallbackState) : undefined;
     const mcpRuntime = !subagentResources && !chatOnly ? new McpWebRuntime() : undefined;
+    // Both tools run inside a real agent session and need the wrapper to reach
+    // the browser, so the factory closes over a mutable host filled right below.
+    const questionnaireHost: { wrapper?: AgentSessionWrapper } = {};
+    const interactiveToolsExtensions = subagentResources || chatOnly
+      ? []
+      : [
+          createPresentFilesExtension({ fallbackCwd: sessionCwd }),
+          createAskUserQuestionExtension({
+            ask: (questions, toolCallId, signal) => {
+              const wrapper = questionnaireHost.wrapper;
+              if (!wrapper) throw new Error("Questionnaire host is not ready");
+              return wrapper.requestQuestionnaire(questions, toolCallId, signal);
+            },
+          }),
+        ];
     const services = await createAgentSessionServices({
       cwd: sessionCwd,
       agentDir,
@@ -2804,6 +2841,7 @@ async function startRpcSessionGuarded(
               ...createPiBuiltinExtensions(mcpRuntime?.createExtension()),
               systemPromptExtension,
               ...(modelFallbackExtension ? [modelFallbackExtension] : []),
+              ...interactiveToolsExtensions,
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,
@@ -2945,6 +2983,7 @@ async function startRpcSessionGuarded(
       mcpRuntime,
       modelFallbackState,
     });
+    questionnaireHost.wrapper = wrapper;
     const realSessionId = inner.sessionId as string;
     registerRpcWrapper(wrapper);
 

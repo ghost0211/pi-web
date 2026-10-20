@@ -51,6 +51,7 @@ app/api/
   sessions/[id]/route.ts          GET/PATCH/DELETE session
   sessions/[id]/context/route.ts  GET ?leafId= — context for a specific leaf
   sessions/[id]/export/route.ts   GET exported HTML for a session
+  sessions/stats/route.ts         POST { ids, roles? } — bounded usage aggregates for an agent family
   agent/new/route.ts              POST { cwd, message, toolNames?, provider?, modelId? }
   agent/[id]/route.ts             GET state | POST any command
   agent/[id]/events/route.ts      GET SSE stream
@@ -79,6 +80,11 @@ app/api/
 
 lib/
   agent-client.ts      typed fetch helper for /api/agent commands
+  agent-family-usage.ts  main+subagent token/cost/duration aggregation (historical cost, precise timing preferred)
+  ask-user-question.ts  questionnaire data model, strict parse/validate, answer formatting
+  ask-user-question-extension.ts  `ask_user_question` inline tool bridging to the questionnaire panel
+  present-files.ts     `present_files` details contract (parse, kinds, bounds)
+  present-files-extension.ts  `present_files` inline tool: read-only probe inside the file allow-list
   auto-advance-controller.ts  round-bounded auto-advance state machine (usage stats only, generation-guarded)
   auto-advance-model.ts  tool-less surrogate evaluation, usage accounting, continuation instruction
   auto-advance-types.ts  shared auto-advance config/state/decision contracts
@@ -100,6 +106,9 @@ lib/
 
 components/
   AppShell.tsx        layout + URL state + tab management
+  AskUserQuestionPanel.tsx  structured questionnaire dialog (radio/checkbox/custom, previews)
+  PresentDeliverables.tsx   the turn's declared deliverables, shown above changed files
+  StreamingReply.tsx        the in-progress reply + turn rail, subscribed to the streaming store
   SessionSidebar.tsx  session tree + FileExplorer
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
@@ -120,6 +129,7 @@ components/
 
 hooks/
   useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation logic
+  useFamilyUsage.ts   per-family usage for the agent switcher (visible-only polling, generation-guarded)
   useAudio.ts         completion sound + browser AudioContext unlock
   useDragDrop.ts      shared drag/drop state
   useIsMobile.ts      responsive breakpoint hook
@@ -226,6 +236,24 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 - Runtime `Agent` dispatch checks the setting again so a stale tool call cannot start a subagent after the feature is switched off.
 - **Background results are pulled, never pushed.** A `run_in_background` subagent sends no completion notification: the `Agent` tool result tells the model to call `get_subagent_result` (`wait: true`) for that session, and the injected guidelines make that mandatory before finalizing. A completion notification used to be sent unconditionally whenever a background subagent finished, even when the parent had already read the result in the same run — it cost a whole extra model turn that could only restate "nothing new" plus the full report text in the transcript's context for the rest of the session. `SubagentExtensionRuntime` deliberately has no `notifyParent`; `lib/subagent-runtime.ts` cannot inject a report. The rendering path (`SubagentReport.tsx`, `parseSubagentReport`, the `pi-web:subagent-notification` grouping in `lib/chat-message-groups.ts` and `lib/run-duration.ts`) stays so existing sessions keep displaying their historical reports.
 - See `docs/adr/0003-built-in-subagent-toggle.md` for the precedence and persistence rationale.
+- **Family usage is read, never inferred.** `POST /api/sessions/stats` aggregates 1–32 validated session ids from disk (no wrapper start, no transcript in the response) with an `(path, size, mtime)` cache. Cost is the sum of recorded `usage.cost.total` — never re-priced; a row that recorded none is marked incomplete instead of contributing a fake zero. Duration prefers `pi-web:run-timing` and reports the legacy estimate separately (`durationEstimated`); members can run concurrently, so the family total is accumulated execution time, not wall-clock. `hooks/useFamilyUsage.ts` polls only while a member runs and the tab is visible, its first read happens on open regardless of visibility, and a generation counter discards a response for a previous family.
+
+### Declared deliverables (`present_files`)
+- The results card used to infer deliverables from reply text plus write/edit calls, which cannot tell a final artifact from the helper script that produced it. The model now *declares* them through a first-party `present_files` tool (`model-only` exposure): the tool probes each path read-only and returns a bounded `details` payload (`pi-web-present-files/v1`) that the chat renders above the changed files.
+- Security: every path must pass `isFilePathAllowed` **and** `isExistingFilePathAllowed`, so a traversal or a link escaping the allow-list is rejected; the tool never adds a root, never reads file contents (no excerpt, no HTML execution) and never opens a window. `kind` is a chip label only.
+- `parsePresentFilesDetails` fails closed: wrong/missing `kind`, unknown kind, blank path or all-`missing` items yield `null`, so a forged or stale payload cannot fabricate a deliverable. A later declaration in the same turn supersedes an earlier one.
+- `buildTurnOutcome` puts `deliverables` first and removes those paths from `files` and `claimed`, so one artifact appears once. Reply-text claims (`claimed`) stay as the last-resort fallback with its mtime verification.
+
+### Structured questionnaire (`ask_user_question`)
+- A first-party `ask_user_question` tool (`model-only`) lets the model ask 1–4 questions with 2–6 concrete options each. The answer returns as a plain-text tool result in the same run — no extra model turn, no notification, and a dismissal is a *decline* (`The user dismissed the questionnaire`), never a guessed default.
+- Transport is the existing extension-UI path: the wrapper exposes `requestQuestionnaire()` → `extension_ui_request` with `method: "questionnaire"` → `AskUserQuestionPanel` → `extension_ui_response` with `answers` or `cancelled`. Reusing that channel is what gives refresh replay, abort settlement and Auto Advance pausing for free; `pendingUiRequests` re-emits it on SSE subscribe.
+- `lib/ask-user-question.ts` validates both the question payload and the submitted answers (bounds, option ranges, duplicate labels, shared preview budget, and no cross-kind fields on an answer), so the panel and the server cannot disagree about what a valid answer is. The custom ("something else") row excludes the preset options, matching the reply format the upstream extension parses.
+- The panel clears all drafts when `request.id` changes, keeps the user's selections when a send fails, and disables submit until every question has an answer.
+
+### Long-session performance
+- Streaming state lives in `lib/streaming-message.ts`'s store, not in `useAgentSession`'s React state: `ChatWindow` subscribes only to `isStreaming` / `hasStreamingContent`, the reply bubble (`StreamingReply`) subscribes to the message, and the turn rail subscribes on its own. A streamed chunk therefore re-renders one bubble instead of the whole chat. `useStreamingSelector` uses plain state + `useLayoutEffect` (not `useSyncExternalStore`) so React can batch chunks in one tick; it re-reads after subscribing to close the render/effect gap.
+- Prompt-anchor remeasurement subscribes to the store directly (`streamingStore.subscribe`) instead of a dependency array, keeping it out of the React update cycle.
+- `lib/session-list-scanner.ts` resumes a grown session file from the last parsed offset when the inode, header and a 512-byte sample before the offset all still match; a truncation, replacement or rewrite falls back to a full read. Documented limit: an in-place edit that keeps size, mtime and that sample cannot be detected. `invalidateSessionScanEntry()` forces a cold scan for metadata rewrites pi-web itself performs.
 
 ### Auth and model config
 - `ModelsConfig` combines models from `~/.pi/agent/models.json` with provider auth status from pi's `AuthStorage`/`ModelRegistry`.

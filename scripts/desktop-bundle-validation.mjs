@@ -106,6 +106,48 @@ function verifyAssetFile(sourcePath, bundlePath, assetLabel) {
 }
 
 /**
+ * The packaged server must be a superset of the build's own server output.
+ *
+ * The standalone trace is a *subset* chosen by @vercel/nft, and it can miss
+ * async chunks that only the instrumentation hook imports at startup: the
+ * v0.9.68 desktop bundle shipped without `chunks/<id>.js`, so every request
+ * failed with `Cannot find module './chunks/6429.js'` and the UI showed
+ * HTTP 500 on the session list. Copying the complete `.next/server` before this
+ * check makes the bundle whole; the check keeps a future copy step honest by
+ * comparing every build file's size against the packaged one.
+ */
+export function assertServerOutputMirrored(sourceServerDir, bundleServerDir) {
+  if (!existsSync(sourceServerDir)) {
+    throw new Error(`build output is missing ${sourceServerDir}`);
+  }
+  const files = collectFiles(sourceServerDir);
+  if (files.length === 0) {
+    throw new Error(`build output ${sourceServerDir} is empty`);
+  }
+  const missing = [];
+  const truncated = [];
+  for (const relative of files) {
+    const sourcePath = join(sourceServerDir, relative);
+    const bundlePath = join(bundleServerDir, relative);
+    const source = statSync(sourcePath);
+    if (!existsSync(bundlePath)) {
+      missing.push(relative);
+      continue;
+    }
+    const bundle = statSync(bundlePath);
+    if (!bundle.isFile() || bundle.size !== source.size) truncated.push(relative);
+  }
+  if (missing.length > 0 || truncated.length > 0) {
+    const detail = [...missing.slice(0, 5), ...truncated.slice(0, 5)].map((file) => file.replace(/\\/g, "/"));
+    throw new Error(
+      `desktop server bundle is incomplete: ${missing.length} missing and ${truncated.length} truncated file(s), ` +
+        `e.g. ${detail.join(", ")} — the packaged .next/server must mirror the build output`,
+    );
+  }
+  return files.length;
+}
+
+/**
  * Verify every installed pi-ai runtime keeps all OAuth modules in the desktop
  * standalone bundle. pi-ai loads the flow implementations through variable
  * dynamic imports, which Next/@vercel/nft deliberately cannot discover.

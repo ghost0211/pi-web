@@ -37,6 +37,7 @@ import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import {
+  assertServerOutputMirrored,
   validatePiAiOAuthModules,
   validatePiCodemodeAssets,
   validatePiDocs,
@@ -128,6 +129,34 @@ function copyStandaloneServer() {
   cpSync(standaloneDir, serverResourceDir, { recursive: true });
   cpSync(join(nextDir, "static"), join(serverResourceDir, ".next", "static"), { recursive: true });
   cpSync(join(repoRoot, "public"), join(serverResourceDir, "public"), { recursive: true });
+
+  // The standalone trace is a subset of the build output. It can omit async
+  // chunks that only the instrumentation hook imports at startup: v0.9.68
+  // shipped without `chunks/<id>.js` and every request 500'd on
+  // MODULE_NOT_FOUND. Overlay the complete server output, then prove it.
+  cpSync(join(nextDir, "server"), join(serverResourceDir, ".next", "server"), {
+    recursive: true,
+    force: true,
+  });
+  try {
+    const mirrored = assertServerOutputMirrored(
+      join(nextDir, "server"),
+      join(serverResourceDir, ".next", "server"),
+    );
+    console.log(`build-desktop-server: .next/server mirrored (${mirrored} files)`);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+
+  // A byte-for-byte copy is necessary but not sufficient: the hook loads an
+  // async chunk through the webpack runtime at startup, which is exactly what
+  // the v0.9.68 bundle got wrong while every file it *did* copy matched. Boot
+  // the packaged server and call a real API route before the installer exists.
+  try {
+    run(process.execPath, [join(repoRoot, "scripts", "desktop-server-smoke.mjs"), serverResourceDir]);
+  } catch (error) {
+    fail(`packaged server failed its startup smoke: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   // Guard against the classic failure mode where serverExternalPackages are
   // missing from the standalone node_modules trace.

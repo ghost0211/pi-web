@@ -239,17 +239,20 @@ export function KimiTaskDock({
   const visibleItems = filterItems(items, filter);
   const completed = data.progress.filter((item) => item.status === "done").length;
 
+  const isRunning = (kind: DockKind): boolean => data[kind].some((item) => item.status === "running");
+
+  // Running state must not add text or flex children to the pills: on phones
+  // even a status dot (and its gap) can shift the whole row. Keep the status
+  // in the accessible label and paint it with an inset CSS halo instead.
   const label = (kind: DockKind): string => {
-    if (kind === "bash") {
-      const running = data.bash.some((item) => item.status === "running");
-      return running ? `${t("dock.bash")} · ${t("dock.running")}` : t("dock.bash");
-    }
-    if (kind === "agent") {
-      const running = data.agent.some((item) => item.status === "running");
-      return running ? `${t("dock.agent")} · ${t("dock.running")}` : t("dock.agent");
-    }
+    if (kind === "bash") return t("dock.bash");
+    if (kind === "agent") return t("dock.agent");
     return data.progress.length > 0 ? `${t("dock.progress")} ${completed}/${data.progress.length}` : t("dock.progress");
   };
+
+  const accessibleLabel = (kind: DockKind): string => isRunning(kind)
+    ? `${label(kind)} · ${t("dock.running")}`
+    : label(kind);
 
   const filterLabel = (entry: DockFilter): string => {
     if (entry === "recent") return t("dock.recent");
@@ -268,9 +271,9 @@ export function KimiTaskDock({
   return (
     <div className="kimi-task-dock" ref={rootRef}>
       {active && (
-        <section className={`kimi-task-panel panel-${active}`} aria-label={`${label(active)} panel`}>
+        <section className={`kimi-task-panel panel-${active}`} aria-label={`${accessibleLabel(active)} panel`}>
           <header className="kimi-task-panel-head">
-            <div className="kimi-task-panel-title"><DockIcon kind={active} />{label(active)}</div>
+            <div className="kimi-task-panel-title"><DockIcon kind={active} />{accessibleLabel(active)}</div>
             {active !== "progress" && (
               <div className="kimi-task-filters" role="tablist" aria-label="Task filters">
                 {(["recent", "running", "done", "all"] as DockFilter[]).map((entry) => (
@@ -324,16 +327,14 @@ export function KimiTaskDock({
           <button
             key={kind}
             type="button"
-            className={`kimi-task-pill${active === kind ? " is-active" : ""}`}
-            aria-label={label(kind)}
+            className={`kimi-task-pill${active === kind ? " is-active" : ""}${isRunning(kind) ? " is-running" : ""}`}
+            aria-label={accessibleLabel(kind)}
+            title={accessibleLabel(kind)}
             aria-expanded={active === kind}
             onClick={() => setActive((current) => current === kind ? null : kind)}
           >
             <DockIcon kind={kind} />
             <span>{label(kind)}</span>
-            {(kind === "bash" ? data.bash : kind === "agent" ? data.agent : data.progress).some((item) => item.status === "running") && (
-              <span className="kimi-task-live-dot" />
-            )}
           </button>
         ))}
       </div>

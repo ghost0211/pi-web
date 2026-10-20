@@ -441,6 +441,7 @@ body {
 .kimi-task-pill {
   position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   gap: 7px;
@@ -454,6 +455,7 @@ body {
   font: inherit;
   font-size: 14px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: pointer;
   transition: background 140ms ease, color 140ms ease, transform 140ms ease;
@@ -480,19 +482,28 @@ body {
   stroke-linejoin: round;
 }
 
-.kimi-task-live-dot {
-  width: 6px;
-  height: 6px;
-  margin-left: 1px;
-  border-radius: 999px;
-  background: #2b8cff;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #2b8cff 18%, transparent);
-  animation: kimi-live-pulse 1.4s ease-in-out infinite;
+/* Paint inside the existing pill so the horizontal scroll container cannot
+   clip the halo. No border, padding, or flex item is added on state changes. */
+.kimi-task-pill.is-running::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1.5px #22c55e, inset 0 0 8px 1px rgb(34 197 94 / 30%);
+  animation: kimi-task-running-halo 1.8s ease-in-out infinite;
 }
 
-@keyframes kimi-live-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .45; transform: scale(.78); }
+@keyframes kimi-task-running-halo {
+  0%, 100% { opacity: .5; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kimi-task-pill.is-running::after {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .kimi-task-panel {

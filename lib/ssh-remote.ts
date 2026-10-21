@@ -299,10 +299,16 @@ export interface SshfsMountResult {
 
 function killProcessTree(pid: number): void {
   try {
-    // `child.kill()` on Windows leaves the real worker (the ssh child) alive, so
-    // a failed mount would keep its pipes open forever.
-    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 10_000 });
-  } catch { /* best effort */ }
+    if (process.platform === "win32") {
+      // `child.kill()` on Windows leaves the real worker (the ssh child) alive, so
+      // a failed mount would keep its pipes open forever.
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 10_000 });
+    } else {
+      process.kill(-pid, "SIGKILL");
+    }
+  } catch {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
 }
 
 /**
@@ -377,6 +383,14 @@ export async function startSshfsMount(params: {
   }
 
   if (child.pid) killProcessTree(child.pid);
+  // Drop the pipes as well: a kill that did not take effect must not keep the
+  // test runner (or the server) alive on an orphaned child.
+  try {
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  } catch { /* already closed */ }
+  child.unref();
   return {
     ready: false,
     detail: (spawnError || output).trim(),

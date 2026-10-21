@@ -4,6 +4,9 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import type { SshHostEntry } from "@/lib/ssh-hosts";
+// One definition shared with the route: the picker used to declare its own shape,
+// so a successful mount surfaced as `HTTP 200` in the dialog.
+import type { MountResponse } from "@/lib/ssh-mount-contract";
 import { ConfigButton } from "./SettingsUi";
 
 const inputStyle = {
@@ -29,16 +32,6 @@ interface RemoteLsResponse {
   parentPath?: string | null;
   directories?: RemoteDirEntry[];
   error?: string;
-}
-
-interface MountResponse {
-  ok?: boolean;
-  driveLetter?: string;
-  mountPoint?: string;
-  remotePath?: string;
-  error?: string;
-  detail?: string;
-  needsSshfsWin?: boolean;
 }
 
 interface Props {

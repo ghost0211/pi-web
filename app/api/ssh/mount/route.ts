@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { jsonResponse } from "@/lib/json-response";
 import { allowFileRoot } from "@/lib/file-access";
 import { loadSshHosts } from "@/lib/ssh-hosts";
+import { mountFailure, mountedResponse } from "@/lib/ssh-mount-contract";
 import {
   buildPasswordNetUseArgs,
   buildSshfsArgs,
@@ -107,14 +108,20 @@ export async function POST(request: Request) {
     const localPath = mappedDrivePath(reused.letter, resolvedParts);
     if (await waitForPath(localPath)) {
       allowFileRoot(`${reused.letter}:\\`);
-      return jsonResponse(request, { localPath, reused: true });
+      return jsonResponse(request, mountedResponse({
+        driveLetter: reused.letter,
+        mountPoint: localPath,
+        remotePath: resolvedParts.path,
+        reused: true,
+        backend: "unc",
+      }));
     }
     // The host root is already mapped: remounting would fail with a misleading
     // "network name no longer available", so report the path itself instead.
-    return jsonResponse(request, {
-      error: `Remote directory not found: ${resolvedParts.path || "/"} (host root is mounted on ${reused.letter}:)`,
-      backend: "unc",
-    }, { status: 502 });
+    return jsonResponse(request, mountFailure(
+      `Remote directory not found: ${resolvedParts.path || "/"} (host root is mounted on ${reused.letter}:)`,
+      { backend: "unc" },
+    ), { status: 502 });
   }
 
   const letter = findFreeDriveLetter(new Set(existing.map((entry) => entry.letter)));
@@ -133,16 +140,22 @@ export async function POST(request: Request) {
     });
     if (!mount.ready) {
       const detail = mount.detail.split(/\r?\n/).filter(Boolean).slice(-3).join(" ");
-      return jsonResponse(request, {
-        error: detail
+      return jsonResponse(request, mountFailure(
+        detail
           ? `sshfs failed: ${detail}`
           : `sshfs failed to mount ${letter}: within ${Math.round(SSHFS_TIMEOUT_MS / 1000)}s. Check the host credentials with 测试连接 first.`,
-        backend: "sshfs",
-      }, { status: 502 });
+        { backend: "sshfs" },
+      ), { status: 502 });
     }
     const localPath = `${letter}:\\`;
     allowFileRoot(localPath);
-    return jsonResponse(request, { localPath, reused: false, backend: "sshfs" });
+    return jsonResponse(request, mountedResponse({
+      driveLetter: letter,
+      mountPoint: localPath,
+      remotePath: resolvedParts.path,
+      reused: false,
+      backend: "sshfs",
+    }));
   }
 
   const args = passwordAuth
@@ -153,20 +166,26 @@ export async function POST(request: Request) {
   if (!ready) {
     const detail = netUseDetail(result.stdout, result.stderr);
     removeMapping(letter);
-    return jsonResponse(request, {
-      error: detail ? `net use failed: ${detail}` : `net use failed (code ${result.code ?? "?"})`,
-      backend: "unc",
-    }, { status: 502 });
+    return jsonResponse(request, mountFailure(
+      detail ? `net use failed: ${detail}` : `net use failed (code ${result.code ?? "?"})`,
+      { backend: "unc" },
+    ), { status: 502 });
   }
 
   const localPath = mappedDrivePath(letter, resolvedParts);
   if (!(await waitForPath(localPath))) {
     removeMapping(letter);
-    return jsonResponse(request, {
-      error: `Mounted ${uncRoot} on ${letter}: but the remote directory is not accessible: ${resolvedParts.path || "/"}`,
-      backend: "unc",
-    }, { status: 502 });
+    return jsonResponse(request, mountFailure(
+      `Mounted ${uncRoot} on ${letter}: but the remote directory is not accessible: ${resolvedParts.path || "/"}`,
+      { backend: "unc" },
+    ), { status: 502 });
   }
   allowFileRoot(`${letter}:\\`);
-  return jsonResponse(request, { localPath, reused: false, backend: "unc" });
+  return jsonResponse(request, mountedResponse({
+    driveLetter: letter,
+    mountPoint: localPath,
+    remotePath: resolvedParts.path,
+    reused: false,
+    backend: "unc",
+  }));
 }

@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { isUtf8 } from "node:buffer";
 import type { SshHostEntry } from "./ssh-hosts";
 
 /**
@@ -22,6 +23,21 @@ export interface CommandResult {
   spawnError?: string;
 }
 
+/**
+ * Decode child-process output. Windows console tools (`net.exe`, `ssh.exe`)
+ * write in the OEM code page (936/GBK on zh-CN), not UTF-8, so a UTF-8 decode
+ * turned "系统错误 67" into "??????§? 67" and hid the real reason.
+ */
+export function decodeWindowsOutput(buffer: Buffer): string {
+  if (buffer.length === 0) return "";
+  if (isUtf8(buffer)) return buffer.toString("utf8");
+  try {
+    return new TextDecoder("gbk").decode(buffer);
+  } catch {
+    return buffer.toString("utf8");
+  }
+}
+
 export function runCommand(
   command: string,
   args: string[],
@@ -36,21 +52,25 @@ export function runCommand(
       resolve({ code: null, stdout: "", stderr: "", timedOut: false, spawnError: String(error) });
       return;
     }
-    let stdout = "";
-    let stderr = "";
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
     let settled = false;
     const finish = (result: Omit<CommandResult, "stdout" | "stderr">) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ ...result, stdout, stderr });
+      resolve({
+        ...result,
+        stdout: decodeWindowsOutput(Buffer.concat(stdout)),
+        stderr: decodeWindowsOutput(Buffer.concat(stderr)),
+      });
     };
     const timer = setTimeout(() => {
       try { child.kill(); } catch { /* already gone */ }
       finish({ code: null, timedOut: true });
     }, timeoutMs);
-    child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
+    child.stdout?.on("data", (chunk) => { stdout.push(Buffer.from(chunk)); });
+    child.stderr?.on("data", (chunk) => { stderr.push(Buffer.from(chunk)); });
     child.on("error", (error) => finish({ code: null, timedOut: false, spawnError: String(error) }));
     child.on("close", (code) => finish({ code, timedOut: false }));
     if (stdinText !== undefined) {
@@ -62,8 +82,7 @@ export function runCommand(
   });
 }
 
-/** `ssh` probe args: key-only auth, fail fast, marker output on success. */
-export function buildSshTestArgs(host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">): string[] {
+/** `ssh` probe args: key-only auth, fail fast, marker output on success. */export function buildSshTestArgs(host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">): string[] {
   const args = [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=8",
@@ -76,6 +95,77 @@ export function buildSshTestArgs(host: Pick<SshHostEntry, "host" | "port" | "use
 }
 
 export const SSH_TEST_MARKER = "__pi_ssh_ok__";
+
+/** `ssh` args that print the remote login home behind a marker. */
+export function buildSshHomeArgs(
+  host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">,
+): string[] {
+  const args = [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=8",
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-p", String(host.port),
+  ];
+  if (host.identityFile) args.push("-i", host.identityFile, "-o", "IdentitiesOnly=yes");
+  args.push(`${host.user}@${host.host}`, `printf '__PI_HOME__%s\\n' "$HOME"`);
+  return args;
+}
+
+export const SSH_HOME_MARKER = "__PI_HOME__";
+
+/**
+ * Resolve the remote login home so a `~`/relative path can be mounted as an
+ * absolute one. Mounting the home-relative UNC provider (`\\sshfs\user@host`)
+ * breaks as soon as a component of the path is a symlink that points outside
+ * the home, so the mount route always uses the root-relative provider.
+ */
+export async function resolveRemoteHome(
+  host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">,
+  password: string | undefined,
+  timeoutMs = 12_000,
+): Promise<string | null> {
+  if (password) {
+    try {
+      const { Client } = await import("ssh2");
+      return await new Promise<string | null>((resolve) => {
+        const client = new Client();
+        let settled = false;
+        const finish = (value: string | null) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          client.end();
+          resolve(value);
+        };
+        const timer = setTimeout(() => finish(null), timeoutMs);
+        client
+          .on("ready", () => {
+            client.exec('printf %s "$HOME"', (error, stream) => {
+              if (error) {
+                finish(null);
+                return;
+              }
+              let output = "";
+              stream.on("data", (chunk: Buffer) => { output += String(chunk); });
+              stream.on("close", () => {
+                const home = output.trim();
+                finish(home.startsWith("/") ? home : null);
+              });
+            });
+          })
+          .on("error", () => finish(null))
+          .connect({ host: host.host, port: host.port, username: host.user, password, readyTimeout: Math.round(timeoutMs * 0.7) });
+      });
+    } catch {
+      return null;
+    }
+  }
+  const result = await runCommand("ssh", buildSshHomeArgs(host), timeoutMs);
+  const line = result.stdout.split(/\r?\n/).find((candidate) => candidate.startsWith(SSH_HOME_MARKER));
+  if (!line) return null;
+  const home = line.slice(SSH_HOME_MARKER.length).trim();
+  return home.startsWith("/") ? home : null;
+}
 
 /** Probe a password-auth host via the ssh2 library (no system ssh involved). */
 export async function testSshPasswordAuth(
@@ -134,9 +224,44 @@ export function parseRemotePath(input: string): RemotePathParts | null {
 }
 
 /**
+ * UNC provider ROOT for `net use` (sshfs-win provider syntax).
+ *
+ * The provider only accepts the host root — `\\sshfs\user@host!port` — and the
+ * remote path is walked *inside* the mapped drive. Putting the path into the UNC
+ * name (`\\sshfs.r\user@host\home\me\project`) makes Windows fail with
+ * "System error 67: The network name cannot be found", which looked like a
+ * credential problem but is purely a naming restriction.
+ *
+ *   \\sshfs\user@host      (key/password auth, home-relative)
+ *   \\sshfs.r\user@host    (key/password auth, root-relative)
+ *   \\sshfs.k\user@host    (key-only auth, home-relative)
+ *   \\sshfs.kr\user@host   (key-only auth, root-relative)
+ */
+export function buildUncRoot(
+  host: Pick<SshHostEntry, "host" | "port" | "user">,
+  parts: RemotePathParts,
+  options: { keyAuth?: boolean } = {},
+): string {
+  const provider = options.keyAuth
+    ? (parts.absolute ? "sshfs.kr" : "sshfs.k")
+    : (parts.absolute ? "sshfs.r" : "sshfs");
+  const suffix = host.port === 22 ? "" : `!${host.port}`;
+  return `\\\\${provider}\\${host.user}@${host.host}${suffix}`;
+}
+
+/** Local path inside a mapped UNC drive: `Y:\home\me\project` (never `Y:\`). */
+export function mappedDrivePath(driveLetter: string, parts: RemotePathParts): string {
+  const segments = parts.path.replace(/^\/+/, "").split("/").filter(Boolean);
+  return segments.length === 0 ? `${driveLetter}:\\` : `${driveLetter}:\\${segments.join("\\")}`;
+}
+
+/**
  * UNC target for `net use` (sshfs-win provider syntax):
  *   \\sshfs.k\user@host!port\path   (key auth, home-relative)
  *   \\sshfs.kr\user@host!port\path  (key auth, root-relative)
+ *
+ * Kept for reference/tests: Windows rejects a path inside the UNC name, so the
+ * mount route maps `buildUncRoot` and joins the path onto the drive instead.
  */
 export function buildUncTarget(
   host: Pick<SshHostEntry, "host" | "port" | "user">,
@@ -153,13 +278,109 @@ export function buildSshfsArgs(
   host: Pick<SshHostEntry, "host" | "port" | "user" | "identityFile">,
   parts: RemotePathParts,
   driveLetter: string,
+  extraOptions: string[] = [],
 ): string[] {
   const remote = parts.absolute
     ? `${host.user}@${host.host}:${parts.path || "/"}`
     : `${host.user}@${host.host}:${parts.path}`;
-  const options = ["idmap=user", `port=${host.port}`, "reconnect"];
+  // accept-new keeps a first-time host from blocking on a host-key prompt:
+  // sshfs has no terminal here, so a prompt is an indefinite hang.
+  const options = ["idmap=user", `port=${host.port}`, "reconnect", "StrictHostKeyChecking=accept-new", ...extraOptions];
   if (host.identityFile) options.push(`IdentityFile=${host.identityFile.replace(/\//g, "\\")}`);
   return ["-o", options.join(","), remote, `${driveLetter}:`];
+}
+
+export interface SshfsMountResult {
+  /** The drive became available and the process was left running. */
+  ready: boolean;
+  /** Last stderr/stdout lines, for a precise error message. */
+  detail: string;
+}
+
+function killProcessTree(pid: number): void {
+  try {
+    // `child.kill()` on Windows leaves the real worker (the ssh child) alive, so
+    // a failed mount would keep its pipes open forever.
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 10_000 });
+  } catch { /* best effort */ }
+}
+
+/**
+ * Mount with `sshfs.exe` without waiting for it to exit.
+ *
+ * sshfs.exe is a long-lived FUSE/WinFsp process: it exits only when the mount
+ * is unmounted. Awaiting it (the previous behavior) always ended in a timeout
+ * that then killed the just-created mount, so every sshfs mount reported
+ * "code ?, timed out". Readiness is observed by polling the drive instead, and
+ * only a failed mount is killed.
+ */
+export async function startSshfsMount(params: {
+  binary: string;
+  args: string[];
+  driveLetter: string;
+  stdinText?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  probeDrive?: (driveLetter: string) => boolean;
+}): Promise<SshfsMountResult> {
+  const { spawn } = await import("node:child_process");
+  const { existsSync } = await import("node:fs");
+  const timeoutMs = params.timeoutMs ?? 20_000;
+  const probe = params.probeDrive ?? ((letter: string) => existsSync(`${letter}:\\`));
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(params.binary, params.args, {
+      windowsHide: true,
+      // Detached so the mount survives the HTTP request that created it.
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: params.env,
+    });
+  } catch (error) {
+    return { ready: false, detail: String(error) };
+  }
+  let output = "";
+  const collect = (chunk: unknown) => {
+    output = (output + String(chunk)).slice(-4_000);
+  };
+  child.stdout?.on("data", collect);
+  child.stderr?.on("data", collect);
+  let spawnError = "";
+  child.on("error", (error) => { spawnError = String(error); });
+  if (params.stdinText !== undefined) {
+    try {
+      child.stdin?.write(params.stdinText);
+      child.stdin?.end();
+    } catch { /* closed early */ }
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (spawnError) break;
+    if (probe(params.driveLetter)) {
+      // Keep the mount alive but stop pinning the event loop: the pipes keep
+      // draining (so sshfs never blocks on a full buffer) yet must not keep the
+      // server process referenced.
+      output = output.slice(-4_000);
+      child.stdin?.end();
+      // Node's child stdio streams are sockets on Windows and expose unref().
+      const unrefStream = (stream: unknown) => {
+        const handle = stream as { unref?: () => void } | null;
+        if (typeof handle?.unref === "function") handle.unref();
+      };
+      unrefStream(child.stdout);
+      unrefStream(child.stderr);
+      child.unref();
+      return { ready: true, detail: output.trim() };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  if (child.pid) killProcessTree(child.pid);
+  return {
+    ready: false,
+    detail: (spawnError || output).trim(),
+  };
 }
 
 /** UNC target for password auth (`\\sshfs\` prefix — credentials via net use). */
@@ -214,11 +435,19 @@ export function buildSshfsPasswordArgs(
   host: Pick<SshHostEntry, "host" | "port" | "user">,
   parts: RemotePathParts,
   driveLetter: string,
+  extraOptions: string[] = [],
 ): string[] {
   const remote = parts.absolute
     ? `${host.user}@${host.host}:${parts.path || "/"}`
     : `${host.user}@${host.host}:${parts.path}`;
-  const options = ["idmap=user", `port=${host.port}`, "reconnect", "password_stdin"];
+  const options = [
+    "idmap=user",
+    `port=${host.port}`,
+    "reconnect",
+    "password_stdin",
+    "StrictHostKeyChecking=accept-new",
+    ...extraOptions,
+  ];
   return ["-o", options.join(","), remote, `${driveLetter}:`];
 }
 

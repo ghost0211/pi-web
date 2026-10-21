@@ -1284,6 +1284,11 @@ function TextFileViewer({
   const metadata = isDeletedDiff
     ? t("files.deleted")
     : `${language} · ${lines.length} lines · ${formatSize(data!.size)}`;
+  // A diff that was asked for but cannot exist used to fall back to the source
+  // view silently, which looked like the diff feature was broken.
+  const diffNoteKey = requestedInitialDisplayMode === "diff" && gitDiffResolved && !hasGitDiff && gitDiff?.reason
+    ? `files.noDiff.${gitDiff.reason}`
+    : null;
 
   return (
     <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1306,6 +1311,11 @@ function TextFileViewer({
         </span>
 
         <span className="file-viewer-meta" title={metadata}>{metadata}</span>
+        {diffNoteKey && (
+          <span className="file-viewer-diff-note" style={{ fontSize: 11, color: "var(--text-dim)" }}>
+            {t(diffNoteKey)}
+          </span>
+        )}
         {!isDeletedDiff && (
           <span
             title={watching ? t("i18n.liveSync") : t("i18n.notWatching")}

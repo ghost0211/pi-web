@@ -2071,9 +2071,10 @@ export class AgentSessionWrapper {
     questions: Question[],
     toolCallId: string,
     signal?: AbortSignal,
+    title?: string,
   ): Promise<NormalizedAnswers | undefined> {
     return this.requestExtensionUi<NormalizedAnswers | undefined>(
-      { method: "questionnaire", questions, toolCallId },
+      { method: "questionnaire", questions, toolCallId, ...(title ? { title } : {}) },
       undefined,
       (response) => "answers" in response ? response.answers : undefined,
       undefined,
@@ -2804,10 +2805,10 @@ async function startRpcSessionGuarded(
       : [
           createPresentFilesExtension({ fallbackCwd: sessionCwd }),
           createAskUserQuestionExtension({
-            ask: (questions, toolCallId, signal) => {
+            ask: (questions, toolCallId, signal, title) => {
               const wrapper = questionnaireHost.wrapper;
               if (!wrapper) throw new Error("Questionnaire host is not ready");
-              return wrapper.requestQuestionnaire(questions, toolCallId, signal);
+              return wrapper.requestQuestionnaire(questions, toolCallId, signal, title);
             },
           }),
         ];

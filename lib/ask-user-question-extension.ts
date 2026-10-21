@@ -31,9 +31,15 @@ export const HOST_ASK_USER_QUESTION_EXTENSION_NAME = "pi-web-ask-user-question";
 export interface AskUserQuestionRuntime {
   /**
    * Show the questionnaire and resolve with the answers, or `undefined` when
-   * the user dismissed it / the run was aborted.
+   * the user dismissed it / the run was aborted. `title` is the model's optional
+   * heading and must reach the panel, or the request loses its context.
    */
-  ask(questions: Question[], toolCallId: string, signal?: AbortSignal): Promise<QuestionnaireAnswers | undefined>;
+  ask(
+    questions: Question[],
+    toolCallId: string,
+    signal?: AbortSignal,
+    title?: string,
+  ): Promise<QuestionnaireAnswers | undefined>;
 }
 
 export function createAskUserQuestionExtension(
@@ -58,6 +64,9 @@ export function createAskUserQuestionExtension(
         ].join(" "),
         promptSnippet: "ask the user a focused multiple-choice question when a decision cannot be inferred",
         promptGuidelines: [
+          // Models rarely reach for a brand-new tool on their own, so the trigger
+          // has to be spelled out as a situation, not just a capability.
+          "When the next step depends on a decision only the user can make (which environment to target, whether to overwrite or keep existing data, which schema or convention to follow), call ask_user_question instead of choosing one silently.",
           "Ask at most one questionnaire per decision point, and prefer one question over several.",
           "A dismissed questionnaire is a decline, not permission: do not immediately re-ask and do not assume an option.",
         ],
@@ -87,7 +96,7 @@ export function createAskUserQuestionExtension(
           if (!parsed) {
             throw new Error("Invalid questionnaire: check question count, option count, duplicate labels and text length");
           }
-          const answers = await runtime.ask(parsed.questions, toolCallId, signal);
+          const answers = await runtime.ask(parsed.questions, toolCallId, signal, parsed.title);
           if (!answers) {
             // A decline is information for the model, not an error to retry.
             throw new Error("The user dismissed the questionnaire. Do not re-ask; proceed conservatively or ask in plain text.");

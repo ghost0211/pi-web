@@ -187,18 +187,23 @@ async function createTrackedFilePatch(
 
 export async function getGitFileDiff(cwd: string, filePath: string): Promise<GitFileDiffResponse> {
   const repositoryRoot = await findRepositoryRoot(cwd);
-  if (!repositoryRoot || !isWithinPath(repositoryRoot, filePath)) return { supported: false };
+  if (!repositoryRoot) return { supported: false, reason: "not-a-repository" };
+  if (!isWithinPath(repositoryRoot, filePath)) return { supported: false, reason: "outside-repository" };
 
   const resolvedFilePath = path.resolve(filePath);
   const relativePath = toGitPath(path.relative(repositoryRoot, resolvedFilePath));
   const entries = await readStatusEntries(repositoryRoot);
   const entry = entries.find((candidate) => candidate.path === relativePath);
-  if (!entry) return { supported: false };
+  if (!entry) {
+    // Either the file matches HEAD exactly, or it is ignored (untracked files are
+    // reported by `--untracked-files=all`, ignored ones are not).
+    return { supported: false, reason: await isIgnored(repositoryRoot, relativePath) ? "ignored" : "unchanged" };
+  }
 
   const { status } = classifyGitStatus(entry);
   if (status === "deleted") {
     const patch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath);
-    if (!patch?.includes("\n@@ ")) return { supported: false };
+    if (!patch?.includes("\n@@ ")) return { supported: false, reason: "unchanged" };
     return { supported: true, status, patch };
   }
 
@@ -206,12 +211,13 @@ export async function getGitFileDiff(cwd: string, filePath: string): Promise<Git
   try {
     stat = fs.lstatSync(resolvedFilePath);
   } catch {
-    return { supported: false };
+    return { supported: false, reason: "not-found" };
   }
-  if (!stat.isFile() || stat.size > TEXT_PREVIEW_MAX_BYTES) return { supported: false };
+  if (!stat.isFile()) return { supported: false, reason: "unreadable" };
+  if (stat.size > TEXT_PREVIEW_MAX_BYTES) return { supported: false, reason: "too-large" };
 
   const currentBuffer = fs.readFileSync(resolvedFilePath);
-  if (hasNullByte(currentBuffer)) return { supported: false };
+  if (hasNullByte(currentBuffer)) return { supported: false, reason: "binary" };
   const newContent = currentBuffer.toString("utf8");
 
   let patch: string;
@@ -220,13 +226,26 @@ export async function getGitFileDiff(cwd: string, filePath: string): Promise<Git
   } else {
     const trackedPatch = await createTrackedFilePatch(repositoryRoot, relativePath, entry.originalPath);
     if (trackedPatch === null) {
-      if (status !== "added") return { supported: false };
+      if (status !== "added") return { supported: false, reason: "unchanged" };
       patch = createAddedFilePatch(relativePath, newContent);
     } else {
       patch = trackedPatch;
     }
   }
 
-  if (!patch.includes("\n@@ ")) return { supported: false };
+  if (!patch.includes("\n@@ ")) return { supported: false, reason: "unchanged" };
   return { supported: true, status, patch };
+}
+
+/** `git check-ignore --quiet` exits 0 when the path is ignored, 1 otherwise. */
+async function isIgnored(repositoryRoot: string, relativePath: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["-C", repositoryRoot, "check-ignore", "--quiet", "--", relativePath], {
+      timeout: GIT_TIMEOUT_MS,
+      env: { ...process.env, LC_ALL: "C" },
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }

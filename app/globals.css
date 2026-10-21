@@ -628,6 +628,11 @@ body {
   border: 1.5px solid var(--text-dim);
 }
 
+/* Recorded "in progress" from a finished turn: visible, but not live. */
+.kimi-dock-status.is-unfinished {
+  border: 1.5px dashed var(--text-dim);
+}
+
 @keyframes kimi-dock-spin { to { transform: rotate(360deg); } }
 
 .kimi-dock-status-icon {
@@ -675,6 +680,7 @@ body {
 .kimi-task-state.is-running { color: #2388ff; }
 .kimi-task-state.is-done { color: #37a36b; }
 .kimi-task-state.is-failed { color: #e25a5a; }
+.kimi-task-state.is-unfinished { color: var(--text-dim); }
 
 .kimi-task-panel.panel-progress .kimi-task-panel-body {
   padding: 8px 14px 12px;

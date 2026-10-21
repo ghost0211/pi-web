@@ -95,8 +95,9 @@ function statusFromResult(result: ToolResultMessage | undefined, running: boolea
   return result.isError ? "failed" : "done";
 }
 
-function StatusIcon({ status }: { status: DockStatus }) {
+function StatusIcon({ status }: { status: DockStatus | "unfinished" }) {
   if (status === "running") return <span className="kimi-dock-status is-running" aria-label="Running" />;
+  if (status === "unfinished") return <span className="kimi-dock-status is-unfinished" aria-label="Unfinished" />;
   if (status === "done") {
     return (
       <svg className="kimi-dock-status-icon is-done" viewBox="0 0 16 16" aria-label="Done">
@@ -239,7 +240,30 @@ export function KimiTaskDock({
   const visibleItems = filterItems(items, filter);
   const completed = data.progress.filter((item) => item.status === "done").length;
 
-  const isRunning = (kind: DockKind): boolean => data[kind].some((item) => item.status === "running");
+  // A plan's "in progress" item is a *recorded* status, not live activity: the
+  // model may end its turn without closing the list, and the entry then stays
+  // "running" in the transcript forever. Only call it running while the session
+  // actually is; otherwise show it as unfinished so the dock cannot look busy
+  // after the turn settled.
+  const sessionActive = agentRunning;
+  const displayStatus = (item: DockItem): DockStatus | "unfinished" =>
+    item.status === "running" && !sessionActive ? "unfinished" : item.status;
+
+  const isRunning = (kind: DockKind): boolean => {
+    if (!data[kind].some((item) => item.status === "running")) return false;
+    if (kind === "agent") {
+      // A subagent row is live when the server still lists that session as
+      // running; a bare tool call without a result only counts mid-turn.
+      return data.agent.some((item) => item.status === "running"
+        && (runningSessionIds.has(item.id) || sessionActive));
+    }
+    if (kind === "bash") {
+      // A pending shell command is live by definition; a recorded tool call
+      // without a result only counts while the turn is still running.
+      return Boolean(pendingBash) || sessionActive;
+    }
+    return sessionActive;
+  };
 
   // Running state must not add text or flex children to the pills: on phones
   // even a status dot (and its gap) can shift the whole row. Keep the status
@@ -261,10 +285,11 @@ export function KimiTaskDock({
     return t("dock.all");
   };
 
-  const statusLabel = (status: DockStatus): string => {
+  const statusLabel = (status: DockStatus | "unfinished"): string => {
     if (status === "done") return t("dock.done");
     if (status === "failed") return t("dock.failed");
     if (status === "running") return t("dock.running");
+    if (status === "unfinished") return t("dock.unfinished");
     return t("dock.queued");
   };
 
@@ -296,6 +321,7 @@ export function KimiTaskDock({
               </div>
             ) : visibleItems.map((item, index) => {
               const isAgentRow = active === "agent" && item.id && onOpenSession;
+              const shown = displayStatus(item);
               return (
                 <article
                   className={`kimi-task-row${isAgentRow ? " is-clickable" : ""}`}
@@ -308,13 +334,13 @@ export function KimiTaskDock({
                   }}
                   style={{ cursor: isAgentRow ? "pointer" : undefined }}
                 >
-                  <StatusIcon status={item.status} />
+                  <StatusIcon status={shown} />
                   <span className="kimi-task-index">{String(index + 1).padStart(2, "0")}</span>
                   <div className="kimi-task-copy">
                     <div className="kimi-task-title">{item.title}</div>
                     {item.detail && <div className="kimi-task-detail">{item.detail}</div>}
                   </div>
-                  <span className={`kimi-task-state is-${item.status}`}>{statusLabel(item.status)}</span>
+                  <span className={`kimi-task-state is-${shown}`}>{statusLabel(shown)}</span>
                 </article>
               );
             })}

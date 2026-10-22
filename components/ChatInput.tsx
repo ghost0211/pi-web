@@ -50,6 +50,22 @@ import { pickDesktopAttachmentPaths } from "@/lib/desktop";
 import { ThinkingLevelSelector } from "./ThinkingLevelSelector";
 import { AutoAdvanceControl } from "./AutoAdvanceControl";
 import type { AutoAdvanceConfig, AutoAdvanceState } from "@/lib/auto-advance-types";
+import { isAutoAdvanceActive } from "@/lib/auto-advance-types";
+import { ComposerToolsMenu, menuIconProps } from "./ComposerToolsMenu";
+import { ScheduleSendDialog } from "./ScheduleSendDialog";
+
+function formatScheduledTime(at: number): string {
+  const date = new Date(at);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const isTomorrow = date.toDateString() === tomorrow.toDateString();
+  const hhmm = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (sameDay) return hhmm;
+  if (isTomorrow) return `明天 ${hhmm}`;
+  return `${date.getMonth() + 1}/${date.getDate()} ${hhmm}`;
+}
 
 export { filterModelOptions } from "./ModelSelector";
 
@@ -88,6 +104,10 @@ interface Props {
   thinkingLevelMaps?: Record<string, Record<string, string | null>>;
   onStartAutoAdvance?: (config: AutoAdvanceConfig) => Promise<void>;
   onStopAutoAdvance?: () => Promise<void>;
+  /** Schedule a one-shot message for later. */
+  onScheduleSend?: (message: string, at: number) => void;
+  scheduledSend?: { at: number; message: string } | null;
+  onCancelScheduledSend?: () => void;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
   isCompacting?: boolean;
@@ -745,6 +765,7 @@ export function ContextUsageRing({
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, contextUsage, sessionStats, model, contextModel, isAutoModelSelection, modelNames, modelList, modelError, modelScopeWarnings, onModelChange, modelSwitching, fallbackModel, onFallbackModelChange, fallbackModelSwitching,
   autoAdvanceState, autoAdvanceBusy, thinkingLevels, thinkingLevelMaps, onStartAutoAdvance, onStopAutoAdvance,
+  onScheduleSend, scheduledSend, onCancelScheduledSend,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange, customToolNames, onCustomToolsChange, ephemeral, onEphemeralChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   fallbackThinkingLevel, onFallbackThinkingLevelChange, fallbackAvailableThinkingLevels, fallbackThinkingLevelMap,
@@ -807,6 +828,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const controlsTriggerRef = useRef<HTMLButtonElement>(null);
   const historyMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [autoAdvanceOpen, setAutoAdvanceOpen] = useState(false);
+  const [scheduleSendOpen, setScheduleSendOpen] = useState(false);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const slashCommandsRequestedRef = useRef(false);
@@ -2980,14 +3003,56 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               />
             )}
 
+            {(onStartAutoAdvance && onStopAutoAdvance) || onScheduleSend ? (
+              <ComposerToolsMenu
+                active={isAutoAdvanceActive(autoAdvanceState) || Boolean(scheduledSend)}
+                disabled={isCompacting || modelSwitching || fallbackModelSwitching}
+                items={[
+                  ...(onStartAutoAdvance && onStopAutoAdvance ? [{
+                    key: "auto-advance",
+                    label: t("chat.toolsAutoAdvance"),
+                    status: isAutoAdvanceActive(autoAdvanceState) ? t("autoAdvance.active", { round: autoAdvanceState?.round ?? 0 }) : undefined,
+                    icon: (
+                      <svg {...menuIconProps}><polygon points="5 3 19 12 5 21 5 3" /></svg>
+                    ),
+                    onSelect: () => setAutoAdvanceOpen(true),
+                  }] : []),
+                  ...(onScheduleSend ? [{
+                    key: "schedule-send",
+                    label: scheduledSend ? t("scheduleSend.cancelScheduled") : t("chat.toolsScheduleSend"),
+                    status: scheduledSend ? formatScheduledTime(scheduledSend.at) : undefined,
+                    icon: scheduledSend ? (
+                      <svg {...menuIconProps}><path d="m6 6 12 12M18 6 6 18" /></svg>
+                    ) : (
+                      <svg {...menuIconProps}><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15.5 13.5" /></svg>
+                    ),
+                    onSelect: () => {
+                      if (scheduledSend) onCancelScheduledSend?.();
+                      else setScheduleSendOpen(true);
+                    },
+                  }] : []),
+                ]}
+              />
+            ) : null}
             {onStartAutoAdvance && onStopAutoAdvance && (
               <AutoAdvanceControl
+                dialogOnly
+                open={autoAdvanceOpen}
+                onOpenChange={setAutoAdvanceOpen}
                 state={autoAdvanceState} models={modelOptions}
                 thinkingLevels={thinkingLevels}
                 thinkingLevelMaps={thinkingLevelMaps}
                 onStart={onStartAutoAdvance} onStop={onStopAutoAdvance}
                 busy={autoAdvanceBusy}
                 disabled={isCompacting || modelSwitching || fallbackModelSwitching}
+              />
+            )}
+            {onScheduleSend && (
+              <ScheduleSendDialog
+                open={scheduleSendOpen}
+                onOpenChange={setScheduleSendOpen}
+                initialMessage={value}
+                onSubmit={({ at, message }) => onScheduleSend(message, at)}
               />
             )}
             {!isStreaming && onCompact && (

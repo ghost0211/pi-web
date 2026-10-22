@@ -38,6 +38,10 @@ export interface AutoAdvanceControlProps {
   onStop: () => Promise<void>;
   className?: string;
   style?: CSSProperties;
+  /** Render only the configuration dialog (the trigger button lives elsewhere). */
+  dialogOnly?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 function getModelId(option: ModelSelectorOption): string { return option.modelId; }
@@ -53,10 +57,23 @@ export function AutoAdvanceControl({
   onStop,
   className,
   style,
+  dialogOnly = false,
+  open: controlledOpen,
+  onOpenChange,
 }: AutoAdvanceControlProps) {
   const { t } = useI18n();
 
-  const [isOpen, setIsOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isOpen = dialogOnly ? Boolean(controlledOpen) : internalOpen;
+  const setIsOpen = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+    if (dialogOnly) {
+      const value = typeof next === "function" ? next(Boolean(controlledOpen)) : next;
+      onOpenChange?.(value);
+    } else {
+      setInternalOpen(next);
+    }
+  }, [dialogOnly, controlledOpen, onOpenChange]);
+
   const [goal, setGoal] = useState(state?.config?.goal ?? "");
   const [scope, setScope] = useState(state?.config?.scope ?? "");
   const [selectedModel, setSelectedModel] = useState<{ provider: string; modelId: string } | null>(
@@ -149,7 +166,7 @@ export function AutoAdvanceControl({
     if (isStopping) return;
     setIsOpen(false);
     setError(null);
-  }, [isStopping]);
+  }, [isStopping, setIsOpen]);
 
   // Focus restore and autofocus
   useEffect(() => {
@@ -291,38 +308,39 @@ export function AutoAdvanceControl({
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={triggerDisabled}
-        aria-haspopup="dialog"
-        aria-expanded={isOpen}
-        onClick={() => setIsOpen((prev) => !prev)}
-        title={triggerLabel}
-        className={className}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 5,
-          padding: "3px 8px",
-          borderRadius: 5,
-          fontSize: 11,
-          maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere",
-          border: `1px solid ${isActive ? "color-mix(in srgb, var(--accent) 50%, transparent)" : "var(--border)"}`,
-          background: isActive ? "color-mix(in srgb, var(--accent) 15%, transparent)" : "none",
-          color: isActive ? "var(--accent)" : "var(--text-muted)",
-          cursor: triggerDisabled ? "not-allowed" : "pointer",
-          opacity: triggerDisabled ? 0.6 : 1,
-          transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
-          ...style,
-        }}
-      >
-        <svg
-          width="11"
-          height="11"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
+      {!dialogOnly && (
+        <button
+          ref={triggerRef}
+          type="button"
+          disabled={triggerDisabled}
+          aria-haspopup="dialog"
+          aria-expanded={isOpen}
+          onClick={() => setIsOpen((prev) => !prev)}
+          title={triggerLabel}
+          className={className}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            padding: "3px 8px",
+            borderRadius: 5,
+            fontSize: 11,
+            maxWidth: "100%", minWidth: 0, overflowWrap: "anywhere",
+            border: `1px solid ${isActive ? "color-mix(in srgb, var(--accent) 50%, transparent)" : "var(--border)"}`,
+            background: isActive ? "color-mix(in srgb, var(--accent) 15%, transparent)" : "none",
+            color: isActive ? "var(--accent)" : "var(--text-muted)",
+            cursor: triggerDisabled ? "not-allowed" : "pointer",
+            opacity: triggerDisabled ? 0.6 : 1,
+            transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
+            ...style,
+          }}
+        >
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -332,6 +350,7 @@ export function AutoAdvanceControl({
         </svg>
         <span>{triggerLabel}</span>
       </button>
+      )}
 
       {isOpen && typeof document !== "undefined" && createPortal(
         <div

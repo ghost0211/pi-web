@@ -2625,6 +2625,52 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     await sendStreamingPrompt(message, "followUp", images);
   }, [sendStreamingPrompt]);
 
+  const [scheduledSend, setScheduledSend] = useState<{ at: number; message: string } | null>(null);
+  const scheduledSendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduledSendSessionRef = useRef<string | null>(null);
+
+  const cancelScheduledSend = useCallback(() => {
+    if (scheduledSendTimerRef.current) clearTimeout(scheduledSendTimerRef.current);
+    scheduledSendTimerRef.current = null;
+    scheduledSendSessionRef.current = null;
+    setScheduledSend(null);
+  }, []);
+
+  // Fire the scheduled message when its time comes. Uses the live session id
+  // captured at schedule time, falling back to the current one if unchanged.
+  const handleScheduleSend = useCallback((message: string, at: number) => {
+    if (scheduledSendTimerRef.current) clearTimeout(scheduledSendTimerRef.current);
+    const sid = sessionIdRef.current;
+    scheduledSendSessionRef.current = sid;
+    setScheduledSend({ at, message });
+    const delay = Math.max(0, at - Date.now());
+    scheduledSendTimerRef.current = setTimeout(() => {
+      scheduledSendTimerRef.current = null;
+      setScheduledSend(null);
+      // Only deliver while the same conversation is still open.
+      if (scheduledSendSessionRef.current !== sessionIdRef.current) return;
+      const running = agentRunningRef.current || bashRunningRef.current;
+      if (running) {
+        void sendStreamingPrompt(message, "followUp");
+      } else {
+        void handleSend(message);
+      }
+    }, delay);
+  }, [sendStreamingPrompt, handleSend]);
+
+  // Cancel the timer when the session changes or the hook unmounts.
+  const activeSessionId = session?.id ?? null;
+  useEffect(() => {
+    return () => {
+      if (scheduledSendTimerRef.current) {
+        clearTimeout(scheduledSendTimerRef.current);
+        scheduledSendTimerRef.current = null;
+        setScheduledSend(null);
+        scheduledSendSessionRef.current = null;
+      }
+    };
+  }, [activeSessionId]);
+
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -2981,6 +3027,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, contextModel, modelSwitching, sessionStats,
     autoAdvanceState, autoAdvanceBusy, handleStartAutoAdvance, handleStopAutoAdvance,
+    scheduledSend, handleScheduleSend, cancelScheduledSend,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     extensionQuestionnaire, respondToQuestionnaire,

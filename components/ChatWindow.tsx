@@ -219,6 +219,7 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
     extensionQuestionnaire, respondToQuestionnaire,
     isAutoModelSelection,
     autoAdvanceState, autoAdvanceBusy, handleStartAutoAdvance, handleStopAutoAdvance,
+    scheduledSend, handleScheduleSend, cancelScheduledSend,
     agentPhase,
     isNew,
     showScrollToBottom,
@@ -633,6 +634,9 @@ export function ChatWindow({ session, searchJump, sessionRunning, readOnly = fal
       thinkingLevelMaps={modelThinkingLevelMaps}
       onStartAutoAdvance={!isReadOnlyConversation && session ? handleStartAutoAdvance : undefined}
       onStopAutoAdvance={session ? handleStopAutoAdvance : undefined}
+      onScheduleSend={!isReadOnlyConversation && (session || isNew) ? handleScheduleSend : undefined}
+      scheduledSend={scheduledSend}
+      onCancelScheduledSend={cancelScheduledSend}
       onCompact={!isReadOnlyConversation && (session || isNew) ? handleCompact : undefined}
       onAbortCompaction={isReadOnlyConversation ? undefined : handleAbortCompaction}
       isCompacting={isCompacting}

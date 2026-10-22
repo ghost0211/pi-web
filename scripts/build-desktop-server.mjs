@@ -26,19 +26,21 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   cpSync,
+  copyFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import {
@@ -308,6 +310,11 @@ async function ensureNodeRuntime() {
       console.log(`build-desktop-server: archive extracted at ${extractedRoot} (PI_DESKTOP_SKIP_NODE_COPY=1)`);
     } else {
       cpSync(extractedRoot, nodeResourceDir, { recursive: true });
+      // The POSIX Node distribution ships `bin/npm`, `bin/npx` and
+      // `bin/corepack` as symlinks into `../lib/node_modules/...`. Materialize
+      // them as real files — both Tauri's resource expander and any statSync()
+      // walk fail on the dangling/absolute links a verbatim copy leaves behind.
+      materializeSymlinks(nodeResourceDir);
       // A copy over a filesystem boundary can drop the executable bit on POSIX.
       if (process.platform !== "win32") chmodSync(nodeBinary, 0o755);
       writeFileSync(versionFile, `${DESKTOP_NODE_VERSION}\n`);
@@ -358,14 +365,51 @@ if (onlyResourceManifest) {
  * resource list always matches the platform's payload. The checked-in
  * `resources` array is a placeholder that this function replaces.
  */
+/**
+ * Replace every symlink under `root` with a real copy of its target. The POSIX
+ * Node distribution ships `bin/npm`, `bin/npx` and `bin/corepack` as symlinks
+ * into `../lib/node_modules/...`; a verbatim copy leaves links that Tauri's
+ * resource expander and any statSync() walk cannot follow. Targets are resolved
+ * relative to the link's directory, with a fallback that re-anchors an absolute
+ * target (e.g. pointing at the now-deleted extraction dir) back under `root`.
+ */
+function materializeSymlinks(root) {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const full = join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      const linkTarget = readlinkSync(full);
+      let source = isAbsolute(linkTarget) ? linkTarget : resolve(dirname(full), linkTarget);
+      if (!existsSync(source)) {
+        // Re-anchor: find the `node-v<ver>-<platform>/` segment of the absolute
+        // target and map the remainder back under the copied tree.
+        const match = linkTarget.match(/node-v[\d.]+-[a-z]+-[a-z0-9]+[\\/](.+)$/i);
+        if (match) source = join(root, match[1].split("/").join(sep));
+      }
+      rmSync(full, { force: true });
+      if (existsSync(source)) {
+        copyFileSync(source, full);
+        try { chmodSync(full, statSync(source).mode); } catch { /* best effort */ }
+      }
+      continue;
+    }
+    if (entry.isDirectory()) materializeSymlinks(full);
+  }
+}
+
 function listFilesRecursive(root) {
   const out = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const full = join(root, entry.name);
-    // Dirent.isDirectory() follows nothing; a symlink to a directory should be
-    // materialized as its target tree, so resolve through statSync.
-    const isDirectory = entry.isDirectory() || (entry.isSymbolicLink() && statSync(full).isDirectory());
-    if (isDirectory) out.push(...listFilesRecursive(full));
+    // Resolve through statSync so a symlink to a directory is materialized as
+    // its target tree; a dangling symlink is skipped rather than crashing the
+    // whole manifest.
+    let stats;
+    try {
+      stats = statSync(full);
+    } catch {
+      continue;
+    }
+    if (stats.isDirectory()) out.push(...listFilesRecursive(full));
     else out.push(full);
   }
   return out;

@@ -216,8 +216,10 @@ jobs:
       - name: Generate the multi-platform updater manifest
         run: |
           mkdir -p dist/manifest
+          shopt -s nullglob
           cp dist/windows/*.exe* dist/manifest/ 2>/dev/null || true
           cp dist/linux/*.AppImage* dist/manifest/ 2>/dev/null || true
+          ls -la dist/manifest
           node scripts/create-desktop-update-manifest.mjs dist/manifest
 
       - name: Publish signed desktop release
@@ -226,13 +228,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           version="${GITHUB_REF_NAME#desktop-v}"
           win="dist/windows/Pi Web Desktop_${version}_x64-setup.exe"
           linux_app=$(ls dist/linux/*x86_64*.AppImage 2>/dev/null | head -1 || true)
+          debs=(dist/linux/*.deb)
           manifest="dist/manifest/desktop-latest.json"
           test -s "$win" && test -s "$win.sig"
           test -n "$linux_app" && test -s "$linux_app.sig"
           test -s "$manifest"
+          test "${#debs[@]}" -gt 0 || { echo 'no .deb found in dist/linux' >&2; ls -la dist/linux; exit 1; }
           notes_file="docs/releases/v${version}.md"
           notes_args=(--generate-notes)
           if test -s "$notes_file"; then
@@ -246,7 +251,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" \
               "$win" "$win.sig" \
               "$linux_app" "$linux_app.sig" \
-              dist/linux/*.deb \
+              "${debs[@]}" \
               "$manifest" --clobber
             if test -s "$notes_file"; then
               gh release edit "$GITHUB_REF_NAME" --notes-file "$notes_file"
@@ -255,7 +260,7 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               "$win" "$win.sig" \
               "$linux_app" "$linux_app.sig" \
-              dist/linux/*.deb \
+              "${debs[@]}" \
               "$manifest" \
               --draft --verify-tag --title "Pi Web Desktop ${version}" "${notes_args[@]}"
           fi

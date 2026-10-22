@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "pi-web-desktop"
-version = "0.9.76"
+version = "0.9.77"
 dependencies = [
  "open",
  "serde_json",

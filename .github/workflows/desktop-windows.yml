@@ -93,7 +93,7 @@ jobs:
         shell: pwsh
         run: |
           if (-not $env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Missing TAURI_SIGNING_PRIVATE_KEY Actions secret; refusing to publish an unsigned updater.' }
-          npm run desktop:build
+          npm run desktop:build -- --verbose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Tauri downloads NSIS during the build. Require it here so the real
@@ -157,7 +157,27 @@ jobs:
             echo 'Missing TAURI_SIGNING_PRIVATE_KEY Actions secret; refusing to publish an unsigned updater.' >&2
             exit 1
           fi
-          npm run desktop:build
+          npm run desktop:build -- --verbose
+
+      # Diagnose linuxdeploy independently of the Tauri wrapper, which swallows
+      # its stderr. Run the downloaded linuxdeploy on a minimal AppDir so the
+      # real error (path with spaces, missing libs, FUSE, etc.) is visible.
+      - name: Diagnose linuxdeploy
+        if: failure()
+        run: |
+          set -x
+          LD=$(find "$HOME/.cache/tauri" -name 'linuxdeploy-x86_64.AppImage' | head -1)
+          echo "linuxdeploy: $LD"
+          chmod +x "$LD" || true
+          # linuxdeploy AppImages need --appimage-extract-and-run without FUSE.
+          "$LD" --appimage-extract-and-run --version || true
+          rm -rf /tmp/ldtest && mkdir -p "/tmp/ldtest/Pi Web Desktop.AppDir/usr/bin"
+          printf '#!/bin/sh\necho hi\n' > "/tmp/ldtest/Pi Web Desktop.AppDir/usr/bin/pi-web-desktop"
+          chmod +x "/tmp/ldtest/Pi Web Desktop.AppDir/usr/bin/pi-web-desktop"
+          printf '[Desktop Entry]\nType=Application\nName=Pi Web Desktop\nExec=pi-web-desktop\nIcon=pi-web-desktop\nCategories=Utility;\n' > "/tmp/ldtest/Pi Web Desktop.AppDir/pi-web-desktop.desktop"
+          cp src-tauri/icons/128x128.png "/tmp/ldtest/Pi Web Desktop.AppDir/pi-web-desktop.png" || true
+          cd /tmp/ldtest
+          "$LD" --appimage-extract-and-run --appdir "Pi Web Desktop.AppDir" --output appimage 2>&1 | tail -40
 
       - name: Upload Linux bundles and updater artifacts
         uses: actions/upload-artifact@v4

@@ -91,14 +91,31 @@ test("project menu separates non-destructive visibility, bulk archive, and manag
     manageSessions: () => calls.push("manage"),
     archiveSessions: () => calls.push("archive"),
     removeProject: () => calls.push("remove-entry"),
+    togglePin: () => calls.push("pin"),
+    pinned: false,
     sessionCount: 3,
   }, (key) => key);
-  assert.deepEqual(items.map((item) => item.key), ["new-session", "copy-path", "manage-sessions", "archive-sessions", "remove-project"]);
-  assert.equal(items[3].label, "sessionSidebar.archiveProjectSessions (3)");
-  assert.equal(items[4].label, "sessionSidebar.removeProjectEntry");
+  assert.deepEqual(items.map((item) => item.key), ["new-session", "pin-project", "copy-path", "manage-sessions", "archive-sessions", "remove-project"]);
+  assert.equal(items[1].label, "sessionSidebar.pinProject");
+  assert.equal(items[4].label, "sessionSidebar.archiveProjectSessions (3)");
+  assert.equal(items[5].label, "sessionSidebar.removeProjectEntry");
   assert.ok(items.every((item) => !item.danger));
   for (const item of items) item.onSelect();
-  assert.deepEqual(calls, ["new", "copy", "manage", "archive", "remove-entry"]);
+  assert.deepEqual(calls, ["new", "pin", "copy", "manage", "archive", "remove-entry"]);
+
+  const pinnedItems = projectMenuItems({
+    newSession: () => {}, copyPath: () => {}, manageSessions: () => {}, archiveSessions: () => {},
+    removeProject: () => {}, togglePin: () => {}, pinned: true, sessionCount: 0,
+  }, (key) => key);
+  assert.equal(pinnedItems[1].label, "sessionSidebar.unpinProject");
+});
+
+test("pinned projects sort before the rest while preserving recency within each group", () => {
+  assert.match(source, /pinnedProjects\s*=\s*useMemo/);
+  assert.match(source, /state\.pinned && !state\.removed/);
+  assert.match(source, /visible\.filter\(\(p\) => pinnedProjects\.has\(p\.key\)\), \.\.\.visible\.filter\(\(p\) => !pinnedProjects\.has\(p\.key\)\)/);
+  // Pinning an entry also makes it visible again.
+  assert.match(source, /type: "project", key: projectKey, root, pinned: true, removed: false/);
 });
 
 test("row model filters archives, orders pins, and fails closed during migration", () => {

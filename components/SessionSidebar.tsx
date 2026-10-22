@@ -321,6 +321,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     .filter(([, state]) => state.status === "archived").map(([id]) => id)), [managementState]);
   const removedProjects = useMemo(() => new Set(Object.entries(managementState.projects)
     .filter(([, state]) => state.removed).map(([key]) => key)), [managementState]);
+  const pinnedProjects = useMemo(() => new Set(Object.entries(managementState.projects)
+    .filter(([, state]) => state.pinned && !state.removed).map(([key]) => key)), [managementState]);
   const runManagementAction = useCallback(async (action: SessionManagementAction) => {
     if (!managementReady || managementBusyRef.current) return;
     managementBusyRef.current = true;
@@ -949,6 +951,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     void runManagementAction({ type: "project", key: projectKey, root, removed: true });
   }, [runManagementAction]);
 
+  const handleTogglePinProject = useCallback((projectKey: string, root: string, pinned: boolean) => {
+    // Pinning an entry also makes it visible again; unpinning only clears the flag.
+    void runManagementAction(pinned
+      ? { type: "project", key: projectKey, root, pinned: false }
+      : { type: "project", key: projectKey, root, pinned: true, removed: false });
+  }, [runManagementAction]);
+
   const handleArchiveProject = useCallback((projectKey: string) => {
     const ids = allSessions.filter((session) => workspaceKeyOf(session) === projectKey
       && !session.transient && !archivedSessionIds.has(session.id)).map((session) => session.id);
@@ -1018,8 +1027,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (selectedProject && !list.some((p) => p.key === selectedProject.key)) {
       list.unshift({ key: selectedProject.key, root: selectedProject.root });
     }
-    return list.filter((p) => !removedProjects.has(p.key));
-  }, [recentProjects, selectedProject, removedProjects]);
+    const visible = list.filter((p) => !removedProjects.has(p.key));
+    // Pinned projects first (in their existing recency order), then the rest.
+    return [...visible.filter((p) => pinnedProjects.has(p.key)), ...visible.filter((p) => !pinnedProjects.has(p.key))];
+  }, [recentProjects, selectedProject, removedProjects, pinnedProjects]);
 
   // Per-project activity counts (running / unread) for the workspace selector.
   // Uses the same stable server key as the project list and filtering.
@@ -1832,6 +1843,23 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                           >
                             {getFileName(project.root) || displayCwd(project.root, homeDir)}
                           </span>
+                          {pinnedProjects.has(project.key) && (
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-label={t("sessionSidebar.pinProject")}
+                              style={{ flexShrink: 0, color: "var(--accent)" }}
+                            >
+                              <path d="M12 17v5" />
+                              <path d="M9 10.76a2 2 0 0 1-1.11 1.66L5 14.1V15a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.9l-2.89-1.68A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+                            </svg>
+                          )}
                         </div>
 
                         <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
@@ -2005,6 +2033,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               manageSessions: () => openSessionManagement({ filter: "all", projectKey: projectMenu.key }),
               archiveSessions: () => handleArchiveProject(projectMenu.key),
               removeProject: () => handleRemoveProject(projectMenu.key, projectMenu.root),
+              togglePin: () => handleTogglePinProject(projectMenu.key, projectMenu.root, pinnedProjects.has(projectMenu.key)),
+              pinned: pinnedProjects.has(projectMenu.key),
               sessionCount: allSessions.filter((session) => workspaceKeyOf(session) === projectMenu.key
                 && !session.transient && !archivedSessionIds.has(session.id)).length,
               disabled: managementBusy || !managementReady,
@@ -2137,6 +2167,8 @@ export function projectMenuItems(
     manageSessions: () => void;
     archiveSessions: () => void;
     removeProject: () => void;
+    togglePin: () => void;
+    pinned: boolean;
     sessionCount: number;
     disabled?: boolean;
   },
@@ -2153,6 +2185,13 @@ export function projectMenuItems(
         </svg>
       ),
       onSelect: handlers.newSession,
+    },
+    {
+      key: "pin-project",
+      label: t(handlers.pinned ? "sessionSidebar.unpinProject" : "sessionSidebar.pinProject"),
+      icon: pinIcon,
+      disabled: handlers.disabled,
+      onSelect: handlers.togglePin,
     },
     {
       key: "copy-path",

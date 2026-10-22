@@ -8,6 +8,7 @@ export interface ManagedSessionState {
 
 export interface ManagedProjectState {
   removed: boolean;
+  pinned?: boolean;
   root?: string;
 }
 
@@ -28,7 +29,7 @@ export type SessionManagementAction =
       /** Explicit restoration also makes these project entries visible. */
       restoreProjects?: string[];
     }
-  | { type: "project"; key: string; removed: boolean; root?: string };
+  | { type: "project"; key: string; removed?: boolean; pinned?: boolean; root?: string };
 
 export interface LegacySessionManagementMigration {
   migrationId: string;

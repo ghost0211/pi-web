@@ -275,6 +275,7 @@ function parseStateInner(source: string): SessionManagementState {
   for (const [key, value] of projectEntries) {
     validateProjectKey(key);
     if (!isRecord(value) || typeof value.removed !== "boolean") invalid(`Invalid project management entry for ${key}`);
+    if (value.pinned !== undefined && typeof value.pinned !== "boolean") invalid(`Invalid pinned flag for project ${key}`);
     validateOptionalRoot(value.root);
   }
   const migrationIds = parsed.migrationIds.map((id) => validateSessionId(id, "migration id"));
@@ -300,6 +301,13 @@ function readLockedState(path: string, io: SessionManagementStoreDependencies): 
 
 function cloneState(state: SessionManagementState): SessionManagementState {
   return JSON.parse(JSON.stringify(state)) as SessionManagementState;
+}
+
+function omitUndefinedProjectFields(entry: ManagedProjectState): ManagedProjectState {
+  const result = { ...entry };
+  if (result.pinned === undefined) delete result.pinned;
+  if (result.root === undefined) delete result.root;
+  return result;
 }
 
 function writeNextState(
@@ -374,11 +382,21 @@ function validateAction(value: unknown): SessionManagementAction {
     };
   }
   if (value.type === "project") {
-    exactKeys(value, ["type", "key", "removed", "root"], ["type", "key", "removed"]);
+    exactKeys(value, ["type", "key", "removed", "pinned", "root"], ["type", "key"]);
     const key = validateProjectKey(value.key);
-    if (typeof value.removed !== "boolean") invalid("removed must be a boolean");
+    if (value.removed !== undefined && typeof value.removed !== "boolean") invalid("removed must be a boolean");
+    if (value.pinned !== undefined && typeof value.pinned !== "boolean") invalid("pinned must be a boolean");
+    if (value.removed === undefined && value.pinned === undefined && value.root === undefined) {
+      invalid("Project action has no requested change");
+    }
     const root = validateOptionalRoot(value.root);
-    return { type: "project", key, removed: value.removed as boolean, ...(root !== undefined ? { root } : {}) };
+    return {
+      type: "project",
+      key,
+      ...(value.removed !== undefined ? { removed: value.removed as boolean } : {}),
+      ...(value.pinned !== undefined ? { pinned: value.pinned as boolean } : {}),
+      ...(root !== undefined ? { root } : {}),
+    };
   }
   invalid("Unknown session management action type");
 }
@@ -405,13 +423,18 @@ function applyAction(state: SessionManagementState, action: SessionManagementAct
     }
   } else {
     const previous = next.projects[action.key];
+    const removed = action.removed ?? previous?.removed ?? false;
+    const pinned = action.pinned ?? previous?.pinned;
     const root = action.root ?? previous?.root;
-    if (previous?.removed === action.removed && previous?.root === root) return { next: state, changed: false };
-    next.projects[action.key] = {
+    if (previous?.removed === removed && previous?.pinned === pinned && previous?.root === root) {
+      return { next: state, changed: false };
+    }
+    next.projects[action.key] = omitUndefinedProjectFields({
       ...(previous ?? {}),
-      removed: action.removed,
+      removed,
+      pinned,
       ...(root !== undefined ? { root } : {}),
-    };
+    });
     changed = true;
   }
   if (!changed) return { next: state, changed: false };

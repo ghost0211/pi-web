@@ -14,8 +14,8 @@ test("anchors the mobile reasoning menu to its left edge", () => {
   );
 });
 
-test("keeps the mobile reason menu labels folded behind the more-controls button", () => {
-  assert.match(chatInputSource, /showLabel=\{!isMobile \|\| controlsMenuOpen\}/);
+test("keeps the mobile reason menu labels folded behind the more-controls button when streaming", () => {
+  assert.match(chatInputSource, /showLabel=\{!isMobile \|\| isStreaming\}/);
   assert.match(selectorSource, /\{showLabel && <span>/);
   assert.doesNotMatch(chatInputSource, /thinkingDropdownOpen/);
 });

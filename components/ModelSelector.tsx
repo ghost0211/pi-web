@@ -145,6 +145,7 @@ export function ModelSelector({
     setFilter("");
   }, [locked, hasFallbackUi, fallbackLocked]);
 
+  const isMobileSheet = isMobile && variant !== "field";
   const buttonStyle: CSSProperties = variant === "field"
     ? {
         display: "flex",
@@ -168,9 +169,10 @@ export function ModelSelector({
         alignItems: "center",
         justifyContent: isMobile ? "flex-start" : undefined,
         gap: 6,
-        width: isMobile ? "100%" : undefined,
-        maxWidth: isMobile ? "100%" : 220,
-        minHeight: 28,
+        width: isMobileSheet ? undefined : isMobile ? "100%" : undefined,
+        minWidth: 0,
+        maxWidth: isMobileSheet ? undefined : isMobile ? "100%" : 220,
+        minHeight: isMobileSheet ? 32 : isMobile ? 32 : 28,
         padding: isMobile ? "0 8px" : "1px 10px",
         overflow: "hidden",
         border: "1px solid var(--border)",
@@ -195,7 +197,7 @@ export function ModelSelector({
     <div
       ref={rootRef}
       className={`model-selector is-${variant}${locked ? " is-disabled" : ""}`}
-      style={{ position: "relative", width: variant === "field" || isMobile ? "100%" : undefined, minWidth: 0, flex: variant === "toolbar" && isMobile ? "1 1 auto" : undefined }}
+      style={{ position: "relative", width: variant === "field" || isMobile && !isMobileSheet ? "100%" : undefined, minWidth: 0, flex: variant === "toolbar" && isMobile && !isMobileSheet ? "1 1 auto" : undefined }}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || !open) return;
         event.preventDefault();

@@ -2843,14 +2843,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
           {/* RIGHT: thinking + tools preset + compact + sound (idle) | Stop + sound (streaming) */}
           <div ref={controlsMenuRef} style={{
-            flex: "0 0 auto",
+            flex: isMobile && !isStreaming ? "1 1 auto" : "0 0 auto",
+            minWidth: 0,
             display: "flex",
             alignItems: "center",
             justifyContent: "flex-end",
             position: "relative",
             marginLeft: isMobile ? 0 : "auto",
           }}>
-            {isMobile && (
+            {isMobile && isStreaming && (
               <button
                 ref={controlsTriggerRef}
                 data-composer-more="true"
@@ -2897,6 +2898,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             )}
             <div
               className={isMobile ? "mobile-composer-controls" : undefined}
+              data-mobile-inline={isMobile && !isStreaming ? "true" : undefined}
               role={isMobile ? "group" : undefined}
               aria-label={isMobile ? t("chat.moreControls") : undefined}
               onKeyDown={(event) => {
@@ -2906,10 +2908,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 requestAnimationFrame(() => controlsTriggerRef.current?.focus({ preventScroll: true }));
               }}
               style={{
-              display: isMobile ? (controlsMenuOpen ? "flex" : "none") : "flex",
+              display: isMobile ? (isStreaming ? (controlsMenuOpen ? "flex" : "none") : "flex") : "flex",
               alignItems: "center",
               gap: isMobile ? 1 : 2,
-              ...(isMobile ? {
+              ...(isMobile && isStreaming ? {
                 position: "absolute",
                 right: 0,
                 bottom: "calc(100% + 8px)",
@@ -2924,6 +2926,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 background: "color-mix(in srgb, var(--bg-panel) 92%, var(--bg))",
                 boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
                 backdropFilter: "blur(10px)",
+              } : isMobile ? {
+                flexWrap: "nowrap",
+                overflow: "hidden",
               } : null),
             }}>
             <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={contextModel ?? model} modelList={modelList} compactResult={compactResult} />
@@ -2971,7 +2976,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 fallbackModel={fallbackModel} fallbackLevel={fallbackThinkingLevel}
                 onFallbackChange={onFallbackThinkingLevelChange} fallbackAvailableLevels={fallbackAvailableThinkingLevels} fallbackLevelMap={fallbackThinkingLevelMap}
                 disabled={isStreaming || isCompacting || modelSwitching || fallbackModelSwitching}
-                isMobile={isMobile} showLabel={!isMobile || controlsMenuOpen}
+                showLabel={!isMobile || isStreaming}
               />
             )}
 
@@ -3016,12 +3021,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                    aria-label={isCompacting ? t("chat.stopCompaction") : t("chat.compactContext")}
                 >
                   {isCompacting ? (
-                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.compacting")}</span>}</>
+                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg>{(!isMobile || isStreaming) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.compacting")}</span>}</>
                   ) : (
                     <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
                       <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
-                    </svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.compact")}</span>}</>
+                    </svg>{(!isMobile || isStreaming) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.compact")}</span>}</>
                   )}
                 </button>
               </div>

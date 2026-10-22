@@ -2405,15 +2405,40 @@ span.token.table {
 }
 
 /* Let the model take its own row; secondary composer actions wrap below it. */
-.mobile-composer-controls > div:first-child { flex: 0 0 44px; }
-.mobile-composer-controls .model-selector { flex: 1 1 calc(100% - 52px) !important; }
-.mobile-composer-controls > button,
-.mobile-composer-controls > div > button,
-.mobile-composer-controls .model-selector > button {
+/* The idle mobile composer inlines its controls: keep the model label in one
+   flexible chip; other controls stay icon-only. */
+.mobile-composer-controls[data-mobile-inline="true"] {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.mobile-composer-controls[data-mobile-inline="true"] .model-selector {
+  flex: 0 1 auto !important;
+  min-width: 0;
+  max-width: none !important;
+}
+.mobile-composer-controls[data-mobile-inline="true"] .model-selector > button {
+  min-height: 32px !important;
+  min-width: 0;
+}
+.mobile-composer-controls[data-mobile-inline="true"] > button,
+.mobile-composer-controls[data-mobile-inline="true"] > div > button {
+  min-width: 32px !important;
+  min-height: 32px !important;
+}
+.mobile-composer-controls[data-mobile-inline="true"] > button span,
+.mobile-composer-controls[data-mobile-inline="true"] > div > button span {
+  display: none !important;
+}
+/* The streaming sheet keeps the original layout. */
+.mobile-composer-controls:not([data-mobile-inline="true"]) > div:first-child { flex: 0 0 44px; }
+.mobile-composer-controls:not([data-mobile-inline="true"]) .model-selector { flex: 1 1 calc(100% - 52px) !important; }
+.mobile-composer-controls:not([data-mobile-inline="true"]) > button,
+.mobile-composer-controls:not([data-mobile-inline="true"]) > div > button,
+.mobile-composer-controls:not([data-mobile-inline="true"]) .model-selector > button {
   min-height: 44px !important;
 }
-.mobile-composer-controls > button,
-.mobile-composer-controls > div:not(.model-selector) > button { min-width: 44px !important; }
+.mobile-composer-controls:not([data-mobile-inline="true"]) > button,
+.mobile-composer-controls:not([data-mobile-inline="true"]) > div:not(.model-selector) > button { min-width: 44px !important; }
 
 /* Mobile sidebar: slide in/out as overlay */
 @media (max-width: 640px) {

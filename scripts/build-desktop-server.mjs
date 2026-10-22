@@ -235,7 +235,38 @@ function copyStandaloneServer() {
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
+  pruneForeignNativeModules();
   console.log(`build-desktop-server: server bundle ready (${formatMiB(dirSize(serverResourceDir))})`);
+}
+
+/**
+ * Drop platform-specific native Node addons that do not match the build
+ * target. `@img/sharp-*` ships one package per platform; the
+ * `linuxmusl-x64` build links against musl libc (`libc.musl-x86_64.so.1`),
+ * which is absent on a glibc distro, so linuxdeploy fails AppImage bundling
+ * with `Could not find dependency: libc.musl-x86_64.so.1`. The musl build is
+ * never loaded at runtime on Ubuntu — sharp picks the matching glibc
+ * (`linux-x64`) addon — so it is safe to drop. Likewise we can drop the
+ * win32/darwin addons when building for Linux and vice versa.
+ */
+function pruneForeignNativeModules() {
+  const imgDir = join(serverResourceDir, "node_modules", "@img");
+  if (!existsSync(imgDir)) return;
+  const keep = {
+    linux: ["sharp-linux-x64", "sharp-libvips-linux-x64"],
+    win32: ["sharp-win32-x64"],
+    darwin: ["sharp-darwin-arm64", "sharp-libvips-darwin-arm64"],
+  }[process.platform];
+  if (!keep) return;
+  for (const entry of readdirSync(imgDir)) {
+    if (keep.includes(entry)) continue;
+    rmSync(join(imgDir, entry), { recursive: true, force: true });
+    console.log(`build-desktop-server: pruned @img/${entry} (foreign to ${process.platform})`);
+  }
+  // Verify we never shipped a musl-native module into a glibc (Linux desktop)
+  // bundle — linuxdeploy cannot resolve libc.musl and the AppImage fails.
+  const musl = join(serverResourceDir, "node_modules", "@img", "sharp-linuxmusl-x64");
+  if (existsSync(musl)) fail(`musl sharp module still present at ${musl}`);
 }
 
 async function download(url, dest) {

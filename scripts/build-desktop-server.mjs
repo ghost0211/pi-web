@@ -4,12 +4,16 @@
  *
  *   src-tauri/server/  Next.js standalone build (server.js + traced node_modules
  *                      + .next/static + public/)
- *   src-tauri/node/    Windows Node.js runtime (node.exe, npm, npx, corepack)
+ *   src-tauri/node/    Bundled Node.js runtime for the *current* platform:
+ *                      `node.exe` on Windows, `bin/node` on macOS/Linux
  *
  * `bundle.resources` lists both directories (list form — deliberately not the
  * map form, whose path handling regressed in Tauri CLI 2.11, see tauri-apps
  * issue #15342), so they land at `<install>/server` and `<install>/node`,
- * where `src-tauri/src/main.rs` spawns `node.exe server.js` at runtime.
+ * where `src-tauri/src/main.rs` spawns `node[.exe] server.js` at runtime.
+ *
+ * The Node archive is chosen from `process.platform`/`process.arch`, so this
+ * script must run on the target platform (CI: windows-latest / ubuntu-latest).
  *
  * Usage:
  *   node scripts/build-desktop-server.mjs          # full build
@@ -32,6 +36,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -47,6 +52,27 @@ import {
 } from "./desktop-bundle-validation.mjs";
 
 const DESKTOP_NODE_VERSION = "22.19.0";
+
+/** Node.js distribution archive for the current build platform. */
+function nodeDistribution() {
+  const arch = process.arch;
+  const platform = process.platform;
+  if (platform === "win32" && arch === "x64") {
+    return { name: `node-v${DESKTOP_NODE_VERSION}-win-x64.zip`, kind: "zip", nested: false };
+  }
+  if (platform === "darwin" && (arch === "x64" || arch === "arm64")) {
+    return { name: `node-v${DESKTOP_NODE_VERSION}-darwin-${arch}.tar.gz`, kind: "tar", nested: true };
+  }
+  if (platform === "linux" && (arch === "x64" || arch === "arm64")) {
+    return { name: `node-v${DESKTOP_NODE_VERSION}-linux-${arch}.tar.xz`, kind: "tar", nested: true };
+  }
+  fail(`unsupported desktop platform for the bundled Node runtime: ${platform}/${arch}`);
+}
+
+/** Path (relative to `src-tauri/node`) of the Node binary the shell spawns. */
+function bundledNodeBinaryRelativePath() {
+  return process.platform === "win32" ? "node.exe" : "bin/node";
+}
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const nextDir = join(repoRoot, ".next");
@@ -212,17 +238,20 @@ async function download(url, dest) {
   await pipeline(response.body, createWriteStream(dest));
 }
 
-function extractZip(zipPath, destDir) {
-  // bsdtar (ships with Windows 10+ and macOS) reads zip files; GNU tar does
+function extractArchive(archivePath, destDir) {
+  // Zip: bsdtar (ships with Windows 10+ and macOS) reads zip files; GNU tar does
   // not, so fall back to unzip / PowerShell where needed.
-  const attempts = [
-    ["tar", ["-xf", zipPath, "-C", destDir]],
-    ["unzip", ["-q", zipPath, "-d", destDir]],
-    [
-      "powershell",
-      ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${destDir}'`],
-    ],
-  ];
+  const isZip = archivePath.endsWith(".zip");
+  const attempts = isZip
+    ? [
+        ["tar", ["-xf", archivePath, "-C", destDir]],
+        ["unzip", ["-q", archivePath, "-d", destDir]],
+        [
+          "powershell",
+          ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${destDir}'`],
+        ],
+      ]
+    : [["tar", ["-xf", archivePath, "-C", destDir]]];
   let lastError;
   for (const [command, args] of attempts) {
     const result = spawnSync(command, args, { stdio: "inherit" });
@@ -233,10 +262,10 @@ function extractZip(zipPath, destDir) {
 }
 
 async function ensureNodeRuntime() {
-  const nodeExe = join(nodeResourceDir, "node.exe");
+  const nodeBinary = join(nodeResourceDir, bundledNodeBinaryRelativePath());
   const versionFile = join(nodeResourceDir, ".node-version");
   if (
-    existsSync(nodeExe)
+    existsSync(nodeBinary)
     && existsSync(versionFile)
     && readFileSync(versionFile, "utf8").trim() === DESKTOP_NODE_VERSION
   ) {
@@ -244,47 +273,67 @@ async function ensureNodeRuntime() {
     return;
   }
 
+  const distribution = nodeDistribution();
   const distBase = `https://nodejs.org/dist/v${DESKTOP_NODE_VERSION}`;
-  const zipName = `node-v${DESKTOP_NODE_VERSION}-win-x64.zip`;
   const workDir = mkdtempSync(join(tmpdir(), "pi-web-node-"));
-  const zipPath = join(workDir, zipName);
+  const archivePath = join(workDir, distribution.name);
 
   try {
-    console.log(`build-desktop-server: downloading ${zipName}…`);
-    await download(`${distBase}/${zipName}`, zipPath);
+    console.log(`build-desktop-server: downloading ${distribution.name}…`);
+    await download(`${distBase}/${distribution.name}`, archivePath);
     await download(`${distBase}/SHASUMS256.txt`, join(workDir, "SHASUMS256.txt"));
 
     const expected = readFileSync(join(workDir, "SHASUMS256.txt"), "utf8")
       .split("\n")
       .map((line) => line.trim().split(/\s+/))
-      .find(([, name]) => name === zipName)?.[0];
-    if (!expected) fail(`SHASUMS256.txt has no entry for ${zipName}`);
-    const actual = createHash("sha256").update(readFileSync(zipPath)).digest("hex");
+      .find(([, name]) => name === distribution.name)?.[0];
+    if (!expected) fail(`SHASUMS256.txt has no entry for ${distribution.name}`);
+    const actual = createHash("sha256").update(readFileSync(archivePath)).digest("hex");
     if (actual !== expected) {
-      fail(`sha256 mismatch for ${zipName}: expected ${expected}, got ${actual}`);
+      fail(`sha256 mismatch for ${distribution.name}: expected ${expected}, got ${actual}`);
     }
 
     const extractDir = join(workDir, "extract");
     mkdirSync(extractDir);
-    extractZip(zipPath, extractDir);
+    extractArchive(archivePath, extractDir);
 
     rmSync(nodeResourceDir, { recursive: true, force: true });
     mkdirSync(nodeResourceDir, { recursive: true });
-    cpSync(join(extractDir, `node-v${DESKTOP_NODE_VERSION}-win-x64`), nodeResourceDir, {
-      recursive: true,
-    });
-    writeFileSync(versionFile, `${DESKTOP_NODE_VERSION}\n`);
+    const extractedRoot = join(extractDir, distribution.name.replace(/\.(zip|tar\.(gz|xz))$/, ""));
+    if (process.env.PI_DESKTOP_SKIP_NODE_COPY === "1") {
+      console.log(`build-desktop-server: archive extracted at ${extractedRoot} (PI_DESKTOP_SKIP_NODE_COPY=1)`);
+    } else {
+      cpSync(extractedRoot, nodeResourceDir, { recursive: true });
+      // A copy over a filesystem boundary can drop the executable bit on POSIX.
+      if (process.platform !== "win32") chmodSync(nodeBinary, 0o755);
+      writeFileSync(versionFile, `${DESKTOP_NODE_VERSION}\n`);
+    }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
 
-  if (!existsSync(nodeExe)) fail(`node.exe missing after extracting ${zipName}`);
-  console.log(
-    `build-desktop-server: node runtime v${DESKTOP_NODE_VERSION} ready (${formatMiB(dirSize(nodeResourceDir))})`,
-  );
+  if (process.env.PI_DESKTOP_SKIP_NODE_COPY !== "1" && !existsSync(nodeBinary)) {
+    fail(`${bundledNodeBinaryRelativePath()} missing after extracting ${distribution.name}`);
+  }
+  if (process.env.PI_DESKTOP_SKIP_NODE_COPY === "1") {
+    console.log(`build-desktop-server: node runtime v${DESKTOP_NODE_VERSION} extracted (PI_DESKTOP_SKIP_NODE_COPY=1)`);
+  } else {
+    console.log(
+      `build-desktop-server: node runtime v${DESKTOP_NODE_VERSION} ready (${formatMiB(dirSize(nodeResourceDir))})`,
+    );
+  }
 }
 
-buildNextApp();
-copyStandaloneServer();
-await ensureNodeRuntime();
-console.log("build-desktop-server: done");
+// `build.desktop-server.onlyNode` lets CI/local probes exercise the runtime
+// download without a Next build (see PI_DESKTOP_ONLY_NODE_RUNTIME=1).
+const onlyNodeRuntime = process.env.PI_DESKTOP_ONLY_NODE_RUNTIME === "1";
+if (onlyNodeRuntime) {
+  await ensureNodeRuntime();
+  console.log("build-desktop-server: node runtime ready (PI_DESKTOP_ONLY_NODE_RUNTIME=1)");
+} else {
+  buildNextApp();
+  copyStandaloneServer();
+  await ensureNodeRuntime();
+  console.log("build-desktop-server: done");
+}
+

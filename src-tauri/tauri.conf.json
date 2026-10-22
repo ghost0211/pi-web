@@ -17,7 +17,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["nsis", "appimage", "deb"],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
@@ -27,7 +27,7 @@
     ],
     "resources": ["server/", "node/"],
     "shortDescription": "Desktop client for the pi coding agent",
-    "longDescription": "Pi Web Desktop bundles the pi-web server and a Node.js runtime so the pi coding agent web UI runs as a native Windows application.",
+    "longDescription": "Pi Desktop bundles the pi-web server and a Node.js runtime so the pi coding agent web UI runs as a native desktop application.",
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
@@ -35,6 +35,21 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "./windows/hooks.nsi"
+      }
+    },
+    "linux": {
+      "category": "Development",
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libjavascriptcoregtk-4.1-0",
+          "libsoup-3.0-0",
+          "libglib2.0-0",
+          "libgtk-3-0"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": true
       }
     }
   },

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { createJiti } from "jiti";
-import { createDesktopUpdateManifest } from "./scripts/create-desktop-update-manifest.mjs";
+import { collectUpdaterArtifacts, createDesktopUpdateManifest } from "./scripts/create-desktop-update-manifest.mjs";
 
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true });
 const { checkDesktopUpdate } = await jiti.import("./lib/desktop-update.ts");
@@ -14,24 +16,49 @@ test("regular browsers cannot check or install native desktop updates", async (t
   assert.equal(await checkDesktopUpdate(), null);
 });
 
-test("desktop update manifest only names a matching signed NSIS release", () => {
+test("desktop update manifest covers the signed Windows and Linux bundles", async () => {
   const version = "0.9.21";
   const tag = `desktop-v${version}`;
-  const installerName = `Pi Web Desktop_${version}_x64-setup.exe`;
-  const signature = "untrusted comment: signed update\nABC123";
-  const manifest = createDesktopUpdateManifest({ version, tag, installerName, signature });
-  assert.deepEqual(manifest, {
-    version,
-    platforms: {
-      "windows-x86_64": {
-        signature,
-        url: `https://github.com/ghost0211/pi-web/releases/download/${tag}/Pi.Web.Desktop_${version}_x64-setup.exe`,
-      },
-    },
-  });
-  assert.throws(() => createDesktopUpdateManifest({ version, tag: "desktop-v0.9.19", installerName, signature }), /tag/);
-  assert.throws(() => createDesktopUpdateManifest({ version, tag, installerName: "evil.exe", signature }), /installer name/);
-  assert.throws(() => createDesktopUpdateManifest({ version, tag, installerName, signature: "" }), /signature/);
+  const dir = join(tmpdir(), `pi-web-updater-${process.pid}`);
+  const nsis = join(dir, "nsis");
+  const linux = join(dir, "appimage");
+  await mkdir(nsis, { recursive: true });
+  await mkdir(linux, { recursive: true });
+  try {
+    const exe = `Pi Web Desktop_${version}_x64-setup.exe`;
+    const appimage = `Pi Web Desktop_${version}_x86_64.AppImage`;
+    await writeFile(join(nsis, exe), "exe");
+    await writeFile(join(nsis, `${exe}.sig`), "untrusted comment: signed update\nWINDOWS");
+    await writeFile(join(linux, appimage), "appimage");
+    await writeFile(join(linux, `${appimage}.sig`), "untrusted comment: signed update\nLINUX");
+    // The .deb ships to repositories but is not the updater target.
+    await writeFile(join(dir, `Pi Web Desktop_${version}_amd64.deb`), "deb");
+
+    const artifacts = [
+      ...collectUpdaterArtifacts(nsis),
+      ...collectUpdaterArtifacts(linux),
+    ].sort((a, b) => a.platform.localeCompare(b.platform));
+    assert.deepEqual(artifacts.map((a) => a.platform).sort(), ["linux-x86_64", "windows-x86_64"]);
+
+    const manifest = createDesktopUpdateManifest({ version, tag, platforms: artifacts });
+    assert.equal(manifest.version, version);
+    assert.equal(
+      manifest.platforms["windows-x86_64"].url,
+      `https://github.com/ghost0211/pi-web/releases/download/${tag}/Pi.Web.Desktop_${version}_x64-setup.exe`,
+    );
+    assert.equal(
+      manifest.platforms["linux-x86_64"].url,
+      `https://github.com/ghost0211/pi-web/releases/download/${tag}/Pi.Web.Desktop_${version}_x86_64.AppImage`,
+    );
+    assert.equal(manifest.platforms["windows-x86_64"].signature, "untrusted comment: signed update\nWINDOWS");
+    assert.equal(manifest.platforms["linux-x86_64"].signature, "untrusted comment: signed update\nLINUX");
+    assert.throws(
+      () => createDesktopUpdateManifest({ version, tag: "desktop-v0.9.19", platforms: artifacts }),
+      /tag/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("desktop updater is signed, confined to the local WebView and publishes its feed", async () => {
@@ -53,7 +80,7 @@ test("desktop updater is signed, confined to the local WebView and publishes its
   assert.match(workflow, /desktop-latest\.json/);
   assert.match(workflow, /gh release create[^\n]*[\s\S]*?--draft --verify-tag/);
   assert.match(workflow, /gh release edit "\$GITHUB_REF_NAME" --draft=false --latest/);
-  assert.ok(workflow.includes('notes_file="docs/releases/v${GITHUB_REF_NAME#desktop-v}.md"'));
+  assert.ok(workflow.includes('notes_file="docs/releases/v${version}.md"'));
   assert.ok(workflow.includes('notes_args=(--generate-notes)'));
   assert.ok(workflow.includes('notes_args=(--notes-file "$notes_file")'));
   assert.ok(workflow.includes('"${notes_args[@]}"'));

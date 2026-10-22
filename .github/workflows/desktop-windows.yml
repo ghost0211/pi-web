@@ -236,34 +236,32 @@ jobs:
           debs=()
           while IFS= read -r f; do debs+=("$f"); done < <(find dist/linux -name '*.deb')
           manifest="dist/manifest/desktop-latest.json"
-          test -s "$win" && test -s "$win.sig"
-          test -n "$linux_app" && test -s "$linux_app.sig"
-          test -s "$manifest"
-          test "${#debs[@]}" -gt 0 || { echo 'no .deb found in dist/linux' >&2; find dist/linux; exit 1; }
+          echo "version=$version"
+          echo "win=$win"; echo "linux_app=$linux_app"; echo "manifest=$manifest"; echo "debs=${debs[*]:-none}"
+          [[ -s "$win" ]] || { echo "MISSING win: $win" >&2; ls -la dist/windows; exit 1; }
+          [[ -s "$win.sig" ]] || { echo "MISSING win.sig" >&2; exit 1; }
+          [[ -n "$linux_app" && -s "$linux_app" ]] || { echo "MISSING linux_app" >&2; find dist/linux; exit 1; }
+          [[ -s "$linux_app.sig" ]] || { echo "MISSING linux_app.sig" >&2; exit 1; }
+          [[ -s "$manifest" ]] || { echo "MISSING manifest" >&2; ls -la dist/manifest; exit 1; }
           notes_file="docs/releases/v${version}.md"
           notes_args=(--generate-notes)
           if test -s "$notes_file"; then
             notes_args=(--notes-file "$notes_file")
           fi
+          assets=("$win" "$win.sig" "$linux_app" "$linux_app.sig" "$manifest")
+          for d in "${debs[@]}"; do assets+=("$d"); done
+          echo "uploading assets: ${assets[*]}"
           if gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft > draft-state.txt 2>/dev/null; then
             if [[ $(cat draft-state.txt) != true ]]; then
               echo 'Refusing to overwrite an already published release' >&2
               exit 1
             fi
-            gh release upload "$GITHUB_REF_NAME" \
-              "$win" "$win.sig" \
-              "$linux_app" "$linux_app.sig" \
-              "${debs[@]}" \
-              "$manifest" --clobber
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
             if test -s "$notes_file"; then
               gh release edit "$GITHUB_REF_NAME" --notes-file "$notes_file"
             fi
           else
-            gh release create "$GITHUB_REF_NAME" \
-              "$win" "$win.sig" \
-              "$linux_app" "$linux_app.sig" \
-              "${debs[@]}" \
-              "$manifest" \
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
               --draft --verify-tag --title "Pi Web Desktop ${version}" "${notes_args[@]}"
           fi
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest

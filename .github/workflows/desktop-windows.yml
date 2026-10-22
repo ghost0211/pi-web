@@ -232,7 +232,7 @@ jobs:
           shopt -s nullglob
           version="${GITHUB_REF_NAME#desktop-v}"
           win="dist/windows/Pi Web Desktop_${version}_x64-setup.exe"
-          linux_app=$(find dist/linux -name '*x86_64*.AppImage' ! -name '*.sig' | head -1)
+          linux_app=$(find dist/linux -name '*.AppImage' ! -name '*.sig' | head -1)
           debs=()
           while IFS= read -r f; do debs+=("$f"); done < <(find dist/linux -name '*.deb')
           manifest="dist/manifest/desktop-latest.json"

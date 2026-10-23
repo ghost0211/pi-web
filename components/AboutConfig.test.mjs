@@ -1,6 +1,5 @@
-// The About panel must label the registry comparison target as "current
-// version". Showing the latest registry version next to an "update available"
-// pill for that same version reads as a contradiction.
+// The About panel shows the update status on the global CLI row. There is no
+// separate "current version" row — it duplicated the global CLI card.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -16,34 +15,26 @@ function rowFor(labelKey) {
   return source.slice(start, next === -1 ? source.length : next);
 }
 
-test("labels the comparison target as the current version", () => {
-  const row = rowFor("about.currentVersion");
-  assert.match(row, /info\?\.piAgent\.currentVersion \? `v\$\{info\.piAgent\.currentVersion\}`/);
-  // The status pill lives in the current-version row, not the latest-version one.
-  assert.match(row, /about-status-pill/);
-  assert.match(row, /about\.statusUpdateAvailable/);
-  assert.match(row, /about\.statusUpToDate/);
+test("does not render a redundant current-version row", () => {
+  // The "current version" card duplicated the global CLI card exactly, so it
+  // was removed; the update pill moved onto the global CLI row instead.
+  assert.equal(source.includes('t("about.currentVersion")'), false);
+  const cliRow = rowFor("about.globalCli");
+  assert.match(cliRow, /info\?\.piAgent\.cliVersion \? \(\s*<code>v\{info\.piAgent\.cliVersion\}<\/code>/);
 });
 
-test("does not repeat the registry version in a row of its own", () => {
-  // The current-version row's pill already names the latest registry version,
-  // so a separate "latest version" row would only restate it.
-  assert.equal(source.includes('t("about.latestVersion")'), false);
-  assert.equal(source.includes("about.latestVersion"), false);
-  const row = rowFor("about.currentVersion");
-  assert.match(row, /t\("about\.statusUpdateAvailable", \{ version: `v\$\{info\.piAgent\.latestVersion\}` \}\)/);
-});
-
-test("reports the source of the current version without new translation keys", () => {
-  const row = rowFor("about.currentVersion");
-  assert.match(row, /currentVersionSource === "cli"[\s\S]{0,80}t\("about\.globalCli"\)/);
-  assert.match(row, /currentVersionSource === "sdk"[\s\S]{0,80}t\("about\.embeddedKernel"\)/);
+test("shows the update status pill on the global CLI row", () => {
+  const cliRow = rowFor("about.globalCli");
+  assert.match(cliRow, /about-status-pill/);
+  assert.match(cliRow, /about\.statusUpdateAvailable/);
+  assert.match(cliRow, /about\.statusUpToDate/);
+  assert.match(cliRow, /t\("about\.statusUpdateAvailable", \{ version: `v\$\{info\.piAgent\.latestVersion\}` \}\)/);
 });
 
 test("shows the check-failed state instead of a stale pill", () => {
-  const row = rowFor("about.currentVersion");
-  assert.match(row, /!info\?\.piAgent\.latestVersion && info\?\.piAgent\.error/);
-  assert.match(row, /about\.statusCheckFailed/);
+  const cliRow = rowFor("about.globalCli");
+  assert.match(cliRow, /!info\?\.piAgent\.latestVersion && info\?\.piAgent\.error/);
+  assert.match(cliRow, /about\.statusCheckFailed/);
 });
 
 test("uses the shorter runtime brand only for the desktop shell", () => {

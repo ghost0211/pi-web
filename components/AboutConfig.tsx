@@ -298,30 +298,13 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
 
                 <div className="about-property-item">
                   <span className="about-property-label">{t("about.globalCli")}</span>
-                  <span className="about-property-value">
+                  <div className="about-property-value-row">
                     {info?.piAgent.cliVersion ? (
                       <code>v{info.piAgent.cliVersion}</code>
                     ) : (
                       <span className="about-text-dim">{t("about.cliNotInstalled")}</span>
                     )}
-                  </span>
-                </div>
-
-                <div className="about-property-item">
-                  <span className="about-property-label">{t("about.currentVersion")}</span>
-                  <div className="about-property-value-row">
-                    <code
-                      title={
-                        info?.piAgent.currentVersionSource === "cli"
-                          ? t("about.globalCli")
-                          : info?.piAgent.currentVersionSource === "sdk"
-                            ? t("about.embeddedKernel")
-                            : undefined
-                      }
-                    >
-                      {info?.piAgent.currentVersion ? `v${info.piAgent.currentVersion}` : "unknown"}
-                    </code>
-                    {info?.piAgent.latestVersion && info.piAgent.currentVersion && (
+                    {info?.piAgent.latestVersion && (
                       <span
                         className={`about-status-pill ${
                           info.piAgent.updateAvailable ? "is-update-available" : "is-up-to-date"

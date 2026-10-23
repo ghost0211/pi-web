@@ -395,6 +395,25 @@ test("delivered steering messages are tagged with the structural history rule", 
   assert.match(messageEndSource, /mergeDeliveredUserMessage\(prev, tagged, optimisticKey\)/);
 });
 
+test("a history refresh cannot erase a prompt delivered mid-turn", () => {
+  // agent_end reloads history from disk while a queued follow-up is being
+  // delivered; without this merge the bubble vanished until a manual reload.
+  const loadSource = source.slice(
+    source.indexOf("  const loadSession = useCallback"),
+    source.indexOf("  const loadEarlier"),
+  );
+  assert.match(loadSource, /mergeSnapshotWithDeliveredUserMessages\(persistedHistory\.messages, deliveredUserMessagesRef\.current\)/);
+  assert.match(loadSource, /deliveredUserMessagesRef\.current = merged\.pending/);
+  assert.match(loadSource, /setMessages\(merged\.messages\)/);
+  assert.doesNotMatch(loadSource, /setMessages\(persistedHistory\.messages\)/);
+
+  const messageEndSource = source.slice(
+    source.indexOf('case "message_end"'),
+    source.indexOf('case "tool_execution_start"'),
+  );
+  assert.match(messageEndSource, /deliveredUserMessagesRef\.current = \[/);
+});
+
 test("built-in clone switches to the independent child session", () => {
   const builtinSource = source.slice(
     source.indexOf("  const handleBuiltinSlashCommand"),

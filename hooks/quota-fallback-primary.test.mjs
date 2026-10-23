@@ -31,6 +31,8 @@ function fixture() {
     fallbackNoticeAnnouncementRef: { current: { initialized: false, fingerprint: null } },
     displayModelRef: { current: primary }, contextModelRef: { current: primary }, modelListRef: { current: [] },
     sessionIdRef: { current: "session" }, sessionHookMountedRef: { current: true }, agentRunningRef: { current: true },
+    deliveredUserMessagesRef: { current: [] },
+    mergeSnapshotWithDeliveredUserMessages: (snapshot, pending) => ({ messages: snapshot, pending: [...pending] }),
     promptRunIdRef: { current: 1 }, contextUsageRequestIdRef: { current: 0 }, contextUsageAppliedIdRef: { current: 0 }, modelMetadataAppliedIdRef: { current: 0 }, contextUsageRef: { current: null },
     promptTokenOwnerRef: { current: "hook" }, activePromptTokenRef: { current: "hook:1" },
     isStaleLocalPromptToken: (token, owner, active) => token?.startsWith(`${owner}:`) && token !== active,

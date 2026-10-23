@@ -93,3 +93,48 @@ export function mergeDeliveredUserMessage(
   ))) return messages;
   return [...messages, delivered];
 }
+
+/**
+ * Whether a disk snapshot already carries a prompt that arrived over SSE.
+ * Timestamp + content identify the persisted entry; a snapshot written before
+ * the entry was flushed simply does not have it yet.
+ */
+function snapshotHasUserMessage(
+  messages: readonly AgentMessage[],
+  delivered: AgentMessage & { role: "user" },
+): boolean {
+  const deliveredKey = userMessageKey(delivered);
+  return messages.some((message) => (
+    message.role === "user"
+    && userMessageKey(message) === deliveredKey
+    && (delivered.timestamp === undefined || message.timestamp === delivered.timestamp)
+  ));
+}
+
+/**
+ * Repaint from a disk snapshot without losing prompts that were delivered over
+ * SSE but not yet flushed when that snapshot was read.
+ *
+ * `agent_end` refreshes history from disk while a queued follow-up is being
+ * delivered, so the response can predate the delivered user entry. Replacing
+ * the transcript wholesale then drops that bubble even though the answer to it
+ * streams in afterwards — the message only reappears after a reload. Keep the
+ * still-unconfirmed deliveries appended (they are the newest prompts) and
+ * report which ones remain pending so a later snapshot can retire them.
+ */
+export function mergeSnapshotWithDeliveredUserMessages(
+  snapshot: AgentMessage[],
+  pending: ReadonlyArray<AgentMessage & { role: "user" }>,
+): { messages: AgentMessage[]; pending: Array<AgentMessage & { role: "user" }> } {
+  const remaining: Array<AgentMessage & { role: "user" }> = [];
+  const missing: AgentMessage[] = [];
+  for (const delivered of pending) {
+    if (snapshotHasUserMessage(snapshot, delivered)) continue;
+    remaining.push(delivered);
+    missing.push(delivered);
+  }
+  return {
+    messages: missing.length === 0 ? snapshot : [...snapshot, ...missing],
+    pending: remaining,
+  };
+}

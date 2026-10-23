@@ -32,7 +32,7 @@ import type { SessionSystemPromptCustomization } from "@/lib/session-system-prom
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { calculateActiveContextTokens } from "@/lib/context-tokens";
 import { resolveModelContextWindow } from "@/lib/context-window";
-import { mergeDeliveredUserMessage, userMessageKey } from "@/lib/prompt-recovery";
+import { mergeDeliveredUserMessage, mergeSnapshotWithDeliveredUserMessages, userMessageKey } from "@/lib/prompt-recovery";
 import { isSteeringDeliveryContext, type TurnPreview } from "@/lib/turn-index";
 import { AgentEventConnection } from "@/lib/agent-event-connection";
 import { getToolExecutionProgress } from "@/lib/tool-execution-progress";
@@ -480,6 +480,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const thinkingLevelOverrideRef = useRef<Exclude<ThinkingLevelOption, "auto"> | null>(null);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  // Prompts delivered over SSE by a queued steer/follow-up. A disk refresh can
+  // read history before the entry is flushed, so these stay visible until a
+  // snapshot confirms them.
+  const deliveredUserMessagesRef = useRef<Array<UserMessage>>([]);
   const modelSwitchPendingRef = useRef(false);
   const draftKeyAliasesRef = useRef(new Map<string, string>());
   const sessionHookMountedRef = useRef(true);
@@ -843,7 +847,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const persistedHistory = d.history ?? d.context;
       setData(d);
       setActiveLeafId(d.leafId);
-      setMessages(persistedHistory.messages);
+      const merged = mergeSnapshotWithDeliveredUserMessages(persistedHistory.messages, deliveredUserMessagesRef.current);
+      deliveredUserMessagesRef.current = merged.pending;
+      setMessages(merged.messages);
       setEntryIds(persistedHistory.entryIds ?? []);
       setHistoryCursor(persistedHistory.oldestEntryId);
       setHasEarlierMessages(persistedHistory.hasMore);
@@ -1762,6 +1768,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const delivered = normalizeToolCalls(completed) as UserMessage;
           const optimisticKey = optimisticUserMessageKeyRef.current;
           optimisticUserMessageKeyRef.current = null;
+          // Track the delivery until a disk snapshot contains it, so an
+          // in-flight history refresh cannot repaint without this prompt.
+          deliveredUserMessagesRef.current = [
+            ...deliveredUserMessagesRef.current.filter((pending) => !(pending.timestamp === delivered.timestamp
+              && userMessageKey(pending) === userMessageKey(delivered))),
+            delivered,
+          ].slice(-10);
           setMessages((prev) => {
             const tagged = isSteeringDeliveryContext(prev)
               ? { ...delivered, delivery: "steer" as const }
@@ -2847,6 +2860,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     modelMetadataAppliedIdRef.current = contextUsageRequestIdRef.current;
     if (session) {
       sessionIdRef.current = session.id;
+      // Pending SSE deliveries belong to the session that produced them.
+      deliveredUserMessagesRef.current = [];
       applyAutoAdvanceState(null);
       const runId = promptRunIdRef.current;
       const usageRequestId = ++contextUsageRequestIdRef.current;

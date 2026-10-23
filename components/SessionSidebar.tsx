@@ -17,6 +17,7 @@ import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
+import { normalizeProjectKey } from "@/lib/paths";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { getFileName } from "@/lib/file-paths";
 import { useI18n } from "@/hooks/useI18n";
@@ -320,9 +321,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const archivedSessionIds = useMemo(() => new Set(Object.entries(managementState.sessions)
     .filter(([, state]) => state.status === "archived").map(([id]) => id)), [managementState]);
   const removedProjects = useMemo(() => new Set(Object.entries(managementState.projects)
-    .filter(([, state]) => state.removed).map(([key]) => key)), [managementState]);
+    .filter(([, state]) => state.removed).map(([key]) => normalizeProjectKey(key))), [managementState]);
   const pinnedProjects = useMemo(() => new Set(Object.entries(managementState.projects)
-    .filter(([, state]) => state.pinned && !state.removed).map(([key]) => key)), [managementState]);
+    .filter(([, state]) => state.pinned && !state.removed).map(([key]) => normalizeProjectKey(key))), [managementState]);
   const runManagementAction = useCallback(async (action: SessionManagementAction) => {
     if (!managementReady || managementBusyRef.current) return;
     managementBusyRef.current = true;

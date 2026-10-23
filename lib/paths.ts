@@ -78,3 +78,20 @@ export function samePath(a: string, b: string): boolean {
   }
   return normalizedA === normalizedB;
 }
+
+/**
+ * Canonical form for a project-management key. The sidebar derives a project
+ * key from a session cwd (`D:\proj\repo`, drive letter upper-cased by Node's
+ * normalize), while a stored entry may have been written lower-cased
+ * (`d:\proj\repo`). Normalizing both sides the same way — native separators,
+ * upper-cased drive letter on Windows — makes pin/remove lookups match
+ * regardless of which form produced the key.
+ */
+export function normalizeProjectKey(p: string): string {
+  if (!p) return p;
+  let out = toNativePath(p).trim();
+  if (process.platform === "win32" && /^[a-z]:/.test(out)) {
+    out = out[0].toUpperCase() + out.slice(1);
+  }
+  return out;
+}

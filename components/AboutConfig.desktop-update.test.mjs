@@ -151,12 +151,9 @@ test("available updates keep confirmation, release notes, progress and retry fee
   assert.deepEqual(f.ctx.installs, [update]);
   assert.match(f.ctx.confirmations[0], /v0\.9\.54/);
   assert.equal(f.button("about.checkUpdates").props.disabled, true);
-  assert.equal(f.button("about.updateCli").props.disabled, true);
-  assert.equal(f.button("about.updateSdk").props.disabled, true);
-  f.button("about.checkUpdates").props.onClick();
-  f.button("about.updateCli").props.onClick();
-  assert.equal(f.ctx.checks, 1, "checking is blocked during desktop installation");
-  assert.equal(f.ctx.fetches.length, 1, "runtime checking/updating is also blocked");
+  // The CLI update pill is only rendered when a runtime update is available;
+  // this fixture has none, so there is no runtime update button to disable.
+  assert.equal(f.harness.find((node) => node.props.className?.includes?.("about-update-inline")), undefined);
   assert.equal(f.harness.button("正在下载更新 …").props.disabled, true);
   progress({ event: "Started", data: { contentLength: 100 } });
   progress({ event: "Progress", data: { chunkLength: 50 } });
@@ -190,8 +187,8 @@ test("shared checking waits for both sources and rejects repeated clicks before 
       assert.equal(f.ctx.checks, 2);
       assert.equal(f.ctx.fetches.length, 2, "both requests start without waiting for either result");
       assert.equal(f.button("about.statusChecking").props.disabled, true);
-      assert.equal(f.button("about.updateCli").props.disabled, true);
-      assert.equal(f.button("about.updateSdk").props.disabled, true);
+      // No runtime update button exists until the runtime check reports one.
+      assert.equal(f.harness.find((node) => node.props.className?.includes?.("about-update-inline")), undefined);
       const runtimeResult = Response.json({
         appName: "Pi Desktop", appVersion: "0.9.53", isDesktop: true,
         piAgent: { installedVersion: "1.1.0", currentVersion: "1.1.0", latestVersion: "1.2.0", updateAvailable: true },
@@ -213,8 +210,11 @@ test("shared checking waits for both sources and rejects repeated clicks before 
       await f.refresh();
       assert.equal(f.button("about.checkUpdates").props.disabled, false);
       assert.equal(f.button("about.desktopInstallUpdate").props.disabled, false);
-      assert.equal(f.button("about.updateCli").props.disabled, false);
-      assert.equal(f.button("about.updateSdk").props.disabled, false);
+      // With the runtime update now available, the inline CLI pill appears and
+      // is enabled once checking settles.
+      const pill = f.harness.find((node) => node.props.className?.includes?.("about-update-inline"));
+      assert.ok(pill, "inline CLI update pill appears once an update is available");
+      assert.equal(pill.props.disabled, false);
       assert.match(f.harness.text(), /v1\.2\.0/);
     });
   }
@@ -291,31 +291,35 @@ test("closing while both sources are pending still handles their rejections", as
 });
 
 test("runtime installation keeps its target and blocks shared checking and desktop installation", async (t) => {
-  for (const target of ["global", "local"]) {
-    await t.test(target, async (t) => {
-      const pending = deferred();
-      const f = await fixture(t, {
-        check: () => ({ version: "0.9.54" }),
-        fetch: (url, init, info) => init?.method === "POST" ? pending.promise : Response.json(info),
-      });
-      f.button(target === "global" ? "about.updateCli" : "about.updateSdk").props.onClick();
-      f.harness.render();
-      assert.equal(f.button("about.checkUpdates").props.disabled, true);
-      assert.equal(f.button("about.desktopInstallUpdate").props.disabled, true);
-      f.button("about.checkUpdates").props.onClick();
-      f.button("about.desktopInstallUpdate").props.onClick();
-      assert.equal(f.ctx.checks, 1);
-      assert.equal(f.ctx.confirmations.length, 0);
-      assert.equal(f.ctx.installs.length, 0);
-      assert.equal(f.ctx.fetches.length, 2);
-      assert.deepEqual(JSON.parse(f.ctx.fetches[1].init.body), { target });
-      pending.resolve(Response.json({ success: true, target, newVersion: "1.2.0" }));
-      await f.refresh();
-      assert.equal(f.ctx.fetches[2].url, "/api/about?force=true", "runtime post-install refresh remains runtime-only");
-      assert.equal(f.ctx.checks, 1);
-      assert.equal(f.button("about.checkUpdates").props.disabled, false);
-    });
-  }
+  // Only the global CLI can be updated from the client; the embedded SDK is
+  // never updated here (the desktop app replaces it on upgrade), so there is no
+  // "local" update button to test.
+  const target = "global";
+  const pending = deferred();
+  const f = await fixture(t, {
+    check: () => ({ version: "0.9.54" }),
+    fetch: (url, init, info) => init?.method === "POST" ? pending.promise : Response.json({
+      ...info, piAgent: { ...info.piAgent, latestVersion: "1.2.0", updateAvailable: true },
+    }),
+  });
+  const pill = f.harness.find((node) => node.props.className?.includes?.("about-update-inline"));
+  assert.ok(pill, "inline CLI update pill is shown when an update is available");
+  pill.props.onClick();
+  f.harness.render();
+  assert.equal(f.button("about.checkUpdates").props.disabled, true);
+  assert.equal(f.button("about.desktopInstallUpdate").props.disabled, true);
+  f.button("about.checkUpdates").props.onClick();
+  f.button("about.desktopInstallUpdate").props.onClick();
+  assert.equal(f.ctx.checks, 1);
+  assert.equal(f.ctx.confirmations.length, 0);
+  assert.equal(f.ctx.installs.length, 0);
+  assert.equal(f.ctx.fetches.length, 2);
+  assert.deepEqual(JSON.parse(f.ctx.fetches[1].init.body), { target });
+  pending.resolve(Response.json({ success: true, target, newVersion: "1.2.0" }));
+  await f.refresh();
+  assert.equal(f.ctx.fetches[2].url, "/api/about?force=true", "runtime post-install refresh remains runtime-only");
+  assert.equal(f.ctx.checks, 1);
+  assert.equal(f.button("about.checkUpdates").props.disabled, false);
 });
 
 test("cancelling confirmation never calls the native installer", async (t) => {

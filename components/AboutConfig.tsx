@@ -304,16 +304,19 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                     ) : (
                       <span className="about-text-dim">{t("about.cliNotInstalled")}</span>
                     )}
-                    {info?.piAgent.latestVersion && (
-                      <span
-                        className={`about-status-pill ${
-                          info.piAgent.updateAvailable ? "is-update-available" : "is-up-to-date"
-                        }`}
+                    {info?.piAgent.latestVersion && info.piAgent.updateAvailable && (
+                      <button
+                        type="button"
+                        className="about-status-pill is-update-available about-update-inline"
+                        disabled={updatesBusy}
+                        onClick={() => void handleUpdate("global")}
+                        title={t("about.updateScopeGlobal")}
                       >
-                        {info.piAgent.updateAvailable
-                          ? t("about.statusUpdateAvailable", { version: `v${info.piAgent.latestVersion}` })
-                          : t("about.statusUpToDate")}
-                      </span>
+                        {updating ? t("about.updating") : t("about.statusUpdateAvailable", { version: `v${info.piAgent.latestVersion}` })}
+                      </button>
+                    )}
+                    {info?.piAgent.latestVersion && !info.piAgent.updateAvailable && (
+                      <span className="about-status-pill is-up-to-date">{t("about.statusUpToDate")}</span>
                     )}
                     {!info?.piAgent.latestVersion && info?.piAgent.error && (
                       <span className="about-status-pill is-check-failed" title={info.piAgent.error}>
@@ -323,54 +326,6 @@ export function AboutConfig({ onClose, embedded = false }: Props) {
                   </div>
                 </div>
               </div>
-
-              {/* Action and controls for update */}
-              <div className="about-update-action-box">
-                <ConfigButton
-                  variant={info?.piAgent.updateAvailable ? "primary" : "secondary"}
-                  size="default"
-                  disabled={updatesBusy}
-                  onClick={() => void handleUpdate("global")}
-                  className="about-update-button"
-                  title={t("about.updateScopeGlobal")}
-                >
-                  {updating ? (
-                    <>
-                      <span className="about-spinner is-small" />
-                      <span>{t("about.updating")}</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="7 10 12 15 17 10" />
-                        <line x1="12" y1="15" x2="12" y2="3" />
-                      </svg>
-                      <span>{t("about.updateCli")}</span>
-                    </>
-                  )}
-                </ConfigButton>
-                <ConfigButton
-                  variant="secondary"
-                  size="default"
-                  disabled={updatesBusy}
-                  onClick={() => void handleUpdate("local")}
-                  className="about-update-button"
-                  title={desktopApp ? t("about.updateSdkDesktopHint") : t("about.updateScopeLocal")}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="4" y="4" width="16" height="16" rx="2" />
-                    <rect x="9" y="9" width="6" height="6" />
-                    <path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3" />
-                  </svg>
-                  <span>{t("about.updateSdk")}</span>
-                </ConfigButton>
-              </div>
-              {desktopApp && (
-                <div className="about-text-dim" style={{ fontSize: 11, marginTop: 6 }}>
-                  {t("about.updateSdkDesktopHint")}
-                </div>
-              )}
 
               {/* Result & Log feedback */}
               {updateResult && (

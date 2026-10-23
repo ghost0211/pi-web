@@ -30,8 +30,24 @@ export async function POST(request: Request) {
       // Body can be empty, default to global update
     }
 
-    const target = body.target === "local" ? "local" : "global";
-    const result = await executePiAgentUpdate(target);
+    // The embedded SDK is bundled with the app and is never updated from the
+    // client — a desktop install replaces it wholesale, and updating it under
+    // the running app would corrupt the install. Only the global npm CLI may be
+    // updated from here.
+    if (body.target === "local") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Embedded SDK updates are not supported; the desktop app updates it on upgrade.",
+          output: "",
+          previousVersion: null,
+          newVersion: null,
+          target: "local",
+        },
+        { status: 400 },
+      );
+    }
+    const result = await executePiAgentUpdate("global");
 
     return NextResponse.json(result, {
       status: result.success ? 200 : 500,

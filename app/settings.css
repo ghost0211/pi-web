@@ -1948,6 +1948,23 @@ select.config-input:disabled {
   color: #f59e0b;
 }
 
+/* The update pill on the global CLI row is a button when an update exists. */
+.about-status-pill.about-update-inline {
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 10px;
+  border-radius: 999px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.about-status-pill.about-update-inline:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(245, 158, 11, 0.55);
+}
+.about-status-pill.about-update-inline:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .about-status-pill.is-check-failed {
   background: rgba(107, 114, 128, 0.12);
   border: 1px solid rgba(107, 114, 128, 0.3);

@@ -649,8 +649,8 @@ export function ContextUsageRing({
     <div
       ref={containerRef}
       style={{ position: "relative", display: "inline-flex", alignItems: "center", marginRight: 2 }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
+      onPointerLeave={(event) => { if (event.pointerType === "mouse") setOpen(false); }}
     >
       <button
         type="button"
@@ -701,6 +701,7 @@ export function ContextUsageRing({
       {open && (
         <div
           role="tooltip"
+          className="composer-context-tooltip"
           style={{
             position: "absolute",
             bottom: "calc(100% + 8px)",
@@ -2684,7 +2685,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         )}
 
         {/* Bottom bar: left | center (context) | right */}
-        <div style={{
+        <div className={isMobile ? "mobile-composer-footer" : undefined} data-streaming={isStreaming || undefined} style={{
           marginTop: 0,
           minHeight: 42,
           padding: "2px 10px 8px 12px",
@@ -2695,10 +2696,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         }}>
 
           {/* LEFT: Kimi-style quick controls */}
-          <div style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
+          <div className={isMobile ? "mobile-composer-quick-actions" : undefined} style={{ flex: isMobile ? "1 1 auto" : "0 0 auto", minWidth: 0, display: "flex", alignItems: "center", gap: 6 }}>
             <button
               onClick={handleAttachFileClick}
-             title={t("chat.attachFile")}
+              aria-label={t("chat.attachFile")}
+              title={t("chat.attachFile")}
               style={{
                 flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
                 width: 28, height: 28, padding: 0,
@@ -2727,14 +2729,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <button
                   type="button"
                   className="kimi-manual-trigger"
-                  onClick={() => setToolDropdownOpen((open) => !open)}
+                  onClick={() => { setControlsMenuOpen(false); setToolDropdownOpen((open) => !open); }}
+                  aria-expanded={toolDropdownOpen}
+                  aria-label={t("chat.changeToolPreset")}
                   title={t("chat.changeToolPreset") + `: ${toolPresetLabel}`}
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.5 9V5.8a1.2 1.2 0 0 1 2.4 0V8m0 0V4.8a1.2 1.2 0 0 1 2.4 0V8m0 0V5.8a1.2 1.2 0 0 1 2.4 0v5.7c0 3-1.9 5-4.8 5H8c-1.8 0-3.2-.8-4.2-2.3L2.4 12a1.25 1.25 0 0 1 2.1-1.35L6 12.4"/></svg>
                   <span>{toolPreset === "default" ? "Manual" : toolPresetLabel}</span>
                 </button>
                 {toolDropdownOpen && (
-                  <div style={{
+                  <div className={isMobile ? "mobile-composer-tool-presets" : undefined} style={{
                     position: "absolute",
                     bottom: "calc(100% + 6px)",
                     left: 0,
@@ -2868,60 +2872,42 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           <div ref={controlsMenuRef} style={{
             flex: isMobile && !isStreaming ? "1 1 auto" : "0 0 auto",
             minWidth: 0,
-            display: "flex",
+            display: isMobile ? "contents" : "flex",
             alignItems: "center",
             justifyContent: "flex-end",
             position: "relative",
             marginLeft: isMobile ? 0 : "auto",
           }}>
-            {isMobile && isStreaming && (
-              <button
-                ref={controlsTriggerRef}
-                data-composer-more="true"
-                type="button"
-                title={t(controlsMenuOpen ? "chat.collapseControls" : "chat.moreControls")}
-                aria-label={t(controlsMenuOpen ? "chat.collapseControls" : "chat.moreControls")}
-                aria-expanded={controlsMenuOpen}
-                onClick={() => setControlsMenuOpen((open) => !open)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 44,
-                  height: 44,
-                  padding: 0,
-                  background: "none",
-                  border: "none",
-                  borderRadius: 9,
-                  color: "var(--text-muted)",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 500,
-                  transition: "background 0.12s, color 0.12s",
-                }}
-                onMouseEnter={(e) => {
-                  if (controlsMenuOpen) return;
-                  e.currentTarget.style.background = "var(--bg-hover)";
-                  e.currentTarget.style.color = "var(--text)";
-                }}
-                onMouseLeave={(e) => {
-                  if (controlsMenuOpen) return;
-                  e.currentTarget.style.background = "none";
-                  e.currentTarget.style.color = "var(--text-muted)";
-                }}
-              >
-                {controlsMenuOpen ? (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
-                ) : (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
-                  </svg>
-                )}
-              </button>
+            <div className={isMobile ? "mobile-composer-primary-controls" : undefined} style={{ display: isMobile ? (isStreaming ? "none" : "flex") : "contents" }}>
+            {(modelOptions.length > 0 || model || modelError) && onModelChange && (
+              <ModelSelector
+                options={modelOptions}
+                value={model}
+                onChange={onModelChange}
+                disabled={isStreaming}
+                busy={modelSwitching}
+                isAutoSelection={isAutoModelSelection}
+                fallbackModel={onFallbackModelChange ? fallbackModel ?? null : undefined}
+                onFallbackModelChange={onFallbackModelChange}
+                fallbackDisabled={isStreaming || isCompacting || modelSwitching}
+                fallbackBusy={fallbackModelSwitching}
+              />
             )}
+            {(onThinkingLevelChange || onFallbackThinkingLevelChange) && (
+              <ThinkingLevelSelector
+                model={model} level={thinkingLevel}
+                onChange={onThinkingLevelChange} availableLevels={availableThinkingLevels} levelMap={thinkingLevelMap}
+                fallbackModel={fallbackModel} fallbackLevel={fallbackThinkingLevel}
+                onFallbackChange={onFallbackThinkingLevelChange} fallbackAvailableLevels={fallbackAvailableThinkingLevels} fallbackLevelMap={fallbackThinkingLevelMap}
+                disabled={isStreaming || isCompacting || modelSwitching || fallbackModelSwitching}
+                isMobile={isMobile}
+                showLabel
+              />
+            )}
+
+            </div>
             <div
               className={isMobile ? "mobile-composer-controls" : undefined}
-              data-mobile-inline={isMobile && !isStreaming ? "true" : undefined}
               role={isMobile ? "group" : undefined}
               aria-label={isMobile ? t("chat.moreControls") : undefined}
               onKeyDown={(event) => {
@@ -2931,10 +2917,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 requestAnimationFrame(() => controlsTriggerRef.current?.focus({ preventScroll: true }));
               }}
               style={{
-              display: isMobile ? (isStreaming ? (controlsMenuOpen ? "flex" : "none") : "flex") : "flex",
+              display: isMobile && !controlsMenuOpen ? "none" : "flex",
               alignItems: "center",
               gap: isMobile ? 1 : 2,
-              ...(isMobile && isStreaming ? {
+              ...(isMobile ? {
                 position: "absolute",
                 right: 0,
                 bottom: "calc(100% + 8px)",
@@ -2949,9 +2935,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 background: "color-mix(in srgb, var(--bg-panel) 92%, var(--bg))",
                 boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
                 backdropFilter: "blur(10px)",
-              } : isMobile ? {
-                flexWrap: "nowrap",
-                overflow: "hidden",
               } : null),
             }}>
             <ContextUsageRing contextUsage={contextUsage} sessionStats={sessionStats} model={contextModel ?? model} modelList={modelList} compactResult={compactResult} />
@@ -2977,30 +2960,6 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 </svg>
                 {t("chat.ephemeral")}
               </button>
-            )}
-            {(modelOptions.length > 0 || model || modelError) && onModelChange && (
-              <ModelSelector
-                options={modelOptions}
-                value={model}
-                onChange={onModelChange}
-                disabled={isStreaming}
-                busy={modelSwitching}
-                isAutoSelection={isAutoModelSelection}
-                fallbackModel={onFallbackModelChange ? fallbackModel ?? null : undefined}
-                onFallbackModelChange={onFallbackModelChange}
-                fallbackDisabled={isStreaming || isCompacting || modelSwitching}
-                fallbackBusy={fallbackModelSwitching}
-              />
-            )}
-            {(onThinkingLevelChange || onFallbackThinkingLevelChange) && (
-              <ThinkingLevelSelector
-                model={model} level={thinkingLevel}
-                onChange={onThinkingLevelChange} availableLevels={availableThinkingLevels} levelMap={thinkingLevelMap}
-                fallbackModel={fallbackModel} fallbackLevel={fallbackThinkingLevel}
-                onFallbackChange={onFallbackThinkingLevelChange} fallbackAvailableLevels={fallbackAvailableThinkingLevels} fallbackLevelMap={fallbackThinkingLevelMap}
-                disabled={isStreaming || isCompacting || modelSwitching || fallbackModelSwitching}
-                showLabel={!isMobile || isStreaming}
-              />
             )}
 
             {(onStartAutoAdvance && onStopAutoAdvance) || onScheduleSend ? (
@@ -3086,12 +3045,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                    aria-label={isCompacting ? t("chat.stopCompaction") : t("chat.compactContext")}
                 >
                   {isCompacting ? (
-                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg>{(!isMobile || isStreaming) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.compacting")}</span>}</>
+                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg><span style={{ whiteSpace: "nowrap" }}>{t("chat.compacting")}</span></>
                   ) : (
                     <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
                       <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
-                    </svg>{(!isMobile || isStreaming) && <span style={{ whiteSpace: "nowrap" }}>{t("chat.compact")}</span>}</>
+                    </svg><span style={{ whiteSpace: "nowrap" }}>{t("chat.compact")}</span></>
                   )}
                 </button>
               </div>
@@ -3143,7 +3102,52 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             )}
 
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: isMobile ? 0 : 4 }}>
+            <div className={isMobile ? "mobile-composer-send-actions" : undefined} style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, marginLeft: isMobile ? 0 : 4 }}>
+            {isMobile && (
+              <button
+                ref={controlsTriggerRef}
+                data-composer-more="true"
+                type="button"
+                title={t(controlsMenuOpen ? "chat.collapseControls" : "chat.moreControls")}
+                aria-label={t(controlsMenuOpen ? "chat.collapseControls" : "chat.moreControls")}
+                aria-expanded={controlsMenuOpen}
+                onClick={() => { setToolDropdownOpen(false); setControlsMenuOpen((open) => !open); }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 44,
+                  height: 44,
+                  padding: 0,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  transition: "background 0.12s, color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  if (controlsMenuOpen) return;
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text)";
+                }}
+                onMouseLeave={(e) => {
+                  if (controlsMenuOpen) return;
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = "var(--text-muted)";
+                }}
+              >
+                {controlsMenuOpen ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+                  </svg>
+                )}
+              </button>
+            )}
               {isStreaming ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   {onSteer && canQueueStreamingMessage && (

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { MobileComposerSheet } from "./MobileComposerSheet";
 import { useI18n } from "@/hooks/useI18n";
 import { normalizeThinkingLevelOption, THINKING_LEVEL_OPTIONS, type ThinkingLevelOption } from "@/lib/thinking-level-options";
 
@@ -20,7 +22,7 @@ interface Props {
   fallbackLevelMap?: Record<string, string | null> | null;
   disabled?: boolean;
   isMobile?: boolean;
-  /** Mobile hides the toolbar label until the more-controls menu is open. */
+  /** Optional compact toolbar rendering; mobile normally shows the selected level. */
   showLabel?: boolean;
 }
 
@@ -82,10 +84,10 @@ export function ThinkingLevelSelector({
     setMenu({ key: menuKey, open: false, tab: "primary" });
   }, [menuKey]);
   useEffect(() => {
-    if (open) rootRef.current?.querySelector<HTMLButtonElement>("[role='tab'][aria-selected='true']")?.focus({ preventScroll: true });
-  }, [open]);
+    if (open && !isMobile) panelRef.current?.querySelector<HTMLButtonElement>("[role='tab'][aria-selected='true']")?.focus({ preventScroll: true });
+  }, [open, isMobile]);
   useLayoutEffect(() => {
-    if (!open || !rootRef.current || !panelRef.current) return;
+    if (!open || isMobile || !rootRef.current || !panelRef.current) return;
     const position = () => {
       const anchor = rootRef.current?.getBoundingClientRect();
       const panel = panelRef.current;
@@ -117,50 +119,17 @@ export function ThinkingLevelSelector({
   }, [open, tab, isMobile, label, entry.availableLevels, entry.levelMap]);
   useEffect(() => {
     const outside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setMenu((current) => current.open ? { ...current, open: false } : current);
+      if (!rootRef.current?.contains(event.target as Node) && !panelRef.current?.contains(event.target as Node)) setMenu((current) => current.open ? { ...current, open: false } : current);
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, []);
 
-  if (tabs.length === 0) return null;
-  return (
-    <div ref={rootRef} data-thinking-selector="combined" style={{ position: "relative" }} onKeyDown={(event) => {
-      if (event.key === "Escape" && open) {
-        event.preventDefault(); event.stopPropagation();
-        setMenu((current) => ({ ...current, open: false }));
-        rootRef.current?.querySelector<HTMLButtonElement>("[aria-haspopup='dialog']")?.focus();
-      }
-    }}>
-      <button type="button" disabled={locked} aria-disabled={locked} aria-label={t("chat.changeReasoningLabel")}
-        aria-haspopup="dialog" aria-expanded={open}
-        title={locked ? summary.reason ?? title : title}
-        onClick={() => {
-          if (!locked) setMenu({ key: menuKey, open: !open, tab: primary.locked ? "fallback" : "primary" });
-        }}
-        style={{
-          display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
-          padding: isMobile ? "0 8px" : "0 9px", height: 28,
-          background: open ? "var(--bg-selected)" : "var(--bg-hover)",
-          border: "1px solid var(--border)", borderRadius: 8,
-          color: locked ? "var(--text-dim)" : "var(--text)",
-          cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.5 : 1,
-          fontSize: 12, fontWeight: 500, whiteSpace: "nowrap",
-        }}>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" />
-          <line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" />
-        </svg>
-        {showLabel && <span>{t("chat.thinkingShort")}: {summary.display}</span>}
-      </button>
-      {open && (
-        <div ref={panelRef} role="dialog" aria-label={t("chat.changeReasoningLabel")} style={{
-          position: "absolute", bottom: "calc(100% + 6px)", ...(isMobile ? { left: 0 } : { right: 0 }),
-          ...(placement ? { left: placement.left, right: "auto", bottom: placement.above ? "calc(100% + 6px)" : "auto", top: placement.above ? "auto" : "calc(100% + 6px)", maxHeight: placement.maxHeight } : {}),
-          zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8,
-          boxShadow: "0 -4px 16px rgba(0,0,0,0.10)", overflowX: "hidden", overflowY: "auto", width: "max-content",
-          minWidth: "min(220px, calc(100vw - 16px))", maxWidth: "min(340px, calc(100vw - 16px))",
-        }}>
+  const close = () => {
+    setMenu((current) => ({ ...current, open: false }));
+    rootRef.current?.querySelector<HTMLButtonElement>("[aria-haspopup='dialog']")?.focus({ preventScroll: true });
+  };
+  const panelContent = <>
           <div role="tablist" aria-label={t("chat.changeReasoningLabel")} style={{ display: "flex", gap: 4, padding: "6px 8px 0", borderBottom: "1px solid var(--border)" }}
             onKeyDown={(event) => {
               if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -171,7 +140,7 @@ export function ThinkingLevelSelector({
                 : enabled[(index + (event.key === "ArrowRight" ? 1 : enabled.length - 1)) % enabled.length];
               if (next) {
                 setMenu((current) => ({ ...current, tab: next }));
-                rootRef.current?.querySelector<HTMLButtonElement>(`[data-thinking-tab='${next}']`)?.focus();
+                panelRef.current?.querySelector<HTMLButtonElement>(`[data-thinking-tab='${next}']`)?.focus();
               }
             }}>
             {tabs.map((value) => {
@@ -184,7 +153,7 @@ export function ThinkingLevelSelector({
                   title={state.reason ?? `${entries[value].model?.provider}/${entries[value].model?.modelId}`}
                   onClick={() => { if (!state.locked) setMenu((current) => ({ ...current, tab: value })); }}
                   style={{
-                    flex: 1, padding: "7px 8px", border: "none", borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
+                    flex: 1, padding: "7px 8px", minHeight: isMobile ? 44 : undefined, border: "none", borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
                     background: "none", color: state.locked ? "var(--text-dim)" : active ? "var(--text)" : "var(--text-muted)",
                     cursor: state.locked ? "not-allowed" : "pointer", opacity: state.locked ? 0.5 : 1,
                     fontSize: 12, fontWeight: active ? 600 : 400, whiteSpace: "nowrap",
@@ -194,7 +163,7 @@ export function ThinkingLevelSelector({
               );
             })}
           </div>
-          <div id={`${id}-${tab}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}-tab`}>
+          <div id={`${id}-${tab}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}-tab`} style={isMobile ? { minHeight: 0, overflowY: "auto" } : undefined}>
             <div title={`${entry.model?.provider}/${entry.model?.modelId}`} style={{ padding: "7px 12px 4px", fontSize: 11, color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {entry.model?.modelId}
             </div>
@@ -221,7 +190,7 @@ export function ThinkingLevelSelector({
                       if (!active) entry.onChange?.(value);
                     }}
                     style={{
-                      display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 12px",
+                      display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 12px", minHeight: isMobile ? 48 : undefined,
                       background: active ? "var(--bg-selected)" : "none", border: "none",
                       color: active ? "var(--text)" : "var(--text-muted)", cursor: "pointer", fontSize: 12,
                       textAlign: "left", fontWeight: active ? 600 : 400,
@@ -238,8 +207,53 @@ export function ThinkingLevelSelector({
               })}
             </div>
           </div>
+  </>;
+
+  if (tabs.length === 0) return null;
+  return (
+    <div ref={rootRef} data-thinking-selector="combined" style={{ position: "relative" }} onKeyDown={(event) => {
+      if (event.key === "Escape" && open) {
+        event.preventDefault(); event.stopPropagation();
+        setMenu((current) => ({ ...current, open: false }));
+        rootRef.current?.querySelector<HTMLButtonElement>("[aria-haspopup='dialog']")?.focus();
+      }
+    }}>
+      <button type="button" disabled={locked} aria-disabled={locked} aria-label={t("chat.changeReasoningLabel")}
+        aria-haspopup="dialog" aria-expanded={open}
+        title={locked ? summary.reason ?? title : title}
+        onClick={() => {
+          if (!locked) setMenu({ key: menuKey, open: !open, tab: primary.locked ? "fallback" : "primary" });
+        }}
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+          padding: isMobile ? "0 10px" : "0 9px", height: isMobile ? 44 : 28,
+          background: open ? "var(--bg-selected)" : "var(--bg-hover)",
+          border: "1px solid var(--border)", borderRadius: 8,
+          color: locked ? "var(--text-dim)" : "var(--text)",
+          cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.5 : 1,
+          fontSize: 12, fontWeight: 500, whiteSpace: "nowrap",
+        }}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M9.5 2A5.5 5.5 0 0 0 4 7.5c0 1.7.78 3.21 2 4.21V14a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-2.29c1.22-1 2-2.51 2-4.21A5.5 5.5 0 0 0 9.5 2z" />
+          <line x1="7" y1="18" x2="12" y2="18" /><line x1="8" y1="21" x2="11" y2="21" />
+        </svg>
+        {showLabel && <span>{t("chat.thinkingShort")}: {summary.display}</span>}
+      </button>
+      {open && (isMobile && typeof document !== "undefined" ? createPortal(
+        <MobileComposerSheet title={t("chat.changeReasoningLabel")} onClose={close} panelRef={panelRef}>
+          {panelContent}
+        </MobileComposerSheet>, document.body,
+      ) : (
+        <div ref={panelRef} role="dialog" aria-label={t("chat.changeReasoningLabel")} style={{
+          position: "absolute", bottom: "calc(100% + 6px)", ...(isMobile ? { left: 0 } : { right: 0 }),
+          ...(placement ? { left: placement.left, right: "auto", bottom: placement.above ? "calc(100% + 6px)" : "auto", top: placement.above ? "auto" : "calc(100% + 6px)", maxHeight: placement.maxHeight } : {}),
+          zIndex: 100, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8,
+          boxShadow: "0 -4px 16px rgba(0,0,0,0.10)", overflowX: "hidden", overflowY: "auto", width: "max-content",
+          minWidth: "min(220px, calc(100vw - 16px))", maxWidth: "min(340px, calc(100vw - 16px))",
+        }}>
+          {panelContent}
         </div>
-      )}
+      ))}
     </div>
   );
 }

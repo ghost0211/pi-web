@@ -44,6 +44,13 @@ test("the composer tools menu replaces the auto-advance trigger and opens both d
   assert.match(menuSource, /t\("chat.tools"\)/);
 });
 
+test("nested tools menus preserve the More panel and only consume Escape while open", () => {
+  assert.match(menuSource, /data-composer-controls-portal="tools"/);
+  assert.match(menuSource, /if \(event\.key !== "Escape" \|\| !open\) return/);
+  assert.match(menuSource, /if \(open\) panelRef\.current\?\.querySelector[\s\S]*?focus\(\{ preventScroll: true \}\)/);
+  assert.match(menuSource, /onKeyDown=\{onKeyDown\} style=\{\{ position: "relative"/);
+});
+
 test("scheduled sends are cancelled on session change and fire steer/follow-up or send", () => {
   assert.match(hookSource, /cancelScheduledSend/);
   assert.match(hookSource, /clearTimeout\(scheduledSendTimerRef\.current\)/);

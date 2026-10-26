@@ -2404,41 +2404,75 @@ span.token.table {
   .mobile-toolbar-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* Let the model take its own row; secondary composer actions wrap below it. */
-/* The idle mobile composer inlines its controls: keep the model label in one
-   flexible chip; other controls stay icon-only. */
-.mobile-composer-controls[data-mobile-inline="true"] {
-  flex-wrap: nowrap;
+/* Keep frequent choices readable, with secondary actions in a separate More panel. */
+.mobile-composer-footer {
+  position: relative;
+  grid-template-areas: "primary primary" "quick send";
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 8px !important;
+}
+.mobile-composer-footer[data-streaming] .mobile-composer-send-actions { max-width: 100%; }
+.mobile-composer-footer[data-streaming] { grid-template-areas: "quick" "send"; grid-template-columns: minmax(0, 1fr) !important; }
+.mobile-composer-primary-controls {
+  grid-area: primary;
+  min-width: 0;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mobile-composer-primary-controls .model-selector { flex: 1 1 140px; width: auto !important; }
+.mobile-composer-primary-controls [data-thinking-selector] { flex: 0 0 auto; max-width: 100%; }
+.mobile-composer-quick-actions { grid-area: quick; flex-wrap: wrap; }
+.mobile-composer-send-actions { grid-area: send; justify-content: flex-end; flex-wrap: wrap; max-width: 100%; }
+.mobile-composer-quick-actions > button,
+.mobile-composer-quick-actions .kimi-manual-trigger,
+.mobile-composer-send-actions button,
+.mobile-composer-controls > button,
+.mobile-composer-controls > div > button { min-height: 44px !important; min-width: 44px !important; flex-shrink: 0; }
+.mobile-composer-controls { max-width: calc(100vw - 48px); }
+.mobile-composer-controls .composer-context-tooltip { left: 0; right: auto !important; max-width: calc(100vw - 72px); }
+.mobile-composer-tool-presets {
+  left: -44px !important;
+  width: min(320px, calc(100vw - 64px));
+  max-height: min(420px, 60dvh);
+  overflow-y: auto !important;
+}
+.mobile-composer-tool-presets button { min-height: 44px; white-space: normal !important; }
+.mobile-composer-tool-presets > div { min-width: 0 !important; }
+
+.mobile-composer-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: flex-end;
+  padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.35);
+}
+.mobile-composer-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 100%;
+  min-height: 0;
   overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.22);
 }
-.mobile-composer-controls[data-mobile-inline="true"] .model-selector {
-  flex: 0 1 auto !important;
-  min-width: 0;
-  max-width: none !important;
+.mobile-composer-sheet-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 8px; padding: 4px 8px 4px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid var(--border); }
+.mobile-composer-sheet-header button { width: 44px; height: 44px; border: 0; border-radius: 8px; background: none; color: var(--text-muted); font-size: 24px; cursor: pointer; }
+.mobile-composer-sheet [role="tab"] { min-height: 44px; font-size: 13px !important; }
+.mobile-composer-sheet .model-selector-options { flex: 1 1 auto; overscroll-behavior: contain; }
+.mobile-composer-sheet .model-selector-option { min-height: 48px; font-size: 14px !important; }
+.mobile-composer-sheet .model-option-provider { max-width: 30%; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.mobile-composer-sheet input { min-height: 44px; font-size: 16px !important; }
+.mobile-composer-sheet button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 360px) {
+  .mobile-composer-primary-controls .model-selector { flex-basis: 100%; }
 }
-.mobile-composer-controls[data-mobile-inline="true"] .model-selector > button {
-  min-height: 32px !important;
-  min-width: 0;
-}
-.mobile-composer-controls[data-mobile-inline="true"] > button,
-.mobile-composer-controls[data-mobile-inline="true"] > div > button {
-  min-width: 32px !important;
-  min-height: 32px !important;
-}
-.mobile-composer-controls[data-mobile-inline="true"] > button span,
-.mobile-composer-controls[data-mobile-inline="true"] > div > button span {
-  display: none !important;
-}
-/* The streaming sheet keeps the original layout. */
-.mobile-composer-controls:not([data-mobile-inline="true"]) > div:first-child { flex: 0 0 44px; }
-.mobile-composer-controls:not([data-mobile-inline="true"]) .model-selector { flex: 1 1 calc(100% - 52px) !important; }
-.mobile-composer-controls:not([data-mobile-inline="true"]) > button,
-.mobile-composer-controls:not([data-mobile-inline="true"]) > div > button,
-.mobile-composer-controls:not([data-mobile-inline="true"]) .model-selector > button {
-  min-height: 44px !important;
-}
-.mobile-composer-controls:not([data-mobile-inline="true"]) > button,
-.mobile-composer-controls:not([data-mobile-inline="true"]) > div:not(.model-selector) > button { min-width: 44px !important; }
 
 /* Mobile sidebar: slide in/out as overlay */
 @media (max-width: 640px) {

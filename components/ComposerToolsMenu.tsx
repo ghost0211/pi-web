@@ -60,13 +60,17 @@ export function ComposerToolsMenu({ items, active = false, disabled = false, ari
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
+  useEffect(() => {
+    if (open) panelRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+  }, [open]);
+
   const close = () => {
     setOpen(false);
     requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape") return;
+    if (event.key !== "Escape" || !open) return;
     event.preventDefault();
     event.stopPropagation();
     close();
@@ -75,7 +79,7 @@ export function ComposerToolsMenu({ items, active = false, disabled = false, ari
   const triggerLabel = ariaLabel ?? t("chat.tools");
 
   return (
-    <div ref={rootRef} style={{ position: "relative", flexShrink: 0 }}>
+    <div ref={rootRef} onKeyDown={onKeyDown} style={{ position: "relative", flexShrink: 0 }}>
       <button
         ref={triggerRef}
         type="button"
@@ -112,7 +116,7 @@ export function ComposerToolsMenu({ items, active = false, disabled = false, ari
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         </svg>
-        {!isMobile && <span>{triggerLabel}</span>}
+        <span>{triggerLabel}</span>
         {!isMobile && (
           <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
             <polyline points="2 3.5 5 6.5 8 3.5" />
@@ -124,11 +128,14 @@ export function ComposerToolsMenu({ items, active = false, disabled = false, ari
         isMobile ? (
           <div
             role="presentation"
+            data-composer-controls-portal="tools"
+            onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => { if (event.target === event.currentTarget) close(); }}
             style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(0,0,0,0.32)" }}
           >
             <div
               ref={panelRef}
+              data-composer-controls-portal="tools"
               role="menu"
               aria-label={triggerLabel}
               onKeyDown={onKeyDown}

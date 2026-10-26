@@ -224,10 +224,10 @@ test("popup clamps to the viewport and uses the roomier side with scrollable hei
   for (const [anchor, expected] of [
     [{ left: -10, right: 80, top: 481, bottom: 509 }, { left: 18, top: "auto", maxHeight: 467 }],
     [{ left: 280, right: 370, top: 100, bottom: 128 }, { left: -188, top: "calc(100% + 6px)", maxHeight: 426 }],
-    [{ left: 20, right: 110, top: 50, bottom: 78 }, { left: 0, top: "calc(100% + 6px)", maxHeight: 476 }],
-    [{ left: 20, right: 110, top: 250, bottom: 278 }, { left: 0, top: "calc(100% + 6px)", maxHeight: 276, height: 400 }],
+    [{ left: 20, right: 110, top: 50, bottom: 78 }, { left: -12, top: "calc(100% + 6px)", maxHeight: 476 }],
+    [{ left: 20, right: 110, top: 250, bottom: 278 }, { left: -12, top: "calc(100% + 6px)", maxHeight: 276, height: 400 }],
   ]) {
-    const f = fixture(t, { isMobile: true });
+    const f = fixture(t);
     f.open();
     f.harness.find((node) => node.props["data-thinking-selector"]).props.ref.current = {
       getBoundingClientRect: () => anchor, querySelector: () => null,

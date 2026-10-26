@@ -8,8 +8,10 @@ The mobile breakpoint remains 640 CSS pixels. Desktop layout and action permissi
 - Header actions are a labelled grid rather than a single icon-only row: two columns through 360px, three on larger phones. Outside click and Escape close it; Escape restores focus to its trigger.
 - Session rows keep their virtualized fixed height. A mobile “…” button opens the existing context menu instead of showing permanent pin/archive controls. Clicking it must not select the session. Existing rename, archive, delete and busy/permission guards remain authoritative.
 - The drawer uses more of a phone's width, a stronger scrim and larger touch targets. Desktop hover actions remain available.
-- The composer has a 44px more-controls trigger, a separate secondary controls row and bottom safe-area padding. Its outside-click handler excludes model and auto-advance portals, so interacting with them cannot unexpectedly collapse the composer.
-- The circle beside the model is the context-usage ring, not a provider glyph.
+- The idle composer separates readable model/thinking selectors from the attachment/tool-preset and send row. Controls have at least 44px touch targets, selectors wrap on narrow phones, and secondary actions (including the new-session temporary-session toggle) live behind More rather than competing for one unbounded row. Streaming queue/Stop actions wrap independently.
+- Model and thinking pickers use body-portalled mobile sheets with scrollable options, close buttons, focus restoration/trapping, and visual-viewport resize/scroll tracking. Model search auto-focuses only on desktop; mobile opens for browsing and enables the keyboard only when the user explicitly focuses search.
+- More respects child portal interactions and nested Escape handling. The tool-actions menu focuses its first item and returns focus before a second Escape closes More. Bottom safe-area padding remains enabled.
+- Context usage lives in More on mobile; its tooltip is left-aligned to stay within the viewport. The glyph inside the model button identifies the provider.
 
 ## Three model identities
 

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { ProviderGlyph } from "./ProviderIcon";
+import { MobileComposerSheet } from "./MobileComposerSheet";
 import type { FallbackModelRef } from "@/lib/model-fallback";
 
 export interface ModelSelectorOption {
@@ -87,6 +88,7 @@ export function ModelSelector({
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<{ top: number; right: number; bottom: number; left: number; width: number } | null>(null);
@@ -145,7 +147,11 @@ export function ModelSelector({
     setFilter("");
   }, [locked, hasFallbackUi, fallbackLocked]);
 
-  const isMobileSheet = isMobile && variant !== "field";
+  const close = () => {
+    setOpen(false);
+    setFilter("");
+    triggerRef.current?.focus({ preventScroll: true });
+  };
   const buttonStyle: CSSProperties = variant === "field"
     ? {
         display: "flex",
@@ -153,7 +159,7 @@ export function ModelSelector({
         gap: 7,
         width: "100%",
         minWidth: 0,
-        height: 34,
+        height: isMobile ? 44 : 34,
         padding: "0 9px",
         overflow: "hidden",
         border: "1px solid var(--border)",
@@ -169,11 +175,11 @@ export function ModelSelector({
         alignItems: "center",
         justifyContent: isMobile ? "flex-start" : undefined,
         gap: 6,
-        width: isMobileSheet ? undefined : isMobile ? "100%" : undefined,
+        width: isMobile ? "100%" : undefined,
         minWidth: 0,
-        maxWidth: isMobileSheet ? undefined : isMobile ? "100%" : 220,
-        minHeight: isMobileSheet ? 32 : isMobile ? 32 : 28,
-        padding: isMobile ? "0 8px" : "1px 10px",
+        maxWidth: isMobile ? "100%" : 220,
+        minHeight: isMobile ? 44 : 28,
+        padding: isMobile ? "5px 10px" : "1px 10px",
         overflow: "hidden",
         border: "1px solid var(--border)",
         borderRadius: 8,
@@ -188,132 +194,11 @@ export function ModelSelector({
 
   const choose = (option: ModelSelectorOption) => {
     const active = option.modelId === value?.modelId && option.provider === value?.provider;
-    setOpen(false);
-    setFilter("");
+    close();
     if (!active || isAutoSelection) onChange(option.provider, option.modelId);
   };
 
-  return (
-    <div
-      ref={rootRef}
-      className={`model-selector is-${variant}${locked ? " is-disabled" : ""}`}
-      style={{ position: "relative", width: variant === "field" || isMobile && !isMobileSheet ? "100%" : undefined, minWidth: 0, flex: variant === "toolbar" && isMobile && !isMobileSheet ? "1 1 auto" : undefined }}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape" || !open) return;
-        event.preventDefault();
-        event.stopPropagation();
-        setFilter("");
-        setOpen(false);
-      }}
-    >
-      <button
-        type="button"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-busy={busy || undefined}
-        disabled={locked}
-        title={busy ? "Switching model" : locked ? currentName : sortedOptions.length > 0 || onClear ? "Change model" : "No available models"}
-        style={buttonStyle}
-        onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          setAnchorRect({ top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width });
-          setOpen((current) => {
-            if (current) setFilter("");
-            return !current;
-          });
-        }}
-        onMouseEnter={(event) => {
-          if (locked) return;
-          event.currentTarget.style.background = "var(--bg-hover)";
-          event.currentTarget.style.color = "var(--text)";
-        }}
-        onMouseLeave={(event) => {
-          if (locked) {
-            event.currentTarget.style.background = variant === "field" ? "var(--bg-panel)" : "none";
-            event.currentTarget.style.color = variant === "field" ? "var(--text-dim)" : "var(--text-muted)";
-            return;
-          }
-          event.currentTarget.style.background = open ? "var(--bg-hover)" : variant === "field" ? "var(--bg)" : "none";
-          event.currentTarget.style.color = variant === "field" ? "var(--text)" : "var(--text-muted)";
-        }}
-      >
-        {busy ? (
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }} aria-hidden="true">
-            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-          </svg>
-        ) : (
-          <ProviderGlyph id={currentProvider} size={14} />
-        )}
-        {currentProvider?.trim() && variant !== "field" && !isMobile ? (
-          // Two-line chip: model name primary, provider id secondary — no more
-          // overlong "provider › model" single line in the composer.
-          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.2, overflow: "hidden" }}>
-            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {currentName}
-            </span>
-            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, fontWeight: 400, color: "var(--text-dim)" }}>
-              {currentProvider}
-            </span>
-          </span>
-        ) : (
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {currentProvider?.trim() && (
-              <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>{currentProvider} › </span>
-            )}
-            {currentName}
-          </span>
-        )}
-        {hasFallbackUi && fallbackModel && (
-          <span
-            aria-label={t("chat.fallbackConfigured")}
-            title={`${t("chat.fallbackConfigured")}: ${fallbackModel.provider} › ${fallbackModel.modelId}`}
-            style={{ flexShrink: 0, padding: "2px 5px", borderRadius: 4, background: "rgba(234,179,8,0.14)", color: "var(--warning, #ca8a04)", fontSize: 9, fontWeight: 700 }}
-          >↪</span>
-        )}
-        {variant === "field" && (
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}>
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        )}
-      </button>
-
-      {open && anchorRect && typeof document !== "undefined" && createPortal(
-        (() => {
-          const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-          const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
-          const spaceAbove = anchorRect.top - 8;
-          const spaceBelow = viewportHeight - anchorRect.bottom - 8;
-          const openAbove = placement === "up" || spaceAbove > spaceBelow;
-          const maxHeight = Math.max(120, Math.min(openAbove ? spaceAbove : spaceBelow, viewportHeight * 0.6));
-          const verticalPosition = openAbove
-            ? { bottom: viewportHeight - anchorRect.top + 6 }
-            : { top: anchorRect.bottom + 6 };
-          const horizontalPosition: CSSProperties = isMobile
-            ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
-            : { left: anchorRect.left, width: "max-content", minWidth: anchorRect.width, maxWidth: Math.max(anchorRect.width, viewportWidth - anchorRect.left - 8) };
-
-          return (
-            <div
-              ref={panelRef}
-              data-composer-controls-portal="model"
-              role={hasFallbackUi ? "dialog" : "listbox"}
-              aria-label={ariaLabel}
-              style={{
-                position: "fixed",
-                ...verticalPosition,
-                ...horizontalPosition,
-                zIndex: 9999,
-                display: "flex",
-                flexDirection: "column",
-                maxHeight,
-                overflow: "hidden",
-                border: "1px solid var(--border)",
-                borderRadius: 8,
-                background: "var(--bg)",
-                boxShadow: openAbove ? "0 -4px 16px rgba(0,0,0,0.18)" : "0 4px 16px rgba(0,0,0,0.18)",
-              }}
-            >
+  const panelContent = <>
               {hasFallbackUi && (
                 <div role="tablist" aria-label={t("chat.fallbackModelPicker")} style={{ display: "flex", flexShrink: 0, gap: 4, padding: "6px 8px 0", borderBottom: "1px solid var(--border)" }}>
                   {(["primary", "backup"] as const).map((tab) => (
@@ -342,7 +227,7 @@ export function ModelSelector({
                     onChange={(event) => setFilter(event.target.value)}
                     placeholder={t("chat.filterModels")}
                     aria-label={t("chat.filterModels")}
-                    autoFocus
+                    autoFocus={!isMobile}
                     autoComplete="off"
                     spellCheck={false}
                     style={{
@@ -356,12 +241,12 @@ export function ModelSelector({
                       background: "var(--bg)",
                       color: "var(--text)",
                       fontFamily: "var(--font-mono)",
-                      fontSize: 11,
+                      fontSize: isMobile ? 16 : 11,
                     }}
                   />
                 </div>
               )}
-              <div role={hasFallbackUi ? "listbox" : undefined} aria-label={hasFallbackUi ? t(pickerTab === "backup" ? "chat.fallbackBackup" : "chat.fallbackPrimary") : undefined} style={{ minHeight: 0, overflowY: "auto" }}>
+              <div className="model-selector-options" role={hasFallbackUi || isMobile ? "listbox" : undefined} aria-label={hasFallbackUi ? t(pickerTab === "backup" ? "chat.fallbackBackup" : "chat.fallbackPrimary") : undefined} style={{ minHeight: 0, overflowY: "auto" }}>
                 {hasFallbackUi && pickerTab === "backup" && onFallbackModelChange && !filter.trim() && (
                   <ModelOptionButton
                     active={!fallbackModel}
@@ -369,16 +254,14 @@ export function ModelSelector({
                     label={t("chat.fallbackOff")}
                     onClick={() => {
                       if (fallbackLocked) return;
-                      setOpen(false);
-                      setFilter("");
+                      close();
                       onFallbackModelChange(null);
                     }}
                   />
                 )}
                 {(!hasFallbackUi || pickerTab === "primary") && onClear && !filter.trim() && (
                   <ModelOptionButton active={!value} label={emptyLabel ?? "Default"} onClick={() => {
-                    setOpen(false);
-                    setFilter("");
+                    close();
                     onClear();
                   }} />
                 )}
@@ -414,8 +297,7 @@ export function ModelSelector({
                           if (sameModelLocked) return;
                           if (hasFallbackUi && pickerTab === "backup") {
                             if (fallbackLocked) return;
-                            setOpen(false);
-                            setFilter("");
+                            close();
                             if (!sameAsConfiguredFallback) {
                               onFallbackModelChange?.({ provider: option.provider, modelId: option.modelId });
                             }
@@ -429,6 +311,134 @@ export function ModelSelector({
                   </div>
                 ))}
               </div>
+  </>;
+
+  return (
+    <div
+      ref={rootRef}
+      className={`model-selector is-${variant}${locked ? " is-disabled" : ""}`}
+      style={{ position: "relative", width: variant === "field" || isMobile ? "100%" : undefined, minWidth: 0 }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={ariaLabel ?? t("chat.fallbackModelPicker")}
+        aria-haspopup={isMobile || hasFallbackUi ? "dialog" : "listbox"}
+        aria-expanded={open}
+        aria-busy={busy || undefined}
+        disabled={locked}
+        title={busy ? "Switching model" : locked ? currentName : sortedOptions.length > 0 || onClear ? "Change model" : "No available models"}
+        style={buttonStyle}
+        onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          setAnchorRect({ top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width });
+          setOpen((current) => {
+            if (current) setFilter("");
+            return !current;
+          });
+        }}
+        onMouseEnter={(event) => {
+          if (locked) return;
+          event.currentTarget.style.background = "var(--bg-hover)";
+          event.currentTarget.style.color = "var(--text)";
+        }}
+        onMouseLeave={(event) => {
+          if (locked) {
+            event.currentTarget.style.background = variant === "field" ? "var(--bg-panel)" : "none";
+            event.currentTarget.style.color = variant === "field" ? "var(--text-dim)" : "var(--text-muted)";
+            return;
+          }
+          event.currentTarget.style.background = open ? "var(--bg-hover)" : variant === "field" ? "var(--bg)" : "none";
+          event.currentTarget.style.color = variant === "field" ? "var(--text)" : "var(--text-muted)";
+        }}
+      >
+        {busy ? (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }} aria-hidden="true">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          </svg>
+        ) : (
+          <ProviderGlyph id={currentProvider} size={14} />
+        )}
+        {currentProvider?.trim() && variant !== "field" ? (
+          // Two-line chip: model name primary, provider id secondary — no more
+          // overlong "provider › model" single line in the composer.
+          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", lineHeight: 1.2, overflow: "hidden" }}>
+            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {currentName}
+            </span>
+            <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, fontWeight: 400, color: "var(--text-dim)" }}>
+              {currentProvider}
+            </span>
+          </span>
+        ) : (
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {currentProvider?.trim() && (
+              <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>{currentProvider} › </span>
+            )}
+            {currentName}
+          </span>
+        )}
+        {hasFallbackUi && fallbackModel && (
+          <span
+            aria-label={t("chat.fallbackConfigured")}
+            title={`${t("chat.fallbackConfigured")}: ${fallbackModel.provider} › ${fallbackModel.modelId}`}
+            style={{ flexShrink: 0, padding: "2px 5px", borderRadius: 4, background: "rgba(234,179,8,0.14)", color: "var(--warning, #ca8a04)", fontSize: 9, fontWeight: 700 }}
+          >↪</span>
+        )}
+        {(variant === "field" || isMobile) && (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, color: "var(--text-dim)" }}>
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        )}
+      </button>
+
+      {open && anchorRect && typeof document !== "undefined" && createPortal(
+        isMobile ? (
+          <MobileComposerSheet title={ariaLabel ?? t("chat.fallbackModelPicker")} onClose={close} panelRef={panelRef}>
+            {panelContent}
+          </MobileComposerSheet>
+        ) : (() => {
+          const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+          const viewportWidth = window.visualViewport?.width ?? window.innerWidth;
+          const spaceAbove = anchorRect.top - 8;
+          const spaceBelow = viewportHeight - anchorRect.bottom - 8;
+          const openAbove = placement === "up" || spaceAbove > spaceBelow;
+          const maxHeight = Math.max(120, Math.min(openAbove ? spaceAbove : spaceBelow, viewportHeight * 0.6));
+          const verticalPosition = openAbove
+            ? { bottom: viewportHeight - anchorRect.top + 6 }
+            : { top: anchorRect.bottom + 6 };
+          const horizontalPosition: CSSProperties = isMobile
+            ? { left: 8, right: 8, maxWidth: "calc(100vw - 16px)" }
+            : { left: anchorRect.left, width: "max-content", minWidth: anchorRect.width, maxWidth: Math.max(anchorRect.width, viewportWidth - anchorRect.left - 8) };
+
+          return (
+            <div
+              ref={panelRef}
+              data-composer-controls-portal="model"
+              role={hasFallbackUi ? "dialog" : "listbox"}
+              aria-label={ariaLabel}
+              style={{
+                position: "fixed",
+                ...verticalPosition,
+                ...horizontalPosition,
+                zIndex: 9999,
+                display: "flex",
+                flexDirection: "column",
+                maxHeight,
+                overflow: "hidden",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                background: "var(--bg)",
+                boxShadow: openAbove ? "0 -4px 16px rgba(0,0,0,0.18)" : "0 4px 16px rgba(0,0,0,0.18)",
+              }}
+            >
+              {panelContent}
             </div>
           );
         })(),
@@ -444,6 +454,7 @@ function ModelOptionButton({ active, provider, label, onClick, disabled = false,
     <button
       type="button"
       role="option"
+      className="model-selector-option"
       aria-selected={active}
       aria-disabled={disabled || undefined}
       disabled={disabled}
@@ -458,7 +469,7 @@ function ModelOptionButton({ active, provider, label, onClick, disabled = false,
         : <span style={{ width: 10, flexShrink: 0 }} />}
       {trimmedProvider && <ProviderGlyph id={trimmedProvider} size={14} />}
       {trimmedProvider && (
-        <span style={{ flexShrink: 0, color: "var(--text-dim)", fontWeight: 400 }} title={trimmedProvider}>
+        <span className="model-option-provider" style={{ flexShrink: 0, color: "var(--text-dim)", fontWeight: 400 }} title={trimmedProvider}>
           {trimmedProvider} ›
         </span>
       )}

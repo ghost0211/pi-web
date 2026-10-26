@@ -72,7 +72,8 @@ test("keeps mobile message and session actions reachable without hover", () => {
 
 test("keeps the send button outside the mobile controls popover", () => {
   assert.match(chatInputSource, /bottom: "calc\(100% \+ 8px\)"[\s\S]*?flexWrap: "wrap"/);
-  assert.match(chatInputSource, /setControlsMenuOpen\(false\);[\s\S]*?<\/div>\s*<div style=\{\{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0/);
+  assert.match(chatInputSource, /setControlsMenuOpen\(false\);[\s\S]*?<\/div>\s*<div className=\{isMobile \? "mobile-composer-send-actions" : undefined\} style=\{\{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0/);
+  assert.match(cssSource, /\.mobile-composer-send-actions \{ grid-area: send;/);
 });
 
 test("stacks tool details and extension status on phones", () => {

@@ -76,6 +76,14 @@ test("keeps the send button outside the mobile controls popover", () => {
   assert.match(cssSource, /\.mobile-composer-send-actions \{ grid-area: send;/);
 });
 
+test("keeps the mobile new-session welcome quiet and composer within thumb reach", () => {
+  assert.match(cssSource, /\.kimi-new-session \{[\s\S]*?justify-content: stretch;[\s\S]*?padding: 16px 8px max\(12px, env\(safe-area-inset-bottom\)\)/);
+  assert.match(cssSource, /\.kimi-new-session-stage \{[\s\S]*?flex: 1;[\s\S]*?min-height: 0;[\s\S]*?flex-direction: column/);
+  assert.match(cssSource, /\.kimi-new-session-stage > \.text-center \{[\s\S]*?margin-bottom: auto;/);
+  assert.match(cssSource, /\.kimi-new-session-stage h1 \{[\s\S]*?font-size: 22px;/);
+  assert.match(cssSource, /\.kimi-new-session-stage \.kimi-empty-copy \{ display: none; \}/);
+});
+
 test("stacks tool details and extension status on phones", () => {
   assert.match(toolPanelSource, /@media \(max-width: 640px\) \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);[\s\S]*?grid-template-rows: auto minmax\(0, 1fr\);/);
   assert.match(toolPanelSource, /\.tool-definition-field \{\s*grid-template-columns: minmax\(0, 1fr\);/);

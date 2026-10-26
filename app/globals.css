@@ -279,9 +279,30 @@ body {
 .kimi-new-session .kimi-composer-shell { transform: translateY(9px); }
 
 @media (max-width: 640px) {
-  .kimi-new-session-stage,
-  .kimi-new-session-stage h1,
-  .kimi-new-session-stage .kimi-empty-copy,
+  .kimi-new-session {
+    justify-content: stretch;
+    padding: 16px 8px max(12px, env(safe-area-inset-bottom));
+  }
+  .kimi-new-session-stage {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    transform: none;
+  }
+  /* Keep the quiet welcome at the top and the composer within thumb reach. */
+  .kimi-new-session-stage > .text-center {
+    margin-bottom: auto;
+    padding: clamp(16px, 7vh, 56px) 0 24px;
+  }
+  .kimi-new-session-stage h1 {
+    margin: 0;
+    transform: none;
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.35;
+  }
+  .kimi-new-session-stage .kimi-empty-copy { display: none; }
   .kimi-new-session .kimi-composer-shell { transform: none; }
   .kimi-new-session .kimi-composer-main { min-height: 62px !important; }
 }
@@ -2407,21 +2428,18 @@ span.token.table {
 /* Keep frequent choices readable, with secondary actions in a separate More panel. */
 .mobile-composer-footer {
   position: relative;
-  grid-template-areas: "primary primary" "quick send";
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "model model model" "thinking quick send";
+  grid-template-columns: auto minmax(0, 1fr) auto;
   row-gap: 8px !important;
 }
 .mobile-composer-footer[data-streaming] .mobile-composer-send-actions { max-width: 100%; }
 .mobile-composer-footer[data-streaming] { grid-template-areas: "quick" "send"; grid-template-columns: minmax(0, 1fr) !important; }
-.mobile-composer-primary-controls {
-  grid-area: primary;
-  min-width: 0;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.mobile-composer-primary-controls .model-selector { flex: 1 1 140px; width: auto !important; }
-.mobile-composer-primary-controls [data-thinking-selector] { flex: 0 0 auto; max-width: 100%; }
-.mobile-composer-quick-actions { grid-area: quick; flex-wrap: wrap; }
+/* Flatten only the configuration wrapper: the model and thinking controls can
+   participate in separate grid rows without being duplicated in the DOM. */
+.mobile-composer-primary-controls { display: contents; }
+.mobile-composer-primary-controls .model-selector { grid-area: model; width: 100% !important; min-width: 0; }
+.mobile-composer-primary-controls [data-thinking-selector] { grid-area: thinking; max-width: 100%; }
+.mobile-composer-quick-actions { grid-area: quick; min-width: 0; flex-wrap: wrap; }
 .mobile-composer-send-actions { grid-area: send; justify-content: flex-end; flex-wrap: wrap; max-width: 100%; }
 .mobile-composer-quick-actions > button,
 .mobile-composer-quick-actions .kimi-manual-trigger,
@@ -2471,7 +2489,9 @@ span.token.table {
 .mobile-composer-sheet input { min-height: 44px; font-size: 16px !important; }
 .mobile-composer-sheet button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 360px) {
-  .mobile-composer-primary-controls .model-selector { flex-basis: 100%; }
+  .mobile-composer-footer { column-gap: 4px; }
+  .mobile-composer-quick-actions { gap: 2px; }
+  .mobile-composer-send-actions { gap: 2px; }
 }
 
 /* Mobile sidebar: slide in/out as overlay */

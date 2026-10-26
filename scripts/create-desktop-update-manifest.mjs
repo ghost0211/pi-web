@@ -40,7 +40,9 @@ export function collectUpdaterArtifacts(bundleDir) {
     if (!existsSync(installerPath)) continue;
     const platform = /x64-setup\.exe$/.test(installerName)
       ? "windows-x86_64"
-      : /x86_64\.AppImage$/.test(installerName)
+      // Tauri's Linux bundle currently uses amd64, while other tooling may
+      // emit x86_64. Both names identify the same updater platform.
+      : /(?:x86_64|amd64)\.AppImage$/.test(installerName)
         ? "linux-x86_64"
         : /x86_64\.deb$/.test(installerName)
           ? null // .deb is distribution-only; the updater feed points at AppImage.
@@ -61,8 +63,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const tag = process.env.GITHUB_REF_NAME;
   const bundleDir = resolve(process.argv[2] ?? join(repoRoot, "src-tauri/target/release/bundle/nsis"));
   const artifacts = collectUpdaterArtifacts(bundleDir);
-  if (artifacts.length === 0) {
-    throw new Error(`No signed updater artifacts under ${bundleDir}`);
+  const missingPlatforms = ["windows-x86_64", "linux-x86_64"]
+    .filter((platform) => !artifacts.some((artifact) => artifact.platform === platform && artifact.signature.trim()));
+  if (missingPlatforms.length > 0) {
+    throw new Error(`Missing signed updater platforms under ${bundleDir}: ${missingPlatforms.join(", ")}`);
   }
   const manifest = createDesktopUpdateManifest({ version, tag, platforms: artifacts });
   writeFileSync(join(bundleDir, "desktop-latest.json"), `${JSON.stringify(manifest, null, 2)}\n`);

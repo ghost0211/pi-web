@@ -26,7 +26,8 @@ test("desktop update manifest covers the signed Windows and Linux bundles", asyn
   await mkdir(linux, { recursive: true });
   try {
     const exe = `Pi Web Desktop_${version}_x64-setup.exe`;
-    const appimage = `Pi Web Desktop_${version}_x86_64.AppImage`;
+    // This is the actual filename emitted by the Linux release CI (#0.9.87).
+    const appimage = `Pi Web Desktop_${version}_amd64.AppImage`;
     await writeFile(join(nsis, exe), "exe");
     await writeFile(join(nsis, `${exe}.sig`), "untrusted comment: signed update\nWINDOWS");
     await writeFile(join(linux, appimage), "appimage");
@@ -48,7 +49,7 @@ test("desktop update manifest covers the signed Windows and Linux bundles", asyn
     );
     assert.equal(
       manifest.platforms["linux-x86_64"].url,
-      `https://github.com/ghost0211/pi-web/releases/download/${tag}/Pi.Web.Desktop_${version}_x86_64.AppImage`,
+      `https://github.com/ghost0211/pi-web/releases/download/${tag}/Pi.Web.Desktop_${version}_amd64.AppImage`,
     );
     assert.equal(manifest.platforms["windows-x86_64"].signature, "untrusted comment: signed update\nWINDOWS");
     assert.equal(manifest.platforms["linux-x86_64"].signature, "untrusted comment: signed update\nLINUX");
@@ -78,6 +79,7 @@ test("desktop updater is signed, confined to the local WebView and publishes its
   assert.match(workflow, /secrets\.TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /src-tauri\/target\/release\/bundle\/nsis\/\*\.exe\.sig/);
   assert.match(workflow, /desktop-latest\.json/);
+  assert.match(workflow, /for \(const platform of \['windows-x86_64','linux-x86_64'\]\)/);
   assert.match(workflow, /gh release create[^\n]*[\s\S]*?--draft --verify-tag/);
   assert.match(workflow, /gh release edit "\$GITHUB_REF_NAME" --draft=false --latest/);
   assert.ok(workflow.includes('notes_file="docs/releases/v${version}.md"'));

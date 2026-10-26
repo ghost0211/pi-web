@@ -2878,7 +2878,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             position: "relative",
             marginLeft: isMobile ? 0 : "auto",
           }}>
-            <div className={isMobile ? "mobile-composer-primary-controls" : undefined} style={{ display: isMobile ? (isStreaming ? "none" : "flex") : "contents" }}>
+            <div className={isMobile ? "mobile-composer-primary-controls" : undefined} style={{ display: isMobile && isStreaming ? "none" : "contents" }}>
             {(modelOptions.length > 0 || model || modelError) && onModelChange && (
               <ModelSelector
                 options={modelOptions}

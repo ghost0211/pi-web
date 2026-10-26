@@ -10,8 +10,9 @@ test("mobile composer respects the bottom safe area without changing desktop pad
   assert.match(input, /padding: isMobile \? "0 8px max\(8px, env\(safe-area-inset-bottom\)\)" : "0 16px 16px"/);
 });
 test("frequent selectors have a separate row from quick actions and sending", () => {
-  assert.match(css, /grid-template-areas: "primary primary" "quick send"/);
-  assert.match(css, /\.mobile-composer-primary-controls \{[\s\S]*?min-width: 0;[\s\S]*?flex-wrap: wrap/);
+  assert.match(css, /grid-template-areas: "model model model" "thinking quick send"/);
+  assert.match(css, /\.mobile-composer-primary-controls \{ display: contents; \}/);
+  assert.match(input, /display: isMobile && isStreaming \? "none" : "contents"/);
   for (const area of ["primary-controls", "quick-actions", "send-actions"]) {
     assert.ok(input.includes(`"mobile-composer-${area}"`));
   }
@@ -33,7 +34,8 @@ test("models remain readable and searching is explicit on mobile", () => {
   assert.match(model, /autoFocus=\{!isMobile\}/);
   assert.match(model, /fontSize: isMobile \? 16 : 11/);
   assert.match(model, /<MobileComposerSheet/);
-  assert.match(css, /\.mobile-composer-primary-controls \.model-selector \{ flex: 1 1 140px/);
+  assert.match(css, /\.mobile-composer-primary-controls \.model-selector \{ grid-area: model; width: 100% !important; min-width: 0; \}/);
+  assert.match(css, /\.mobile-composer-primary-controls \[data-thinking-selector\] \{ grid-area: thinking;/);
 });
 test("mobile pickers follow the visual viewport and focus a non-editor control", () => {
   assert.match(sheet, /closeRef\.current\?\.focus\(\{ preventScroll: true \}\)/);
